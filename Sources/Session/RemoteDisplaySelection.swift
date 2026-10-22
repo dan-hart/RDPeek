@@ -104,6 +104,10 @@ struct RemoteDisplayViewport: Equatable {
         guard rectangles.allSatisfy({ $0.width > 0 && $0.height > 0 && $0.maxX <= frameSize.width && $0.maxY <= frameSize.height }) else {
             return []
         }
+        // A contained but incomplete layout can be stale after a desktop resize.
+        // Never let All Displays hide pixels outside the reported monitor bounds.
+        let extent = rectangles.reduce(CGRect.null) { $0.union($1) }
+        guard extent == CGRect(origin: .zero, size: frameSize) else { return [] }
         for (index, rect) in rectangles.enumerated() {
             guard rectangles.dropFirst(index + 1).allSatisfy({ rect.intersection($0).isEmpty }) else { return [] }
         }

@@ -693,9 +693,15 @@ private struct SessionStatusPill: View {
                 .fill(color)
                 .frame(width: 7, height: 7)
                 .shadow(color: color.opacity(0.8), radius: 3)
-            Text(verbatim: text)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
+            ZStack {
+                // Reserve the widest status before AppKit sizes the accessory.
+                Text("Disconnected")
+                    .hidden()
+                    .accessibilityHidden(true)
+                Text(verbatim: text)
+            }
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 4)

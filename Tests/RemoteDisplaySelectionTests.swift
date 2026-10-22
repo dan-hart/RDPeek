@@ -92,4 +92,16 @@ final class RemoteDisplaySelectionTests: XCTestCase {
             XCTAssertEqual(viewport.sourceRect, CGRect(x: 0, y: 0, width: 50, height: 50))
         }
     }
+
+    func testIncompleteLayoutUsesCompleteFrameWithoutHidingPixelsOrInput() {
+        let monitor = RDPMonitorDefinition(left: 0, top: 0, right: 99, bottom: 99, flags: 1)
+        for size in [CGSize(width: 300, height: 100), CGSize(width: 100, height: 300)] {
+            let viewport = RemoteDisplayViewport(frameSize: size, monitors: [monitor])
+            let bounds = CGRect(origin: .zero, size: size)
+            XCTAssertTrue(viewport.monitors.isEmpty)
+            XCTAssertEqual(viewport.sourceRect, bounds)
+            XCTAssertEqual(viewport.remotePoint(from: CGPoint(x: size.width - 1, y: 1), in: bounds),
+                           RDPRemotePoint(x: UInt16(size.width - 1), y: UInt16(size.height - 1)))
+        }
+    }
 }
