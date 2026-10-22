@@ -45,10 +45,10 @@ Requires macOS 14.0 or later. Free and open source.
    and press **Return**) to connect. If no password is stored, the session
    window asks you to sign in.
 3. The session window opens maximized. The **⋯ menu** in the titlebar holds clipboard,
-   audio, and display controls, the performance overlay, and Stats for
+   audio, and window size controls, the performance overlay, and Stats for
    Nerds.
 
-Choose **⋯ → Displays → All Displays**, or check individual displays to view
+Choose **Displays → All Displays** in the titlebar, or check individual displays to view
 a subset. At least one display stays selected. Selected displays retain their
 relative positions; gaps and excluded displays are black and do not accept
 pointer input. Display numbers follow the server's reported order and may

@@ -43,8 +43,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         window.tabbingMode = .disallowed
 
         let accessory = NSTitlebarAccessoryViewController()
-        let accessoryView = NSHostingView(rootView: SessionTitlebarAccessory(model: sessionController.hudModel))
-        accessoryView.sizingOptions = .intrinsicContentSize
+        let accessoryView = SessionTitlebarAccessory.makeHostingView(model: sessionController.hudModel)
         accessory.view = accessoryView
         accessory.layoutAttribute = .trailing
         window.addTitlebarAccessoryViewController(accessory)

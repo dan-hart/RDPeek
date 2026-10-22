@@ -44,7 +44,7 @@ struct HelpView: View {
                             "size matching, the performance overlay, and Stats for Nerds."
                     )
                     HelpBody(
-                        "Choose Displays in the ⋯ menu to view all server-reported " +
+                        "Use the Displays menu in the titlebar to view all server-reported " +
                             "displays or any subset together. Numbers follow the server's " +
                             "order and may differ from the remote OS. Physical desktop " +
                             "sharing and virtual sessions use the same controls; the RDP " +
