@@ -9,10 +9,10 @@ settings:
     DEAD_CODE_STRIPPING: YES
 packages:
   RDPKit:
-    # Based on steelbrain/RDPKit 0.3.1; exposes server-reported monitor layouts.
+    # Based on steelbrain/RDPKit 0.3.1; monitor layouts and graphics stream fixes.
     # Restore the upstream URL after that API is released upstream.
     url: https://github.com/dan-hart/RDPKit.git
-    revision: 515d387ecd10a5fa5c579ac992ba0bf160d652db
+    revision: 75a41b269c2b795e3565b40cabe714ffabc81299
 targets:
   RDPeek:
     type: application

@@ -88,7 +88,8 @@ lint, an unsigned build, and the tests on every push and pull request.
 
 This feature branch uses [dan-hart/RDPKit](https://github.com/dan-hart/RDPKit),
 based on upstream RDPKit 0.3.1, pinned to an exact revision in `project.yml`.
-The dependency branch exposes server monitor metadata through decoded frames.
+The dependency branch exposes server monitor metadata through decoded frames
+and fixes coalesced graphics-message handling and AVC444 regional luma retention.
 It is separate from the RDPeek changes so the package API can be proposed to
 [steelbrain/RDPKit](https://github.com/steelbrain/RDPKit) independently. Once
 upstream releases that API, switch the package URL back and pin that version.

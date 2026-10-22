@@ -76,3 +76,27 @@ Verify remote heads after pushing; keep upstream main unchanged.
 - Real virtual-session and cross-OS server acceptance remain unverified. Automated
   tests cover synthetic physical/virtual-equivalent layouts, including arbitrary
   subsets, stacked layouts, negative origins and topology replacement.
+
+
+## Adversarial review follow-up
+
+The app and dependency changes received independent adversarial review. The
+confirmed findings were in the dependency; the final app review found no
+additional production defect.
+
+| Finding | Repair and regression coverage |
+| --- | --- |
+| Messages after EndFrame were discarded | Process the whole payload; test live and finite capture limits, layouts, callbacks and acknowledgements. |
+| Messages accompanying CapsConfirm were discarded | Process already-decoded remainder; test plain and segmented/coalesced transport. |
+| Coalesced processing could continue after cancellation | Check cancellation before each message/callback and before acknowledging a callback that cancels. |
+| AVC444 luma was keyed by changing update bounds | Retain bounded surface/codec samples by updated regions; compare CPU and Metal output pixels. |
+| Full-coded and region-local mask coordinates were confused | Resolve source origin using coded and visible surface dimensions; test nonzero bounds. |
+| Partial luma IDRs could discard regional history | Require known complete surface coverage before treating an AVC444 IDR as a backlog recovery point. |
+| Empty masks and dimension/local-image transitions could overwrite or reuse invalid state | Preserve no-op updates, invalidate resized coverage and retain sampling phases without mutating decoder-owned buffers. |
+
+These are source-level repairs; decode failures are still reported rather than
+silently ignored. Independent re-review approved the final fixes. RDPKit's
+complete suite passed 1,012 tests and strict SwiftLint. RDPeek built from the
+published immutable dependency revision and passed 74 tests (one skipped), plus
+strict SwiftLint. The package checkout revision was read back from Xcode's
+workspace state.
