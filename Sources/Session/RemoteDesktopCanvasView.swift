@@ -29,11 +29,14 @@ final class RemoteDesktopCanvasNSView: NSView {
     func update(
         frame: RDPFrameMetadata?,
         hasPresentedFrame: Bool,
-        inputSession: RDPInputSession?
+        inputSession: RDPInputSession?,
+        viewport: RemoteDisplayViewport?
     ) {
         let shouldShowDesktop = frame != nil && hasPresentedFrame
         displayView.isHidden = !shouldShowDesktop
         inputView.isHidden = !shouldShowDesktop
+        inputView.viewport = viewport
+        displayView.viewport = viewport
         inputView.rdpFrame = frame
         inputView.inputSession = shouldShowDesktop ? inputSession : nil
         needsLayout = true

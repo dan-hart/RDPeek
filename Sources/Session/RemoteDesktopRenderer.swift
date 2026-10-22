@@ -19,13 +19,14 @@ final class RDPRemoteDesktopRenderer {
         }
     }
 
-    func present(_ presentation: RDPDecodedFramePresentation, id: Int) {
+    @discardableResult
+    func present(_ presentation: RDPDecodedFramePresentation, id: Int) -> Bool {
         guard let view else {
             latestPresentation = (presentation, id)
-            return
+            return false
         }
         latestPresentation = nil
-        view.present(presentation, id: id)
+        return view.present(presentation, id: id)
     }
 
     func clear() {
@@ -36,6 +37,15 @@ final class RDPRemoteDesktopRenderer {
 
 final class RemoteDesktopSampleBufferNSView: NSView {
     private let displayLayer = AVSampleBufferDisplayLayer()
+    private let viewportLayer = CALayer()
+    private let viewportMask = CAShapeLayer()
+    var viewport: RemoteDisplayViewport? {
+        didSet {
+            guard viewport != oldValue else { return }
+            needsLayout = true
+            layoutSubtreeIfNeeded()
+        }
+    }
     private let sampleBufferFactory = RDPFrameSampleBufferFactory()
     private var lastPresentationID: Int?
 
@@ -59,7 +69,20 @@ final class RemoteDesktopSampleBufferNSView: NSView {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        displayLayer.frame = bounds
+        viewportLayer.frame = bounds
+        if let viewport {
+            displayLayer.frame = viewport.localRect(for: CGRect(origin: .zero, size: viewport.frameSize), in: bounds)
+            let path = CGMutablePath()
+            for rect in viewport.visibleRects {
+                path.addRect(viewport.localRect(for: rect, in: bounds))
+            }
+            viewportMask.frame = bounds
+            viewportMask.path = path
+            viewportLayer.mask = viewportMask
+        } else {
+            displayLayer.frame = bounds
+            viewportLayer.mask = nil
+        }
         updateContentsScale()
         CATransaction.commit()
     }
@@ -81,9 +104,10 @@ final class RemoteDesktopSampleBufferNSView: NSView {
         updateContentsScale()
     }
 
-    func present(_ presentation: RDPDecodedFramePresentation, id: Int) {
+    @discardableResult
+    func present(_ presentation: RDPDecodedFramePresentation, id: Int) -> Bool {
         guard lastPresentationID != id else {
-            return
+            return true
         }
 
         let disposition = rdpSampleBufferDisplayDisposition(
@@ -102,8 +126,10 @@ final class RemoteDesktopSampleBufferNSView: NSView {
             let sampleBuffer = try sampleBufferFactory.makeSampleBuffer(for: presentation)
             displayLayer.enqueue(sampleBuffer)
             lastPresentationID = id
+            return true
         } catch {
             flushQueuedSamples()
+            return false
         }
     }
 
@@ -118,8 +144,10 @@ final class RemoteDesktopSampleBufferNSView: NSView {
         layer = CALayer()
         layer?.backgroundColor = NSColor.black.cgColor
         displayLayer.backgroundColor = NSColor.black.cgColor
-        displayLayer.videoGravity = .resizeAspect
-        layer?.addSublayer(displayLayer)
+        displayLayer.videoGravity = .resize
+        layer?.masksToBounds = true
+        layer?.addSublayer(viewportLayer)
+        viewportLayer.addSublayer(displayLayer)
         updateContentsScale()
     }
 

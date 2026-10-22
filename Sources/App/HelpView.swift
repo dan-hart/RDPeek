@@ -34,14 +34,21 @@ struct HelpView: View {
 
                 HelpSection(title: "In a Session", systemImage: "display") {
                     HelpBody(
-                        "The remote desktop follows the window: resize the window and " +
-                            "the desktop re-fits a moment later. Full screen works as a " +
-                            "primary full-screen window."
+                        "The remote display layout is preserved by default. For a " +
+                            "single-display session, enable Match Window Size in the ⋯ " +
+                            "menu to resize the remote desktop with the window."
                     )
                     HelpBody(
                         "The ⋯ menu in the titlebar holds clipboard sharing (always-on, " +
                             "one-shot sync, or 30-second time-boxed), remote audio, window " +
                             "size matching, the performance overlay, and Stats for Nerds."
+                    )
+                    HelpBody(
+                        "Choose Displays in the ⋯ menu to view all server-reported " +
+                            "displays or any subset together. Numbers follow the server's " +
+                            "order and may differ from the remote OS. Physical desktop " +
+                            "sharing and virtual sessions use the same controls; the RDP " +
+                            "server must expose the displays you want to view."
                     )
                     HelpBody(
                         "Certificate warnings appear as a banner at the top; Trust pins " +

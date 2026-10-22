@@ -1,4 +1,5 @@
 import AppKit
+import RDPKit
 import SwiftUI
 
 enum SessionPhase: Equatable {
@@ -25,6 +26,14 @@ struct SessionToast: Equatable, Identifiable {
     var systemImage: String
 }
 
+struct SessionDisplayChoice: Identifiable, Equatable {
+    var id: Int
+    var label: String
+    var monitor: RDPMonitorDefinition
+    var isSelected: Bool
+    var canToggle: Bool
+}
+
 /// Published UI state for the session window, rendered by the SwiftUI HUD
 /// layers that float above the AppKit canvas.
 @MainActor
@@ -39,7 +48,10 @@ final class SessionHUDModel: ObservableObject {
     @Published var isMetricsOverlayVisible = false
     @Published var isClipboardSharingEnabled = true
     @Published var isAudioPlaybackEnabled = false
-    @Published var isFollowWindowSizeEnabled = true
+    @Published var isFollowWindowSizeEnabled = false
+    @Published var canMatchWindowSize = false
+    @Published var displays: [SessionDisplayChoice] = []
+    @Published var areAllDisplaysSelected = true
     @Published var canSyncClipboard = false
     @Published var canShareClipboardTemporarily = false
     @Published var temporaryClipboardSecondsRemaining: Int?
@@ -62,6 +74,8 @@ final class SessionHUDModel: ObservableObject {
     var onSetClipboardSharing: (Bool) -> Void = { _ in }
     var onSetAudioPlayback: (Bool) -> Void = { _ in }
     var onSetFollowWindowSize: (Bool) -> Void = { _ in }
+    var onSelectAllDisplays: () -> Void = {}
+    var onToggleDisplay: (RDPMonitorDefinition) -> Void = { _ in }
     var onOpenDiagnostics: () -> Void = {}
 
     private var toastDismissTask: Task<Void, Never>?
@@ -579,9 +593,31 @@ struct SessionTitlebarAccessory: View {
                     Label("Remote Audio", systemImage: "speaker.wave.2")
                 }
 
+                Menu("Displays") {
+                    Toggle("All Displays", isOn: Binding(
+                        get: { model.areAllDisplaysSelected },
+                        set: { _ in model.onSelectAllDisplays() }
+                    ))
+                    .disabled(model.displays.isEmpty)
+                    ForEach(model.displays) { display in
+                        Toggle(display.label, isOn: Binding(
+                            get: { display.isSelected },
+                            set: { _ in model.onToggleDisplay(display.monitor) }
+                        ))
+                        .disabled(!display.canToggle)
+                    }
+                    Divider()
+                    if model.displays.isEmpty {
+                        Text("The server did not supply individual display information.")
+                    } else {
+                        Text("Numbered in the order reported by the server.")
+                    }
+                }
+
                 Toggle(isOn: followSizeBinding) {
                     Label("Match Window Size", systemImage: "arrow.up.left.and.arrow.down.right")
                 }
+                .disabled(!model.canMatchWindowSize)
 
                 Divider()
 

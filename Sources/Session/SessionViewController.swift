@@ -40,7 +40,8 @@ final class SessionViewController: NSViewController {
     private var sessionEndReason: RDPSessionEndReason?
     private var inputSession: RDPInputSession?
     private var displayControlSession: RDPDisplayControlSession?
-    private var autoApplyViewerSize = true
+    private var autoApplyViewerSize = false
+    private var displaySelection = RemoteDisplaySelection.all
     private var pendingDisplayResizeTask: Task<Void, Never>?
     private var lastRequestedDisplayRequest: RDPDisplayRequest?
     private var viewerPointSize: CGSize = .zero
@@ -251,17 +252,30 @@ final class SessionViewController: NSViewController {
         hudModel.onSetFollowWindowSize = { [weak self] enabled in
             self?.setFollowWindowSize(enabled)
         }
+        hudModel.onSelectAllDisplays = { [weak self] in
+            self?.displaySelection = .all
+            self?.render()
+        }
+        hudModel.onToggleDisplay = { [weak self] monitor in
+            guard let self, let frame = self.previewFrame else { return }
+            let monitors = RemoteDisplayViewport(frame: frame).monitors
+            self.displaySelection.toggle(monitor, in: monitors)
+            self.render()
+        }
         hudModel.onOpenDiagnostics = { [weak self] in self?.openDiagnosticsWindow() }
     }
 
     // MARK: - Rendering
 
     private func render() {
-        let frame = previewFrame ?? report?.rdpGraphicsFirstFrame.map(RDPFrameMetadata.init)
+        // Only displayed frames may change the active input/render topology.
+        let frame = previewFrame
+        let viewport = frame.map { RemoteDisplayViewport(frame: $0, selection: displaySelection) }
         canvasView.update(
             frame: frame,
             hasPresentedFrame: hasPresentedFrame,
-            inputSession: inputSession
+            inputSession: inputSession,
+            viewport: viewport
         )
 
         let nextPhase = currentPhase
@@ -274,6 +288,16 @@ final class SessionViewController: NSViewController {
         hudModel.isClipboardSharingEnabled = clipboardSharingEnabled
         hudModel.isAudioPlaybackEnabled = audioPlaybackEnabled
         hudModel.isFollowWindowSizeEnabled = autoApplyViewerSize
+        let monitors = viewport?.monitors ?? []
+        let selected = displaySelection.selected(in: monitors)
+        hudModel.displays = monitors.enumerated().map { index, monitor in
+            SessionDisplayChoice(id: index, label: "Display \(index + 1) — \(Int64(monitor.right) - Int64(monitor.left) + 1) × \(Int64(monitor.bottom) - Int64(monitor.top) + 1)",
+                                 monitor: monitor, isSelected: selected.contains(monitor), canToggle: selected.count > 1 || !selected.contains(monitor))
+        }
+        hudModel.areAllDisplaysSelected = displaySelection == .all
+        hudModel.canMatchWindowSize = isConnecting && displayControlSession != nil
+            && remoteDisplayAllowsWindowMatching(hasPresentedFrame: hasPresentedFrame,
+                                                reportedMonitorCount: frame?.monitorDefinitions.count ?? 0)
         hudModel.canSyncClipboard = clipboardSharingEnabled && clipboardSession != nil
         hudModel.canShareClipboardTemporarily = clipboardSession != nil
         hudModel.temporaryClipboardSecondsRemaining = temporaryClipboardSharingRemainingSeconds
@@ -793,7 +817,6 @@ final class SessionViewController: NSViewController {
                 onDisplayControlReady: { session in
                     sink.apply { controller in
                         controller.displayControlSession = session
-                        controller.scheduleAutoDisplaySizeUpdate(force: true)
                         controller.render()
                     }
                 },
@@ -901,9 +924,6 @@ final class SessionViewController: NSViewController {
                     port: target.port,
                     sha256: nextReport.certificateSHA256
                 )
-                if controller.previewFrame == nil {
-                    controller.previewFrame = nextReport.rdpGraphicsFirstFrame.map(RDPFrameMetadata.init)
-                }
                 if controller.hasPresentedFrame == false,
                    let firstFrameDecodeResult
                 {
@@ -1061,9 +1081,21 @@ final class SessionViewController: NSViewController {
     private func applyFramePresentation(_ presentation: RDPDecodedFramePresentation) -> Bool {
         let wasFirstPresentedFrame = hasPresentedFrame == false
         let shouldUpdateFrameMetadata = shouldPublishFrameMetadata(presentation.frame)
-        remoteDesktopRenderer.present(presentation, id: renderMetricsStore.metrics.decodedFrameCount)
-        if shouldUpdateFrameMetadata {
-            previewFrame = RDPFrameMetadata(presentation.frame)
+        guard remoteDesktopRenderer.present(presentation, id: renderMetricsStore.metrics.decodedFrameCount) else {
+            return false
+        }
+        if wasFirstPresentedFrame || shouldUpdateFrameMetadata {
+            let metadata = RDPFrameMetadata(presentation.frame)
+            previewFrame = metadata
+            let monitors = RemoteDisplayViewport(frame: metadata).monitors
+            displaySelection.reconcile(with: monitors)
+            if metadata.monitorDefinitions.count > 1 {
+                autoApplyViewerSize = false
+                cancelPendingDisplayResize()
+            }
+            // Commit crop and input with the accepted frame when its topology changes.
+            canvasView.update(frame: metadata, hasPresentedFrame: true, inputSession: inputSession,
+                              viewport: RemoteDisplayViewport(frame: metadata, selection: displaySelection))
         }
         if wasFirstPresentedFrame {
             hasPresentedFrame = true
@@ -1083,6 +1115,7 @@ final class SessionViewController: NSViewController {
             || currentFrame.height != frame.height
             || currentFrame.codecName != frame.codecName
             || currentFrame.videoCodec != frame.videoCodec
+            || currentFrame.monitorDefinitions != frame.monitorDefinitions
     }
 
     @discardableResult
@@ -1114,6 +1147,9 @@ final class SessionViewController: NSViewController {
 
     private func resetFramePresentationState() {
         framePresentationBuffer.clear()
+        previewFrame = nil
+        displaySelection = .all
+        autoApplyViewerSize = false
         hasPresentedFrame = false
         remoteDesktopRenderer.clear()
     }
@@ -1146,6 +1182,10 @@ final class SessionViewController: NSViewController {
 
     private func scheduleAutoDisplaySizeUpdate(force: Bool = false) {
         guard autoApplyViewerSize,
+              hasPresentedFrame,
+              let previewFrame,
+              remoteDisplayAllowsWindowMatching(hasPresentedFrame: hasPresentedFrame,
+                                               reportedMonitorCount: previewFrame.monitorDefinitions.count),
               isConnecting,
               displayControlSession != nil,
               let viewerPixelSize
@@ -1171,6 +1211,10 @@ final class SessionViewController: NSViewController {
     private func applyAutoDisplayRequest(_ displayRequest: RDPDisplayRequest) {
         pendingDisplayResizeTask = nil
         guard autoApplyViewerSize,
+              hasPresentedFrame,
+              let previewFrame,
+              remoteDisplayAllowsWindowMatching(hasPresentedFrame: hasPresentedFrame,
+                                               reportedMonitorCount: previewFrame.monitorDefinitions.count),
               isConnecting,
               displayControlSession != nil,
               lastRequestedDisplayRequest != displayRequest
@@ -1201,6 +1245,7 @@ final class SessionViewController: NSViewController {
     }
 
     private func setFollowWindowSize(_ enabled: Bool) {
+        guard enabled == false || hudModel.canMatchWindowSize else { return }
         autoApplyViewerSize = enabled
         if enabled {
             scheduleAutoDisplaySizeUpdate(force: true)

@@ -17,6 +17,11 @@ extension RDPInputSession: RemoteInputEventSink {}
 
 final class RemoteInputCaptureNSView: NSView {
     var rdpFrame: RDPFrameMetadata?
+    var viewport: RemoteDisplayViewport? {
+        willSet {
+            if viewport != newValue { releasePressedInputs() }
+        }
+    }
     var inputSession: (any RemoteInputEventSink)? {
         willSet {
             if inputSession != nil, inputSession !== newValue {
@@ -326,11 +331,7 @@ final class RemoteInputCaptureNSView: NSView {
             return nil
         }
         let localPoint = convert(event.locationInWindow, from: nil)
-        return RDPRemoteDisplayViewport(
-            frame: rdpFrame,
-            bounds: bounds,
-            coordinateOrigin: .bottomLeft
-        ).remotePoint(from: localPoint)
+        return (viewport ?? RemoteDisplayViewport(frame: rdpFrame)).remotePoint(from: localPoint, in: bounds)
     }
 }
 
