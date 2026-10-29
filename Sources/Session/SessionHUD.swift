@@ -17,6 +17,7 @@ struct SessionCertificateNotice: Equatable {
     var message: String
     var systemImage: String
     var canTrust: Bool
+    var trustActionTitle = "Trust"
 }
 
 struct SessionToast: Equatable, Identifiable {
@@ -446,12 +447,13 @@ private struct SessionCertificateBanner: View {
                 Text(verbatim: notice.message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(4)
                     .frame(maxWidth: 380, alignment: .leading)
+                    .textSelection(.enabled)
             }
 
             if notice.canTrust {
-                Button("Trust") {
+                Button(notice.trustActionTitle) {
                     model.onTrustCertificate()
                 }
                 .buttonStyle(.borderedProminent)

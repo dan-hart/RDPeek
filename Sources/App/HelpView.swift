@@ -44,8 +44,10 @@ struct HelpView: View {
                             "size matching, the performance overlay, and Stats for Nerds."
                     )
                     HelpBody(
-                        "Certificate warnings appear as a banner at the top; Trust pins " +
-                            "that certificate for that host and port."
+                        "A certificate this Mac does not trust stops the connection " +
+                            "before any credential is sent. Trust and Connect pins that " +
+                            "certificate for that host and port; a different certificate " +
+                            "from that host is then refused until you trust it instead."
                     )
                 }
 

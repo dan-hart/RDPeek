@@ -66,6 +66,7 @@ final class SessionViewController: NSViewController {
     private var renderMetricsStore = RDPRenderMetricsStore()
     private let diagnosticsModel = RemoteSessionDiagnosticsModel()
     private var certificateTrustedByApp = false
+    private var certificateRefusal: CertificateRefusal?
     private var certificateTrustMessage: String?
     private var shouldAutoConnect = true
     private var diagnosticsTask: Task<Void, Never>?
@@ -344,6 +345,29 @@ final class SessionViewController: NSViewController {
     }
 
     private func certificateNoticeState() -> SessionCertificateNotice? {
+        let canTrust = (liveCertificate?.sha256 ?? report?.certificateSHA256) != nil
+        switch certificateRefusal {
+        case .changed:
+            return SessionCertificateNotice(
+                title: "Certificate Changed",
+                message: "Trust the new certificate only if you know why the server's certificate changed.",
+                systemImage: "lock.trianglebadge.exclamationmark.fill",
+                canTrust: canTrust,
+                trustActionTitle: "Trust and Connect"
+            )
+        case .untrusted:
+            let fingerprint = liveCertificate?.sha256.map { " SHA-256: \($0)" } ?? ""
+            return SessionCertificateNotice(
+                title: "Untrusted Certificate",
+                message: "This Mac does not trust the server's certificate. Trust it only if you expect it, "
+                    + "such as a server's self-signed certificate.\(fingerprint)",
+                systemImage: "lock.trianglebadge.exclamationmark.fill",
+                canTrust: canTrust,
+                trustActionTitle: "Trust and Connect"
+            )
+        case nil:
+            break
+        }
         if certificateTrustedByApp {
             return nil
         }
@@ -354,7 +378,7 @@ final class SessionViewController: NSViewController {
                 title: "Certificate Warning",
                 message: warning.message,
                 systemImage: "lock.trianglebadge.exclamationmark.fill",
-                canTrust: (liveCertificate?.sha256 ?? report?.certificateSHA256) != nil
+                canTrust: canTrust
             )
         }
         return nil
@@ -593,6 +617,7 @@ final class SessionViewController: NSViewController {
         resetFramePresentationState()
         renderMetricsStore.reset()
         certificateTrustedByApp = false
+        certificateRefusal = nil
         certificateTrustMessage = nil
 
         let target: RDPConnectionTarget
@@ -668,6 +693,8 @@ final class SessionViewController: NSViewController {
         let sink = SessionMainActorSink(controller: self, connectionID: connectionID)
         let credentialStore = credentialStore
         let clientLicenseStore = clientLicenseStore
+        let trustedCertificateStore = trustedCertificateStore
+        let acceptsUntrustedCertificates = draft.hideCertificateWarnings
         // RDPSessionClient.run blocks for the whole session and waits on the
         // decode queue, so it gets its own thread rather than pinning a Swift
         // concurrency worker per session, which could starve the decode drain.
@@ -837,6 +864,16 @@ final class SessionViewController: NSViewController {
                     }
                 },
                 onCertificate: { info in
+                    // Runs before any credential is sent, so cancelling here
+                    // refuses the server without signing in to it.
+                    let refusal = trustedCertificateStore.refusal(
+                        of: info,
+                        port: target.port,
+                        acceptsUntrusted: acceptsUntrustedCertificates
+                    )
+                    if refusal != nil {
+                        cancellation.cancel()
+                    }
                     sink.apply { controller in
                         controller.liveCertificate = info
                         // After a server redirection, the certificate belongs
@@ -846,6 +883,9 @@ final class SessionViewController: NSViewController {
                             port: target.port,
                             sha256: info.sha256
                         )
+                        if let refusal {
+                            controller.refuseCertificate(refusal)
+                        }
                         controller.render()
                     }
                 },
@@ -962,6 +1002,21 @@ final class SessionViewController: NSViewController {
             sessionEndReason = .cancelled
         }
         render()
+    }
+
+    /// Ends a connection whose certificate must not receive credentials;
+    /// the certificate notice offers to trust it and connect again.
+    private func refuseCertificate(_ refusal: CertificateRefusal) {
+        certificateRefusal = refusal
+        let reason = switch refusal {
+        case .changed: "The server's certificate is not the one trusted for this host."
+        case .untrusted: "Neither this Mac nor RDPeek trusts the server's certificate."
+        }
+        sessionEndReason = RDPSessionEndReason(
+            kind: .failed,
+            message: reason + " The connection was closed before any credential was sent."
+        )
+        cancelConnection(shouldRecordCancellation: false)
     }
 
     /// Drops what a session handed out, so nothing more is sent to it once
@@ -1635,6 +1690,12 @@ final class SessionViewController: NSViewController {
             return
         }
         trustedCertificateStore.trust(key)
+        // A connection refused for this certificate connects again now that
+        // it is trusted.
+        guard certificateRefusal == nil else {
+            startConnection()
+            return
+        }
         certificateTrustedByApp = true
         certificateTrustMessage = "Certificate trusted for this host."
         toast("Certificate trusted for this host", systemImage: "checkmark.shield.fill")
