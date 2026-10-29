@@ -316,6 +316,7 @@ final class SessionViewController: NSViewController {
         // One command state feeds the HUD and the Session menu, so they
         // agree on what can be done.
         let commands = sessionCommandState
+        hudModel.update(\.startTitle, to: commands.startTitle)
         hudModel.update(\.canReconnect, to: commands.canStart)
         hudModel.update(\.canCancel, to: commands.canCancel)
         hudModel.update(\.canSyncClipboard, to: commands.canSyncClipboard)
@@ -347,6 +348,7 @@ final class SessionViewController: NSViewController {
             isAwaitingCredentials: isAwaitingCredentials,
             hasFrame: previewFrame != nil,
             hasReport: report != nil,
+            hasEndReason: sessionEndReason != nil,
             hostIsEmpty: draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             canSyncClipboard: clipboard.canSync,
             canShareClipboardTemporarily: clipboard.canStartTemporarySharing

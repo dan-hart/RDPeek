@@ -9,7 +9,9 @@ struct SessionCommandState: Equatable {
 
     /// Derives the command state from the session's primitive phase inputs.
     /// `hasFrame` is whether a remote frame is available to show; it titles
-    /// the Connecting/Connected distinction while a connection is live. The
+    /// the Connecting/Connected distinction while a connection is live.
+    /// A connection that ended — with a report, or with an end reason such
+    /// as the user disconnecting — is started again with Reconnect. The
     /// clipboard items come from the session clipboard as they are.
     static func make(
         isConnecting: Bool,
@@ -18,6 +20,7 @@ struct SessionCommandState: Equatable {
         isAwaitingCredentials: Bool,
         hasFrame: Bool,
         hasReport: Bool,
+        hasEndReason: Bool,
         hostIsEmpty: Bool,
         canSyncClipboard: Bool,
         canShareClipboardTemporarily: Bool
@@ -25,7 +28,7 @@ struct SessionCommandState: Equatable {
         let startTitle = if isConnecting {
             hasFrame ? "Connected" : "Connecting"
         } else {
-            hasReport ? "Reconnect" : "Connect"
+            hasReport || hasEndReason ? "Reconnect" : "Connect"
         }
         return SessionCommandState(
             startTitle: startTitle,

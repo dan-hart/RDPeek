@@ -43,6 +43,9 @@ final class SessionHUDModel: ObservableObject {
     @Published var canSyncClipboard = false
     @Published var canShareClipboardTemporarily = false
     @Published var temporaryClipboardSecondsRemaining: Int?
+    /// The Session menu's title for starting a connection, so the HUD's
+    /// Reconnect controls say the same.
+    @Published var startTitle = "Connect"
     @Published var canReconnect = false
     @Published var canCancel = false
 
@@ -407,7 +410,7 @@ private struct SessionEndedOverlay: View {
                         Button {
                             model.onReconnect()
                         } label: {
-                            Label("Reconnect", systemImage: "arrow.clockwise")
+                            Label(model.startTitle, systemImage: "arrow.clockwise")
                                 .frame(minWidth: 110)
                         }
                         .buttonStyle(.borderedProminent)
@@ -558,7 +561,7 @@ struct SessionTitlebarAccessory: View {
                 Button {
                     model.onReconnect()
                 } label: {
-                    Label("Reconnect", systemImage: "arrow.clockwise")
+                    Label(model.startTitle, systemImage: "arrow.clockwise")
                 }
                 .disabled(model.canReconnect == false)
 

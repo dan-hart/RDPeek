@@ -18,6 +18,15 @@ final class SessionCommandStateTests: XCTestCase {
         XCTAssertFalse(state.canCancel)
     }
 
+    func testDisconnectedSessionOffersReconnect() {
+        // Disconnecting returns no report, only an end reason; the Session
+        // menu offered Connect while the HUD offered Reconnect.
+        let state = makeState(hasEndReason: true)
+        XCTAssertEqual(state.startTitle, "Reconnect")
+        XCTAssertTrue(state.canStart)
+        XCTAssertFalse(state.canCancel)
+    }
+
     func testResolvingStoredCredentialsIsCancelableButNotStartable() {
         // The v1.0.1 regression: during the async keychain resolution the
         // menu offered Connect (double-starting) and no Cancel (no way out).
@@ -81,6 +90,7 @@ final class SessionCommandStateTests: XCTestCase {
                 isAwaitingCredentials: isAwaitingCredentials,
                 hasFrame: mask & 32 != 0,
                 hasReport: false,
+                hasEndReason: false,
                 hostIsEmpty: hostIsEmpty,
                 canSyncClipboard: false,
                 canShareClipboardTemporarily: false
@@ -102,6 +112,7 @@ final class SessionCommandStateTests: XCTestCase {
         isAwaitingCredentials: Bool = false,
         hasFrame: Bool = false,
         hasReport: Bool = false,
+        hasEndReason: Bool = false,
         hostIsEmpty: Bool = false
     ) -> SessionCommandState {
         SessionCommandState.make(
@@ -111,6 +122,7 @@ final class SessionCommandStateTests: XCTestCase {
             isAwaitingCredentials: isAwaitingCredentials,
             hasFrame: hasFrame,
             hasReport: hasReport,
+            hasEndReason: hasEndReason,
             hostIsEmpty: hostIsEmpty,
             canSyncClipboard: false,
             canShareClipboardTemporarily: false
