@@ -69,6 +69,10 @@ final class SessionViewController: NSViewController {
     private var audioPlaybackEnabled: Bool
     private var remoteAudioPlayer = RDPAudioPlayer()
     private var report: RDPConnectionReport?
+    /// The connection's report while it runs, for Stats for Nerds until
+    /// `report` arrives; once the session returns, its final report, which
+    /// a cancelled session or a refused certificate leaves in no `report`.
+    private var liveReport: RDPLiveConnectionReport?
     private var liveCertificate: RDPServerCertificateInfo?
     /// The frame the canvas maps the desktop with, replaced only when the
     /// desktop size changes.
@@ -534,7 +538,7 @@ final class SessionViewController: NSViewController {
         let now = Date()
         let nextSnapshot = RemoteSessionDiagnosticsSnapshot(
             title: draft.displayName,
-            report: report,
+            report: report ?? liveReport?.snapshot,
             latestFrame: latestPresentedFrame.map(RDPFrameMetadata.init),
             renderMetrics: renderMetrics,
             rollingFramesPerSecond: renderMetrics.rollingFramesPerSecond(at: now),
@@ -768,8 +772,10 @@ final class SessionViewController: NSViewController {
 
         let connectionID = UUID()
         let cancellation = RDPConnectionCancellation()
+        let liveReport = RDPLiveConnectionReport()
         activeConnectionID = connectionID
         activeCancellation = cancellation
+        self.liveReport = liveReport
         isAwaitingCredentialAcceptance = credentials != nil
         renderMetricsStore.reset(connectionStartedAt: Date())
         updateViewerMetricsSummary(renderMetricsStore.metrics)
@@ -781,6 +787,7 @@ final class SessionViewController: NSViewController {
             configuration: configuration,
             desktopSize: desktopSize,
             sink: SessionMainActorSink(controller: self, connectionID: connectionID),
+            liveReport: liveReport,
             cancellation: cancellation
         )
     }
@@ -797,6 +804,7 @@ final class SessionViewController: NSViewController {
         isConnecting = false
 
         report = nil
+        liveReport = nil
         liveCertificate = nil
         previewFrame = nil
         latestPresentedFrame = nil
@@ -846,6 +854,7 @@ final class SessionViewController: NSViewController {
         configuration baseConfiguration: RDPConnectionConfiguration,
         desktopSize requestedDesktopSize: RDPDesktopSize,
         sink: SessionMainActorSink,
+        liveReport: RDPLiveConnectionReport,
         cancellation: RDPConnectionCancellation
     ) {
         let clientLicenseStore = clientLicenseStore
@@ -1016,6 +1025,7 @@ final class SessionViewController: NSViewController {
                     onWireReceive: { sample in
                         wireReceiveCoalescer.record(sample)
                     },
+                    liveReport: liveReport,
                     cancellation: cancellation
                 )
             }

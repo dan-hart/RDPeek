@@ -251,7 +251,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                     DiagnosticRow("Target", snapshot.report?.target ?? snapshot.title)
                     DiagnosticRow("Status", statusText(snapshot))
                     DiagnosticRow("Disconnect Reason", disconnectReason(snapshot))
-                    DiagnosticRow("Warnings", warnings(snapshot))
+                    DiagnosticRow("Warnings", warnings(snapshot.report))
                     DiagnosticRow("Requested Desktop", snapshot.requestedDesktopSize)
                     DiagnosticRow("Viewer Size", snapshot.viewerPixelSize?.label ?? "unknown")
                     DiagnosticRow(
@@ -274,7 +274,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                                 ?? snapshot.report?.rdpGraphicsFirstFrame.map(RDPFrameMetadata.init)
                         )
                     )
-                    // RDPKit reports the rest when the session ends.
+                    // The report so far while the session runs, then its last.
                     if let report = snapshot.report {
                         DiagnosticRow("Stage", report.stage)
                         DiagnosticRow("Requested Protocols", report.requestedProtocols.joined(separator: ", "))
@@ -319,8 +319,6 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                         DiagnosticRow("Clipboard Messages", messageTypes(report.rdpClipboardMessages, \.typeName))
                         DiagnosticRow("Frame Acks", frameAcknowledgeSummary(report.rdpGraphicsFrameAcknowledgeHexes))
                         DiagnosticRow("Next", report.nextStage ?? "none")
-                    } else {
-                        DiagnosticRow("Connection Details", snapshot.isConnecting ? "shown when the session ends" : "none")
                     }
                 }
 
@@ -509,11 +507,10 @@ struct RemoteSessionDiagnosticsWindowContent: View {
         return "none"
     }
 
-    /// The report's warnings arrive when the session ends; until then the
-    /// live certificate's warnings stand in.
-    private func warnings(_ snapshot: RemoteSessionDiagnosticsSnapshot) -> String {
-        let warnings = snapshot.report?.warnings ?? snapshot.serverCertificateInfo?.warnings ?? []
-        guard warnings.isEmpty == false else {
+    /// The report records the certificate's warnings before the session
+    /// sees the certificate, so the live report has them too.
+    private func warnings(_ report: RDPConnectionReport?) -> String {
+        guard let warnings = report?.warnings, warnings.isEmpty == false else {
             return "none"
         }
         return warnings
