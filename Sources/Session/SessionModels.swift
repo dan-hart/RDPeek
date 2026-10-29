@@ -116,10 +116,10 @@ struct RDPSessionEndReason: Equatable {
     /// Why a session RDPKit ran ended, in plain words, from the report's
     /// typed failure and the server's termination; the report keeps RDPKit's
     /// own text for Diagnostics. Once the desktop was shown the session
-    /// ended rather than failed, however it ended. `host` is the server
-    /// typed in.
-    init(report: RDPConnectionReport, host: String, presentedFrames: Bool) {
-        let showedDesktop = presentedFrames || report.rdpGraphicsFirstFrame != nil
+    /// ended rather than failed, however it ended: `presentedFrames` tells,
+    /// not the report's first frame, which RDPKit delivered even when it
+    /// failed to decode. `host` is the server typed in.
+    init(report: RDPConnectionReport, host: String, presentedFrames showedDesktop: Bool) {
         let termination = report.remoteTermination.flatMap(Self.terminationMessage)
         guard let failure = report.failure else {
             if let error = report.error {
@@ -540,5 +540,29 @@ struct RDPKeyframeRequestThrottle {
 
     mutating func recordDecodedVideo() {
         unansweredRequests = 0
+    }
+
+    /// Ends `onGraphicsFrame` for `frame` by how it decoded. A frame that fails to decode leaves
+    /// stale pixels, not a broken session, so it is acknowledged; failed video waits for a
+    /// keyframe, which `requestKeyframe` asks the server for when one is due. RDPKit is told
+    /// the frame was not shown, so a session none of whose frames decode, such as video in an
+    /// H.264 profile VideoToolbox refuses, ends at the connection timeout instead of staying on
+    /// "Connecting…". A cancelled decode ends the session.
+    mutating func finishGraphicsFrame(
+        _ frame: RDPGraphicsFrameSnapshot,
+        decoded completion: RDPFrameDecodeCompletion,
+        at date: Date,
+        requestKeyframe: () -> Void
+    ) throws {
+        if frame.contentKind == .video, completion == .decoded {
+            recordDecodedVideo()
+        }
+        if case let .failed(errorDescription) = completion {
+            if frame.contentKind == .video, shouldRequest(at: date) {
+                requestKeyframe()
+            }
+            throw RDPGraphicsFrameNotPresented(reason: errorDescription)
+        }
+        try completion.requireDecoded()
     }
 }

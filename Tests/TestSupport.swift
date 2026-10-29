@@ -45,8 +45,8 @@ final class TestWindow: NSWindow {
 }
 
 /// A graphics frame covering a desktop of the given size.
-func makeFrameMetadata(width: UInt16, height: UInt16) -> RDPFrameMetadata {
-    RDPFrameMetadata(RDPGraphicsFrameSnapshot(
+func makeFrameSnapshot(width: UInt16 = 64, height: UInt16 = 64) -> RDPGraphicsFrameSnapshot {
+    RDPGraphicsFrameSnapshot(
         frameID: 1,
         surfaceID: 0,
         codecID: 0,
@@ -55,5 +55,9 @@ func makeFrameMetadata(width: UInt16, height: UInt16) -> RDPFrameMetadata {
         destinationRect: RDPFrameRect(left: 0, top: 0, right: width, bottom: height),
         regionRects: [],
         encodedVideoData: Data()
-    ))
+    )
+}
+
+func makeFrameMetadata(width: UInt16, height: UInt16) -> RDPFrameMetadata {
+    RDPFrameMetadata(makeFrameSnapshot(width: width, height: height))
 }

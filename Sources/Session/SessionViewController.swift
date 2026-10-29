@@ -953,21 +953,11 @@ final class SessionViewController: NSViewController {
                             cancellation.isCancelled == false
                         }
                     )
-                    if frame.contentKind == .video, completion == .decoded {
-                        keyframeRequests.recordDecodedVideo()
-                    }
-                    // An update that fails to decode leaves stale pixels,
-                    // not a broken session. Failed video waits for a
-                    // keyframe, which the server is asked for.
-                    if case .failed = completion {
-                        if frame.contentKind == .video, keyframeRequests.shouldRequest(at: Date()) {
-                            sink.apply { controller in
-                                controller.requestKeyframe(desktopSize: requestedDesktopSize)
-                            }
+                    try keyframeRequests.finishGraphicsFrame(frame, decoded: completion, at: Date()) {
+                        sink.apply { controller in
+                            controller.requestKeyframe(desktopSize: requestedDesktopSize)
                         }
-                        return
                     }
-                    try completion.requireDecoded()
                 },
                 onInputReady: { session in
                     sink.apply { controller in
