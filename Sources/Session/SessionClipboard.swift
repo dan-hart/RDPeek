@@ -3,6 +3,22 @@ import RDPKit
 
 private let sessionMaximumLocalClipboardFileBytes = 32 * 1024 * 1024
 
+/// Where the clipboard bridge sends: the session's `RDPClipboardSession`, or
+/// a test's recorder.
+protocol SessionClipboardSending: AnyObject {
+    func publishLocalUnicodeText(_ text: String?)
+    func publishLocalFiles(_ files: [RDPClipboardLocalFile])
+    func requestRemoteFileSize(streamID: UInt32, fileIndex: Int32) throws
+    func requestRemoteFileRange(
+        streamID: UInt32,
+        fileIndex: Int32,
+        position: UInt64,
+        requestedByteCount: UInt32
+    ) throws
+}
+
+extension RDPClipboardSession: SessionClipboardSending {}
+
 /// Bridges the macOS pasteboard and a session's CLIPRDR channel: publishes
 /// local text and files, applies remote text, and downloads remote files into
 /// a temporary directory. What the user should hear about is reported through
@@ -11,7 +27,7 @@ private let sessionMaximumLocalClipboardFileBytes = 32 * 1024 * 1024
 /// Adapted from RDPKit's example client (`RDPRemoteSessionClipboard`).
 @MainActor
 final class SessionClipboard {
-    private(set) var session: RDPClipboardSession?
+    private(set) var session: (any SessionClipboardSending)?
     private(set) var isSharingEnabled: Bool
     /// Shows a transient message: its text and an SF Symbol name.
     var onToast: (_ text: String, _ systemImage: String) -> Void = { _, _ in }
@@ -29,6 +45,15 @@ final class SessionClipboard {
         isSharingEnabled && session != nil
     }
 
+    var isTemporarySharingActive: Bool {
+        temporarySharingExpiresAt != nil
+    }
+
+    /// Off while sharing is on for good, which a temporary share would end.
+    var canStartTemporarySharing: Bool {
+        session != nil && (isSharingEnabled == false || isTemporarySharingActive)
+    }
+
     var temporarySharingSecondsRemaining: Int? {
         guard let temporarySharingExpiresAt else {
             return nil
@@ -37,7 +62,7 @@ final class SessionClipboard {
         return max(0, Int(ceil(remainingSeconds)))
     }
 
-    func attach(_ session: RDPClipboardSession) {
+    func attach(_ session: any SessionClipboardSending) {
         self.session = session
         guard isSharingEnabled else {
             session.publishLocalUnicodeText(nil)
@@ -66,13 +91,12 @@ final class SessionClipboard {
     }
 
     func startTemporarySharing() {
-        guard session != nil else {
+        guard canStartTemporarySharing else {
             return
         }
 
+        setSharingEnabled(true)
         temporarySharingExpiresAt = Date().addingTimeInterval(30)
-        isSharingEnabled = true
-        applySharing(true)
         onToast("Sharing clipboard for 30 seconds", "clock")
     }
 

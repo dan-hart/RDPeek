@@ -20,6 +20,7 @@ struct SessionCommandState: Equatable {
         hasReport: Bool,
         hasClipboardSession: Bool,
         clipboardSharingEnabled: Bool,
+        isTemporaryClipboardSharingActive: Bool,
         hostIsEmpty: Bool
     ) -> SessionCommandState {
         let startTitle = if isConnecting {
@@ -36,7 +37,11 @@ struct SessionCommandState: Equatable {
             // connection.
             canCancel: isConnecting || isResolvingStoredCredentials || isAutoRetryPending,
             canSyncClipboard: clipboardSharingEnabled && hasClipboardSession,
+            // A temporary share is offered only while sharing is off (or
+            // to restart one); ending it would turn off sharing the user
+            // chose to keep on.
             canShareClipboardTemporarily: hasClipboardSession
+                && (clipboardSharingEnabled == false || isTemporaryClipboardSharingActive)
         )
     }
 }

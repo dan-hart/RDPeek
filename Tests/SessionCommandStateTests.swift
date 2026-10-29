@@ -58,17 +58,28 @@ final class SessionCommandStateTests: XCTestCase {
         XCTAssertFalse(makeState().canSyncClipboard)
         XCTAssertFalse(makeState().canShareClipboardTemporarily)
 
+        // Sharing that is on for good is not offered a temporary share: it
+        // would switch sharing off when the 30 seconds run out.
         let sharing = makeState(hasClipboardSession: true, clipboardSharingEnabled: true)
         XCTAssertTrue(sharing.canSyncClipboard)
-        XCTAssertTrue(sharing.canShareClipboardTemporarily)
+        XCTAssertFalse(sharing.canShareClipboardTemporarily)
 
         // Sync requires sharing to be on; the temporary-share item is what
-        // turns it on, so it only needs the clipboard channel.
+        // turns it on.
         let sharingOff = makeState(hasClipboardSession: true, clipboardSharingEnabled: false)
         XCTAssertFalse(sharingOff.canSyncClipboard)
         XCTAssertTrue(sharingOff.canShareClipboardTemporarily)
 
-        let noSession = makeState(hasClipboardSession: false, clipboardSharingEnabled: true)
+        // A running temporary share can be restarted.
+        let temporary = makeState(
+            hasClipboardSession: true,
+            clipboardSharingEnabled: true,
+            isTemporaryClipboardSharingActive: true
+        )
+        XCTAssertTrue(temporary.canSyncClipboard)
+        XCTAssertTrue(temporary.canShareClipboardTemporarily)
+
+        let noSession = makeState(hasClipboardSession: false, clipboardSharingEnabled: false)
         XCTAssertFalse(noSession.canSyncClipboard)
         XCTAssertFalse(noSession.canShareClipboardTemporarily)
     }
@@ -78,7 +89,7 @@ final class SessionCommandStateTests: XCTestCase {
     func testEveryPhaseOffersStartOrCancelUnlessIdleWithEmptyHost() {
         // The user must never be stuck with both Connect and Cancel disabled
         // unless the session is idle and has no host to connect to.
-        for mask in 0 ..< (1 << 8) {
+        for mask in 0 ..< (1 << 9) {
             let isConnecting = mask & 1 != 0
             let isResolving = mask & 2 != 0
             let isAutoRetryPending = mask & 4 != 0
@@ -91,6 +102,7 @@ final class SessionCommandStateTests: XCTestCase {
                 hasReport: mask & 16 != 0,
                 hasClipboardSession: mask & 32 != 0,
                 clipboardSharingEnabled: mask & 64 != 0,
+                isTemporaryClipboardSharingActive: mask & 256 != 0,
                 hostIsEmpty: hostIsEmpty
             )
             let isIdle = !isConnecting && !isResolving && !isAutoRetryPending
@@ -111,6 +123,7 @@ final class SessionCommandStateTests: XCTestCase {
         hasReport: Bool = false,
         hasClipboardSession: Bool = false,
         clipboardSharingEnabled: Bool = false,
+        isTemporaryClipboardSharingActive: Bool = false,
         hostIsEmpty: Bool = false
     ) -> SessionCommandState {
         SessionCommandState.make(
@@ -121,6 +134,7 @@ final class SessionCommandStateTests: XCTestCase {
             hasReport: hasReport,
             hasClipboardSession: hasClipboardSession,
             clipboardSharingEnabled: clipboardSharingEnabled,
+            isTemporaryClipboardSharingActive: isTemporaryClipboardSharingActive,
             hostIsEmpty: hostIsEmpty
         )
     }

@@ -270,7 +270,7 @@ final class SessionViewController: NSViewController {
         hudModel.isAudioPlaybackEnabled = audioPlaybackEnabled
         hudModel.isFollowWindowSizeEnabled = autoApplyViewerSize
         hudModel.canSyncClipboard = clipboard.canSync
-        hudModel.canShareClipboardTemporarily = clipboard.session != nil
+        hudModel.canShareClipboardTemporarily = clipboard.canStartTemporarySharing
         hudModel.temporaryClipboardSecondsRemaining = clipboard.temporarySharingSecondsRemaining
         hudModel.canReconnect = canStartConnection
         hudModel.canCancel = isConnecting || isResolvingStoredCredentials || isAutoRetryPending
@@ -299,6 +299,7 @@ final class SessionViewController: NSViewController {
             hasReport: report != nil,
             hasClipboardSession: clipboard.session != nil,
             clipboardSharingEnabled: clipboard.isSharingEnabled,
+            isTemporaryClipboardSharingActive: clipboard.isTemporarySharingActive,
             hostIsEmpty: draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
     }
