@@ -108,6 +108,35 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(session.publishedTexts, [nil])
     }
 
+    /// The session always joins the clipboard channel, so this alone keeps
+    /// a device that does not share from sharing.
+    func testSharingOffSharesNothingEitherWay() {
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard(isSharingEnabled: false)
+        clipboard.attach(session)
+        XCTAssertFalse(clipboard.canSync)
+        XCTAssertTrue(clipboard.canStartTemporarySharing)
+
+        pasteboard.clearContents()
+        pasteboard.setString("newer local", forType: .string)
+        clipboard.poll()
+        clipboard.syncNow()
+        XCTAssertEqual(session.publishedTexts, [nil])
+        XCTAssertTrue(session.publishedFiles.isEmpty)
+
+        clipboard.receiveText("remote")
+        clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 1, fileName: "remote.txt"),
+        ]))
+        XCTAssertEqual(pasteboard.string(forType: .string), "newer local")
+        XCTAssertTrue(session.sizeRequests.isEmpty)
+
+        clipboard.setSharingEnabled(true)
+        XCTAssertEqual(session.publishedTexts.last, "newer local")
+    }
+
     func testOnlySyncNowSaysTheClipboardSynced() {
         pasteboard.clearContents()
         pasteboard.setString("hello", forType: .string)
