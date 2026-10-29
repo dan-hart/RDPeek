@@ -186,23 +186,24 @@ final class RemoteInputMappingTests: XCTestCase {
     // MARK: - A dead key's accent ahead of a key it does not compose with
 
     func testDeadKeyPrefixIsWhatADeadKeyLeftAheadOfTheKeysOutput() {
-        func prefix(_ characters: String, ignoringModifiers: String?) -> String {
-            MacRDPKeyboardMapping.deadKeyPrefix(characters, charactersIgnoringModifiers: ignoringModifiers)
+        func prefix(_ characters: String?) -> String {
+            MacRDPKeyboardMapping.deadKeyPrefix(characters)
         }
         // Return, Tab and Esc after US Option-E, keypad Enter after German "^".
-        XCTAssertEqual(prefix("´\r", ignoringModifiers: "\r"), "´")
-        XCTAssertEqual(prefix("´\t", ignoringModifiers: "\t"), "´")
-        XCTAssertEqual(prefix("´\u{1B}", ignoringModifiers: "\u{1B}"), "´")
-        XCTAssertEqual(prefix("^\u{03}", ignoringModifiers: "\u{03}"), "^")
+        XCTAssertEqual(prefix("´\r"), "´")
+        XCTAssertEqual(prefix("´\t"), "´")
+        XCTAssertEqual(prefix("´\u{1B}"), "´")
+        XCTAssertEqual(prefix("^\u{03}"), "^")
         // No dead key before the key, or one that composed with it.
-        XCTAssertEqual(prefix("\r", ignoringModifiers: "\r"), "")
-        XCTAssertEqual(prefix("é", ignoringModifiers: "e"), "")
-        XCTAssertEqual(prefix("^", ignoringModifiers: " "), "")
-        // Nothing printable ahead of the key's output, or no output to find.
-        XCTAssertEqual(prefix("\u{1B}\r", ignoringModifiers: "\r"), "")
-        XCTAssertEqual(prefix("\u{F702}\r", ignoringModifiers: "\r"), "")
-        XCTAssertEqual(prefix("´", ignoringModifiers: ""), "")
-        XCTAssertEqual(prefix("´\r", ignoringModifiers: nil), "")
+        XCTAssertEqual(prefix("\r"), "")
+        XCTAssertEqual(prefix("é"), "")
+        XCTAssertEqual(prefix("^"), "")
+        // Nothing printable ahead of the key's output, or no control
+        // character to be the key's output.
+        XCTAssertEqual(prefix("\u{1B}\r"), "")
+        XCTAssertEqual(prefix("\u{F702}\r"), "")
+        XCTAssertEqual(prefix("´a"), "")
+        XCTAssertEqual(prefix(nil), "")
     }
 
     // MARK: - Characters the announced layout types

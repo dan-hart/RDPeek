@@ -228,10 +228,7 @@ final class RemoteInputCaptureNSView: NSView {
         {
             // A dead key typed before a key it does not compose with, such as Return, types its
             // accent ahead of the key. A repeat of the held key types the accent no more.
-            let prefix = isHeldAsScancode ? "" : MacRDPKeyboardMapping.deadKeyPrefix(
-                event.characters,
-                charactersIgnoringModifiers: event.charactersIgnoringModifiers
-            )
+            let prefix = isHeldAsScancode ? "" : MacRDPKeyboardMapping.deadKeyPrefix(event.characters)
             sendKeyboardScancode(scancode, isReleased: false, after: MacRDPKeyboardMapping.unicodeEvents(for: prefix))
             return
         }
@@ -732,19 +729,21 @@ enum MacRDPKeyboardMapping {
     }
 
     /// What a dead key left ahead of the output of a key it does not compose with: macOS types
-    /// "´" and then a newline for Return after Option-E on US, so `characters` is the key's own
-    /// output (`charactersIgnoringModifiers`) after printable characters. Empty for any other
-    /// key. AppKit reports Delete, the arrows and other function keys as their own characters
-    /// alone, so of the keys that go as scancodes, Return, Tab, Esc and Enter carry a prefix.
-    static func deadKeyPrefix(_ characters: String?, charactersIgnoringModifiers: String?) -> String {
-        guard let characters, let output = charactersIgnoringModifiers?.unicodeScalars, output.isEmpty == false else {
+    /// "´" and then a newline for Return after Option-E on US, so `characters` is printable
+    /// characters followed by the key's own control character. Empty for any other key. AppKit
+    /// reports Delete, the arrows and other function keys as their own characters alone, so of
+    /// the keys that go as scancodes, Return, Tab, Esc and Enter carry a prefix. The key's
+    /// output is read from `characters` alone: whether `charactersIgnoringModifiers` also keeps
+    /// the dead key's accent is not something to rely on.
+    static func deadKeyPrefix(_ characters: String?) -> String {
+        guard let scalars = characters?.unicodeScalars,
+              scalars.count > 1,
+              let output = scalars.last,
+              output.properties.generalCategory == .control
+        else {
             return ""
         }
-        let scalars = characters.unicodeScalars
-        guard scalars.count > output.count, scalars.suffix(output.count).elementsEqual(output) else {
-            return ""
-        }
-        let prefix = String(scalars.dropLast(output.count))
+        let prefix = String(scalars.dropLast())
         return isPrintable(prefix) ? prefix : ""
     }
 

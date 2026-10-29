@@ -1058,7 +1058,8 @@ final class RemoteInputCaptureViewTests: XCTestCase {
             ))
         }
         harness.view.keyUp(with: keyEvent(.keyUp, keyCode: returnKey, characters: "´\r", charactersIgnoringModifiers: "\r"))
-        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_Tab), characters: "^\t", charactersIgnoringModifiers: "\t"))
+        // Whether charactersIgnoringModifiers keeps the accent too does not matter.
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_Tab), characters: "^\t", charactersIgnoringModifiers: "^\t"))
         harness.view.keyDown(with: keyEvent(
             .keyDown,
             keyCode: UInt16(kVK_Escape),
