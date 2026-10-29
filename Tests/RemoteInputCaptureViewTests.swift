@@ -760,6 +760,80 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    func testOptionFoundHeldWithoutSideBitsTypesTheMacCharacter() {
+        // A keyboard that reports no side bits, with Option held before the window became key:
+        // the view never saw which Option it is, so no Alt is on the server, and German
+        // Option-L types the Mac's "@" rather than going as a bare L.
+        let harness = makeHarness()
+        harness.view.keyboardLayout = RDPKeyboardLayout(rawValue: 0x0000_0407)
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_ANSI_L),
+            characters: "@",
+            charactersIgnoringModifiers: "l",
+            flags: .option
+        ))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .unicode(codeUnit: 0x40, isReleased: false),
+            .unicode(codeUnit: 0x40, isReleased: true),
+        ])
+    }
+
+    func testKeyAfterARightOptionDeadKeyWithItsAltOnTheServerGoesUncomposed() {
+        // Left Arrow sent right Option's Alt down, so Option-E goes as Alt-E, and the "á" macOS
+        // reports for A after it goes as A. After focus is lost, the next key goes as reported.
+        let harness = makeHarness()
+        let eKey = UInt16(kVK_ANSI_E)
+        let aKey = UInt16(kVK_ANSI_A)
+        let leftArrow = RDPKeyboardScancode(code: 0x4B, isExtended: true)
+        let eScancode = RDPKeyboardScancode(code: 0x12)
+        let aScancode = RDPKeyboardScancode(code: 0x1E)
+        func press(_ keyCode: UInt16, _ characters: String, _ ignoring: String, _ flags: NSEvent.ModifierFlags = []) {
+            harness.view.keyDown(with: keyEvent(
+                .keyDown,
+                keyCode: keyCode,
+                characters: characters,
+                charactersIgnoringModifiers: ignoring,
+                flags: flags
+            ))
+            harness.view.keyUp(with: keyEvent(
+                .keyUp,
+                keyCode: keyCode,
+                characters: characters,
+                charactersIgnoringModifiers: ignoring,
+                flags: flags
+            ))
+        }
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        press(UInt16(kVK_LeftArrow), "\u{F702}", "\u{F702}", .rightOptionDown)
+        press(eKey, "", "e", .rightOptionDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+        press(aKey, "á", "a")
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Option), flags: .leftOptionDown))
+        press(eKey, "", "e", .leftOptionDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Option), flags: []))
+        _ = harness.view.resignFirstResponder()
+        press(aKey, "á", "a")
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .rightAlt, isReleased: false),
+            .keyboard(scancode: leftArrow, isReleased: false),
+            .keyboard(scancode: leftArrow, isReleased: true),
+            .keyboard(scancode: eScancode, isReleased: false),
+            .keyboard(scancode: eScancode, isReleased: true),
+            .keyboard(scancode: .rightAlt, isReleased: true),
+            .keyboard(scancode: aScancode, isReleased: false),
+            .keyboard(scancode: aScancode, isReleased: true),
+            .keyboard(scancode: .leftAlt, isReleased: false),
+            .keyboard(scancode: eScancode, isReleased: false),
+            .keyboard(scancode: eScancode, isReleased: true),
+            .keyboard(scancode: .leftAlt, isReleased: true),
+            .unicode(codeUnit: 0xE1, isReleased: false),
+            .unicode(codeUnit: 0xE1, isReleased: true),
+        ])
+    }
+
     func testModifierTappedWhileRightOptionIsHeldBackTapsNoAlt() {
         // The server sees Shift, Control or left Alt go down and up, so right
         // Option released after it is no Alt tap, which would open a Windows
@@ -831,6 +905,7 @@ final class RemoteInputCaptureViewTests: XCTestCase {
     }
 
     func testCommandRightOptionChordSendsWindowsAltAndTheKey() {
+        // The held-back keys go down in the order they were pressed.
         let harness = makeHarness()
         let rKey = RDPKeyboardScancode(code: 0x13)
         let both = NSEvent.ModifierFlags.leftCommandDown.union(.rightOptionDown)
@@ -851,8 +926,8 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
 
         XCTAssertEqual(harness.recorder.events, [
-            .keyboard(scancode: .leftWindows, isReleased: false),
             .keyboard(scancode: .rightAlt, isReleased: false),
+            .keyboard(scancode: .leftWindows, isReleased: false),
             .keyboard(scancode: rKey, isReleased: false),
             .keyboard(scancode: rKey, isReleased: true),
             .keyboard(scancode: .leftWindows, isReleased: true),

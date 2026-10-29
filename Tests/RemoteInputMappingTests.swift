@@ -33,32 +33,104 @@ final class RemoteInputMappingTests: XCTestCase {
 
     func testCommandSendsWindowsKeyOnlyWithAnotherKeyOrAsATap() {
         let leftWindows = RDPKeyboardScancode(code: 0x5B, isExtended: true)
+        let nothingDown = RDPInputStateTracker()
         var inputState = RDPInputStateTracker()
-        var windowsKey = MacRDPDeferredWindowsKey()
+        var windowsKey = MacRDPDeferredModifierKeys()
 
         // Command released alone: a Win tap.
-        windowsKey.press(leftWindows)
+        windowsKey.press(leftWindows, inputState: nothingDown)
         XCTAssertEqual(windowsKey.release(leftWindows), [
             .keyboard(scancode: leftWindows, isReleased: false),
             .keyboard(scancode: leftWindows, isReleased: true),
         ])
 
         // Another key while Command is held: Win down goes first and is then tracked as pressed.
-        windowsKey.press(leftWindows)
+        windowsKey.press(leftWindows, inputState: nothingDown)
         XCTAssertEqual(windowsKey.flush(&inputState), [.keyboard(scancode: leftWindows, isReleased: false)])
         XCTAssertTrue(inputState.isScancodePressed(leftWindows))
         XCTAssertEqual(windowsKey.release(leftWindows), [])
 
         // A shortcut handled locally, a missed release, or focus loss: nothing at all.
-        windowsKey.press(leftWindows)
+        windowsKey.press(leftWindows, inputState: nothingDown)
         windowsKey.noteChordedElsewhere()
         XCTAssertEqual(windowsKey.release(leftWindows), [])
-        windowsKey.press(leftWindows)
+        windowsKey.press(leftWindows, inputState: nothingDown)
         windowsKey.discard(leftWindows)
         XCTAssertFalse(windowsKey.isHeld(leftWindows))
-        windowsKey.press(leftWindows)
+        windowsKey.press(leftWindows, inputState: nothingDown)
         windowsKey.reset()
         XCTAssertFalse(windowsKey.isHeld(leftWindows))
+    }
+
+    /// Shift and the other modifiers send held Windows keys ahead of them, but not Alt, since
+    /// Option-Shift types characters too; a wheel event sends Alt ahead of it, but not the
+    /// Windows keys, since Command-scroll is no chord the server sees.
+    func testRightAltIsHeldBackLikeTheWindowsKeyButEachGoesAheadOfDifferentInput() {
+        let leftWindows = RDPKeyboardScancode(code: 0x5B, isExtended: true)
+        let rightAlt = RDPKeyboardScancode(code: 0x38, isExtended: true)
+        let nothingDown = RDPInputStateTracker()
+        var heldKeys = MacRDPDeferredModifierKeys()
+        XCTAssertTrue(MacRDPDeferredModifierKeys.isDeferred(rightAlt))
+        XCTAssertFalse(MacRDPDeferredModifierKeys.isDeferred(RDPKeyboardScancode(code: 0x38)))
+
+        // Released alone: an Alt tap; ahead of another key: Alt down.
+        var keyState = RDPInputStateTracker()
+        heldKeys.press(rightAlt, inputState: nothingDown)
+        XCTAssertEqual(heldKeys.release(rightAlt), [
+            .keyboard(scancode: rightAlt, isReleased: false),
+            .keyboard(scancode: rightAlt, isReleased: true),
+        ])
+        heldKeys.press(rightAlt, inputState: nothingDown)
+        XCTAssertEqual(heldKeys.flush(&keyState), [.keyboard(scancode: rightAlt, isReleased: false)])
+        XCTAssertTrue(keyState.isScancodePressed(rightAlt))
+
+        // Ahead of Shift: Win goes, Alt stays held back, and releasing it is no tap.
+        var modifierState = RDPInputStateTracker()
+        heldKeys.press(leftWindows, inputState: nothingDown)
+        heldKeys.press(rightAlt, inputState: nothingDown)
+        XCTAssertEqual(heldKeys.flushWindowsKeys(&modifierState), [.keyboard(scancode: leftWindows, isReleased: false)])
+        XCTAssertTrue(heldKeys.isHeld(rightAlt))
+        XCTAssertEqual(heldKeys.release(rightAlt), [])
+        heldKeys.press(rightAlt, inputState: nothingDown)
+        XCTAssertEqual(heldKeys.flushWindowsKeys(&modifierState), [])
+        XCTAssertEqual(heldKeys.release(rightAlt), [])
+
+        // Ahead of a wheel event: Alt goes, Win stays held back, and releasing it is no tap.
+        var wheelState = RDPInputStateTracker()
+        heldKeys.press(leftWindows, inputState: nothingDown)
+        heldKeys.press(rightAlt, inputState: nothingDown)
+        XCTAssertEqual(heldKeys.flushRightAlt(&wheelState), [.keyboard(scancode: rightAlt, isReleased: false)])
+        XCTAssertTrue(heldKeys.isHeld(leftWindows))
+        XCTAssertEqual(heldKeys.release(leftWindows), [])
+        heldKeys.press(leftWindows, inputState: nothingDown)
+        XCTAssertEqual(heldKeys.flushRightAlt(&wheelState), [])
+        XCTAssertEqual(heldKeys.release(leftWindows), [])
+
+        // Held back together, as in Cmd-Option-Esc, which the server never sees: no taps.
+        heldKeys.press(leftWindows, inputState: nothingDown)
+        heldKeys.press(rightAlt, inputState: nothingDown)
+        XCTAssertEqual(heldKeys.release(rightAlt), [])
+        XCTAssertEqual(heldKeys.release(leftWindows), [])
+    }
+
+    /// Command-click sends Win, so the other Command or right Option pressed while that Win is
+    /// down is a chord too, and the same goes the other way round: released alone, it sends
+    /// nothing rather than a tap, and with another key it still goes down ahead of it.
+    func testAKeyHeldBackWhileAnotherIsOnTheServerIsNoTap() {
+        let leftWindows = RDPKeyboardScancode(code: 0x5B, isExtended: true)
+        let rightWindows = RDPKeyboardScancode(code: 0x5C, isExtended: true)
+        let rightAlt = RDPKeyboardScancode(code: 0x38, isExtended: true)
+        for (first, second) in [(leftWindows, rightWindows), (leftWindows, rightAlt), (rightAlt, leftWindows)] {
+            var inputState = RDPInputStateTracker()
+            var heldKeys = MacRDPDeferredModifierKeys()
+            heldKeys.press(first, inputState: inputState)
+            XCTAssertEqual(heldKeys.flush(&inputState), [.keyboard(scancode: first, isReleased: false)])
+
+            heldKeys.press(second, inputState: inputState)
+            XCTAssertEqual(heldKeys.release(second), [])
+            heldKeys.press(second, inputState: inputState)
+            XCTAssertEqual(heldKeys.flush(&inputState), [.keyboard(scancode: second, isReleased: false)])
+        }
     }
 
     func testRightSideAndCommandModifiersUseExtendedScancodes() throws {
@@ -115,59 +187,85 @@ final class RemoteInputMappingTests: XCTestCase {
     }
 
     func testScancodeRuleCoversFunctionKeysAndModifiedKeys() {
-        func sendsScancode(_ keyCode: Int, _ modifierFlags: NSEvent.ModifierFlags) -> Bool {
-            MacRDPKeyboardMapping.shouldSendScancode(
-                forKeyCode: UInt16(keyCode),
-                modifierFlags: modifierFlags,
-                isHeldAsScancode: false
-            )
-        }
-        XCTAssertTrue(sendsScancode(kVK_F2, []))
-        XCTAssertTrue(sendsScancode(kVK_F4, []))
+        XCTAssertTrue(sendsScancode(kVK_F2, [], characters: "\u{F705}"))
+        XCTAssertTrue(sendsScancode(kVK_F4, [], characters: "\u{F707}"))
         XCTAssertFalse(sendsScancode(kVK_ANSI_A, []))
+        XCTAssertTrue(sendsScancode(kVK_ANSI_A, .control, characters: "\u{1}", ignoringModifiers: "a"))
         XCTAssertTrue(sendsScancode(kVK_ANSI_A, .option))
     }
 
     // MARK: - Characters typed with Option
 
-    func testOptionTypesOnlyWhereItChangesWhatTheKeyTypes() {
-        /// `deadKey` nil fails the test if the dead-key check is asked at all.
-        func optionTypes(
-            _ characters: String,
-            ignoringModifiers: String,
-            _ modifierFlags: NSEvent.ModifierFlags = .option,
-            deadKey: Bool? = nil
-        ) -> Bool {
-            MacRDPKeyboardMapping.optionTypes(
-                characters,
-                charactersIgnoringModifiers: ignoringModifiers,
-                modifierFlags: modifierFlags,
-                isDeadKey: {
-                    guard let deadKey else {
-                        XCTFail("Asked whether a key that types something is a dead key")
-                        return false
-                    }
-                    return deadKey
-                }()
-            )
-        }
+    /// Right Option is held back, so Option with no Alt on the server types what the Mac layout
+    /// puts on the key; with Alt there, or with ⌘ or ⌃, the key goes as its scancode.
+    func testOptionTypesTheMacLayoutsCharactersUnlessAltIsOnTheServer() {
         // German Option-L and Shift-Option-7.
-        XCTAssertTrue(optionTypes("@", ignoringModifiers: "l"))
-        XCTAssertTrue(optionTypes("\\", ignoringModifiers: "/", [.option, .shift]))
+        XCTAssertFalse(sendsScancode(kVK_ANSI_L, .option, characters: "@", ignoringModifiers: "l"))
+        XCTAssertFalse(sendsScancode(kVK_ANSI_7, [.option, .shift], characters: "\\", ignoringModifiers: "/"))
         // US Option-E, a dead key: it types nothing, and the next key the accent.
-        XCTAssertTrue(optionTypes("", ignoringModifiers: "e", deadKey: true))
-        // A key a custom layout gives no output with Option, which is no dead key.
-        XCTAssertFalse(optionTypes("", ignoringModifiers: "e", deadKey: false))
-        // Option changed nothing, or typed a control or private-use character
-        // (F4, the Apple logo).
-        XCTAssertFalse(optionTypes("l", ignoringModifiers: "l"))
-        XCTAssertFalse(optionTypes("\u{1B}", ignoringModifiers: "["))
-        XCTAssertFalse(optionTypes("\u{F707}", ignoringModifiers: "\u{F707}"))
-        XCTAssertFalse(optionTypes("\u{F8FF}", ignoringModifiers: "K", [.option, .shift]))
-        // Without Option, or with ⌘ or ⌃ making the key a shortcut.
-        XCTAssertFalse(optionTypes("é", ignoringModifiers: "e", []))
-        XCTAssertFalse(optionTypes("@", ignoringModifiers: "l", [.option, .command]))
-        XCTAssertFalse(optionTypes("@", ignoringModifiers: "l", [.option, .control]))
+        XCTAssertFalse(sendsScancode(kVK_ANSI_E, .option, characters: "", ignoringModifiers: "e"))
+
+        XCTAssertTrue(sendsScancode(kVK_ANSI_L, .option, characters: "@", ignoringModifiers: "l", isAltPressed: true))
+        XCTAssertTrue(sendsScancode(kVK_ANSI_L, [.option, .command], characters: "@", ignoringModifiers: "l"))
+        XCTAssertTrue(sendsScancode(kVK_ANSI_L, [.option, .control], characters: "@", ignoringModifiers: "l"))
+        XCTAssertTrue(sendsScancode(kVK_ANSI_L, .option, characters: "@", ignoringModifiers: "l", isHeldAsScancode: true))
+        XCTAssertTrue(sendsScancode(kVK_LeftArrow, .option, characters: "\u{F702}"))
+        // Option changed nothing, or typed a control or function-key character (F4, the Apple logo).
+        XCTAssertTrue(sendsScancode(kVK_ANSI_L, .option, characters: "l"))
+        XCTAssertTrue(sendsScancode(kVK_ANSI_LeftBracket, .option, characters: "\u{1B}", ignoringModifiers: "["))
+        XCTAssertTrue(sendsScancode(kVK_ANSI_K, [.option, .shift], characters: "\u{F8FF}", ignoringModifiers: "K"))
+        // Without Option, a character a dead key composed is left to the layout check.
+        XCTAssertFalse(sendsScancode(kVK_ANSI_E, [], characters: "é", ignoringModifiers: "e"))
+    }
+
+    /// A custom layout can give a key no output with Option without making it a dead key: that
+    /// key goes as Alt and its scancode. The layout is asked only when right Option typed nothing.
+    func testOptionTypingNothingIsADeadKeyOnlyIfTheLayoutSaysSo() {
+        XCTAssertTrue(sendsScancode(kVK_ANSI_E, .option, characters: "", ignoringModifiers: "e", isDeadKey: false))
+        var questions = 0
+        func optionTypes(_ characters: String, _ ignoringModifiers: String) -> Bool {
+            MacRDPKeyboardMapping.optionTypes(characters, charactersIgnoringModifiers: ignoringModifiers) {
+                questions += 1
+                return true
+            }
+        }
+        XCTAssertTrue(optionTypes("", "e"))
+        XCTAssertEqual(questions, 1)
+        XCTAssertTrue(optionTypes("@", "l"))
+        XCTAssertFalse(optionTypes("l", "l"))
+        XCTAssertEqual(questions, 1)
+        XCTAssertTrue(MacRDPKeyboardMapping.shouldSendScancode(
+            forKeyCode: UInt16(kVK_ANSI_E),
+            characters: "",
+            charactersIgnoringModifiers: "e",
+            modifierFlags: .option,
+            isHeldAsScancode: false,
+            isAltPressed: true
+        ) {
+            questions += 1
+            return true
+        })
+        XCTAssertEqual(questions, 1)
+    }
+
+    private func sendsScancode(
+        _ keyCode: Int,
+        _ modifierFlags: NSEvent.ModifierFlags,
+        characters: String = "a",
+        ignoringModifiers: String? = nil,
+        isHeldAsScancode: Bool = false,
+        isAltPressed: Bool = false,
+        isDeadKey: Bool = true
+    ) -> Bool {
+        MacRDPKeyboardMapping.shouldSendScancode(
+            forKeyCode: UInt16(keyCode),
+            characters: characters,
+            charactersIgnoringModifiers: ignoringModifiers ?? characters,
+            modifierFlags: modifierFlags,
+            isHeldAsScancode: isHeldAsScancode,
+            isAltPressed: isAltPressed,
+            isDeadKey: { isDeadKey }
+        )
     }
 
     /// Apple's US layout, loaded by its ID so the answer does not depend on the Mac's own layout.
@@ -204,25 +302,31 @@ final class RemoteInputMappingTests: XCTestCase {
 
     // MARK: - A dead key's accent ahead of a key it does not compose with
 
-    func testDeadKeyPrefixIsWhatADeadKeyLeftAheadOfTheKeysOutput() {
-        func prefix(_ characters: String?) -> String {
-            MacRDPKeyboardMapping.deadKeyPrefix(characters)
-        }
+    func testDeadKeyTextIsWhatADeadKeyLeftAheadOfTheKeysOutput() {
         // Return, Tab and Esc after US Option-E, keypad Enter after German "^".
-        XCTAssertEqual(prefix("´\r"), "´")
-        XCTAssertEqual(prefix("´\t"), "´")
-        XCTAssertEqual(prefix("´\u{1B}"), "´")
-        XCTAssertEqual(prefix("^\u{03}"), "^")
-        // No dead key before the key, or one that composed with it.
-        XCTAssertEqual(prefix("\r"), "")
-        XCTAssertEqual(prefix("é"), "")
-        XCTAssertEqual(prefix("^"), "")
-        // Nothing printable ahead of the key's output, or no control
-        // character to be the key's output.
-        XCTAssertEqual(prefix("\u{1B}\r"), "")
-        XCTAssertEqual(prefix("\u{F702}\r"), "")
-        XCTAssertEqual(prefix("´a"), "")
-        XCTAssertEqual(prefix(nil), "")
+        XCTAssertEqual(MacRDPKeyboardMapping.deadKeyText(aheadOf: "´\r"), "´")
+        XCTAssertEqual(MacRDPKeyboardMapping.deadKeyText(aheadOf: "´\t"), "´")
+        XCTAssertEqual(MacRDPKeyboardMapping.deadKeyText(aheadOf: "´\u{1B}"), "´")
+        XCTAssertEqual(MacRDPKeyboardMapping.deadKeyText(aheadOf: "^\u{03}"), "^")
+        // No dead key before the key, or one that composed with it; nothing printable ahead of
+        // the key's output, or no control character to be the key's output.
+        for characters: String? in [nil, "", "\r", "a", "é", "^", "´a", "´\r\r", "\r´", "\u{1B}\r", "\u{F702}", "\u{F702}\r"] {
+            XCTAssertNil(MacRDPKeyboardMapping.deadKeyText(aheadOf: characters), "\(String(describing: characters))")
+        }
+    }
+
+    /// After a dead key went as an Alt chord, the next key is decided by what it types on its
+    /// own, except a control or function key, whose characters stay AppKit's.
+    func testTheKeyAfterAChordedDeadKeyIsDecidedByItsUncomposedOutput() {
+        func characters(_ composed: String?, _ uncomposed: String?) -> String? {
+            MacRDPKeyboardMapping.characters(afterChordedDeadKey: composed, uncomposed: uncomposed)
+        }
+        XCTAssertEqual(characters("á", "a"), "a")
+        XCTAssertEqual(characters("´¬", "¬"), "¬")
+        XCTAssertEqual(characters("´", ""), "")
+        XCTAssertEqual(characters("´\r", "\r"), "´\r")
+        XCTAssertEqual(characters("\u{F702}", "\u{1C}"), "\u{F702}")
+        XCTAssertEqual(characters("á", nil), "á")
     }
 
     // MARK: - Characters the announced layout types

@@ -11,9 +11,6 @@ protocol RemoteInputEventSink: AnyObject {
 extension RDPInputSession: RemoteInputEventSink {}
 
 final class RemoteInputCaptureNSView: NSView {
-    private static let leftAlt = RDPKeyboardScancode(code: 0x38)
-    private static let rightAlt = RDPKeyboardScancode(code: 0x38, isExtended: true)
-
     var rdpFrame: RDPFrameMetadata?
     /// The layout the session announced; it decides which keys can go as scancodes.
     var keyboardLayout = RDPKeyboardLayout.unitedStates
@@ -36,14 +33,10 @@ final class RemoteInputCaptureNSView: NSView {
 
     private var trackingArea: NSTrackingArea?
     private var inputState = RDPInputStateTracker()
-    private var deferredWindowsKey = MacRDPDeferredWindowsKey()
-    /// Right Option's Alt, held back the same way: Mac layouts type characters with Option,
-    /// such as "@" with Option-L on German, and those go as text with no Alt around them.
-    private var deferredRightAlt = MacRDPDeferredWindowsKey()
+    private var deferredModifierKeys = MacRDPDeferredModifierKeys()
     private var wheelAccumulator = RDPScrollWheelAccumulator()
-    /// A dead key went to the server as a chord, such as Alt-E with left Option. macOS started it
-    /// all the same, so the next key's `characters` carry its accent.
-    private var isAfterChordedDeadKey = false
+    /// A dead key went to the server as an Alt chord, so macOS composes the next key with its accent.
+    private var followsChordedDeadKey = false
     private var commandKeyUpMonitor: Any?
 
     /// A view released while still in its window was never told to stop observing it. The
@@ -175,8 +168,7 @@ final class RemoteInputCaptureNSView: NSView {
         }
         // A held-back right Alt goes down first, as it does ahead of a click, so Alt-scroll
         // reaches the server. Command held to scroll was used, so releasing it is no tap.
-        deferredWindowsKey.noteChordedElsewhere()
-        let deferredKeyEvents = deferredRightAlt.flush(&inputState)
+        let deferredKeyEvents = deferredModifierKeys.flushRightAlt(&inputState)
         inputSession?.send(deferredKeyEvents + events)
     }
 
@@ -194,7 +186,7 @@ final class RemoteInputCaptureNSView: NSView {
             // scancode that a menu may take, must not leave the release of
             // Command or right Option to tap the Windows key or Alt there.
             if event.modifierFlags.isDisjoint(with: [.command, .control]) == false {
-                noteDeferredKeysChordedElsewhere()
+                deferredModifierKeys.noteChordedElsewhere()
             }
             return false
         }
@@ -205,30 +197,21 @@ final class RemoteInputCaptureNSView: NSView {
 
     override func keyDown(with event: NSEvent) {
         syncModifierKeys(with: event)
-        let scancode = MacRDPKeyboardMapping.scancode(forKeyCode: event.keyCode)
-        let isHeldAsScancode = scancode.map { inputState.isScancodePressed($0) } ?? false
-        // After a dead key the server took as a chord, the key's own output stands in for the
-        // characters macOS composed with it. A key with no scancode keeps AppKit's: the layout
-        // gives some, such as keypad Clear, a control character.
-        let characters = isAfterChordedDeadKey && event.isARepeat == false && scancode != nil
-            ? uncomposedOutput(event.keyCode, event.modifierFlags) ?? event.characters
-            : event.characters
-        isAfterChordedDeadKey = false
-        if isHeldAsScancode == false, isTypedWithRightOption(characters, event: event) {
-            // Right Option was used to type, or to start a dead key whose accent the next key
-            // types as text, so releasing it is no Alt tap. A dead key itself sends nothing.
-            deferredRightAlt.noteChordedElsewhere()
-            let events = MacRDPKeyboardMapping.unicodeEvents(for: characters ?? "")
-            if events.isEmpty == false {
-                inputSession?.send(events)
-            }
-            return
-        }
-        if let scancode,
+        let isComposedByChordedDeadKey = followsChordedDeadKey && event.isARepeat == false
+        followsChordedDeadKey = false
+        let characters = isComposedByChordedDeadKey ? MacRDPKeyboardMapping.characters(
+            afterChordedDeadKey: event.characters,
+            uncomposed: uncomposedOutput(event.keyCode, event.modifierFlags)
+        ) : event.characters
+        if let scancode = MacRDPKeyboardMapping.scancode(forKeyCode: event.keyCode),
            MacRDPKeyboardMapping.shouldSendScancode(
                forKeyCode: event.keyCode,
+               characters: characters,
+               charactersIgnoringModifiers: event.charactersIgnoringModifiers,
                modifierFlags: event.modifierFlags,
-               isHeldAsScancode: isHeldAsScancode
+               isHeldAsScancode: inputState.isScancodePressed(scancode),
+               isAltPressed: MacRDPModifierKey.altScancodes.contains(where: inputState.isScancodePressed),
+               isDeadKey: { isDeadKey(event.keyCode, event.modifierFlags) }
            ) || MacRDPKeyboardMapping.windowsTypes(
                characters,
                charactersIgnoringModifiers: event.charactersIgnoringModifiers,
@@ -237,18 +220,24 @@ final class RemoteInputCaptureNSView: NSView {
                layout: keyboardLayout
            )
         {
-            // A dead key typed before a key it does not compose with, such as Return, types its
-            // accent ahead of the key. A repeat of the held key types the accent no more, and
-            // text never goes with ⌘ or ⌃.
-            let isShortcut = event.modifierFlags.isDisjoint(with: [.command, .control]) == false
-            let prefix = isHeldAsScancode || isShortcut ? "" : MacRDPKeyboardMapping.deadKeyPrefix(characters)
-            sendKeyboardScancode(scancode, isReleased: false, after: MacRDPKeyboardMapping.unicodeEvents(for: prefix))
-            isAfterChordedDeadKey = characters?.isEmpty == true && isDeadKey(event.keyCode, event.modifierFlags)
+            // A dead key's accent ahead of Return or Tab, unless that dead key went as a chord;
+            // a repeat types it no more, and text never goes with Command or Control.
+            if event.isARepeat == false, isComposedByChordedDeadKey == false,
+               event.modifierFlags.isDisjoint(with: [.command, .control]),
+               let text = MacRDPKeyboardMapping.deadKeyText(aheadOf: characters)
+            {
+                inputSession?.send(MacRDPKeyboardMapping.unicodeEvents(for: text))
+            }
+            sendKeyboardScancode(scancode, isReleased: false)
+            // A dead key that went as a chord, as left Option-E goes as Alt-E.
+            followsChordedDeadKey = characters?.isEmpty == true && isDeadKey(event.keyCode, event.modifierFlags)
             return
         }
         guard event.modifierFlags.isDisjoint(with: [.command, .control]) else {
             return
         }
+        // Right Option, if held back, typed this or started a dead key, so it is no Alt tap.
+        deferredModifierKeys.noteChordedElsewhere()
         let events = MacRDPKeyboardMapping.unicodeEvents(for: characters ?? "")
         guard events.isEmpty == false else {
             return
@@ -333,19 +322,6 @@ final class RemoteInputCaptureNSView: NSView {
         }
     }
 
-    /// Whether right Option typed `characters`, the key's: its Alt is held back, left Option's
-    /// Alt is not on the server, and Option made the key type a character or a dead key.
-    private func isTypedWithRightOption(_ characters: String?, event: NSEvent) -> Bool {
-        deferredRightAlt.isHeld(Self.rightAlt)
-            && inputState.isScancodePressed(Self.leftAlt) == false
-            && MacRDPKeyboardMapping.optionTypes(
-                characters,
-                charactersIgnoringModifiers: event.charactersIgnoringModifiers,
-                modifierFlags: event.modifierFlags,
-                isDeadKey: isDeadKey(event.keyCode, event.modifierFlags)
-            )
-    }
-
     private func forwardCommandKeyUp(_ event: NSEvent) {
         guard event.modifierFlags.contains(.command),
               event.window === window,
@@ -355,7 +331,7 @@ final class RemoteInputCaptureNSView: NSView {
         }
         // The key went to the server, or a shortcut the system took, such as ⌘⌥D, used it;
         // either way releasing Command or right Option is no tap.
-        noteDeferredKeysChordedElsewhere()
+        deferredModifierKeys.noteChordedElsewhere()
         keyUp(with: event)
     }
 
@@ -388,8 +364,7 @@ final class RemoteInputCaptureNSView: NSView {
             }
             // A held-back Windows key or right Alt whose release the view
             // missed never reached the server, so it is dropped without a tap.
-            deferredWindowsKey.discard(scancode)
-            deferredRightAlt.discard(scancode)
+            deferredModifierKeys.discard(scancode)
             return inputState.isScancodePressed(scancode) ? inputState.keyboard(scancode: scancode, isReleased: true) : nil
         }
     }
@@ -404,45 +379,31 @@ final class RemoteInputCaptureNSView: NSView {
             // Command or right Option found held, not seen going down, may be
             // left over from a Cmd-Tab into this window; releasing it alone is
             // no tap.
-            if MacRDPDeferredWindowsKey.isWindowsKey(scancode) {
-                deferredWindowsKey.noteChordedElsewhere()
-            } else if scancode == Self.rightAlt {
-                deferredRightAlt.noteChordedElsewhere()
+            if deferredModifierKeys.isHeld(scancode) {
+                deferredModifierKeys.noteChordedElsewhere()
             }
             return events
         }
     }
 
     private func isModifierPressed(_ scancode: RDPKeyboardScancode) -> Bool {
-        inputState.isScancodePressed(scancode) || deferredWindowsKey.isHeld(scancode)
-            || deferredRightAlt.isHeld(scancode)
+        inputState.isScancodePressed(scancode) || deferredModifierKeys.isHeld(scancode)
     }
 
-    /// The events that press or release a modifier. A Windows key or right Alt
-    /// not yet on the server is held back by `deferredWindowsKey` or
-    /// `deferredRightAlt`, and any other press sends a held-back Windows key
-    /// down first. Right Alt stays held back, since Shift-Option types
-    /// characters too, but releasing it is no longer a tap.
+    /// The events that press or release a modifier. A Windows key or right Alt not yet on the
+    /// server is held back by `deferredModifierKeys`, and any other press sends the held-back
+    /// Windows keys down first. Right Alt stays held back, since Shift-Option types characters
+    /// too, but releasing it is no longer a tap.
     private func modifierEvents(_ scancode: RDPKeyboardScancode, isDown: Bool) -> [RDPSlowPathInputEvent] {
-        if MacRDPDeferredWindowsKey.isWindowsKey(scancode), inputState.isScancodePressed(scancode) == false {
+        if MacRDPDeferredModifierKeys.isDeferred(scancode), inputState.isScancodePressed(scancode) == false {
             if isDown {
-                deferredWindowsKey.press(scancode)
-                noteDeferredKeysChordedTogether()
+                deferredModifierKeys.press(scancode, inputState: inputState)
                 return []
             }
-            return deferredWindowsKey.release(scancode)
-        }
-        if scancode == Self.rightAlt, inputState.isScancodePressed(scancode) == false {
-            if isDown {
-                deferredRightAlt.press(scancode)
-                noteDeferredKeysChordedTogether()
-                return []
-            }
-            return deferredRightAlt.release(scancode)
+            return deferredModifierKeys.release(scancode)
         }
         if isDown {
-            deferredRightAlt.noteChordedElsewhere()
-            return deferredWindowsKey.flush(&inputState) + [inputState.keyboard(scancode: scancode, isReleased: false)]
+            return deferredModifierKeys.flushWindowsKeys(&inputState) + [inputState.keyboard(scancode: scancode, isReleased: false)]
         }
         return [inputState.keyboard(scancode: scancode, isReleased: true)]
     }
@@ -487,7 +448,7 @@ final class RemoteInputCaptureNSView: NSView {
         guard let inputEvent = inputState.pointerButton(button, isDown: isDown, at: remotePoint(from: event)) else {
             return
         }
-        let deferredKeyEvents = isDown ? flushDeferredKeys() : []
+        let deferredKeyEvents = isDown ? deferredModifierKeys.flush(&inputState) : []
         inputSession?.send(deferredKeyEvents + [inputEvent])
     }
 
@@ -504,48 +465,16 @@ final class RemoteInputCaptureNSView: NSView {
         }
     }
 
-    /// `textEvents` go first, ahead of the held-back keys a press sends down.
-    private func sendKeyboardScancode(
-        _ scancode: RDPKeyboardScancode,
-        isReleased: Bool,
-        after textEvents: [RDPSlowPathInputEvent] = []
-    ) {
-        let deferredKeyEvents = isReleased ? [] : flushDeferredKeys()
-        inputSession?.send(textEvents + deferredKeyEvents + [inputState.keyboard(scancode: scancode, isReleased: isReleased)])
-    }
-
-    /// Sends the held-back Windows key and right Alt down, ahead of another key or button.
-    private func flushDeferredKeys() -> [RDPSlowPathInputEvent] {
-        deferredWindowsKey.flush(&inputState) + deferredRightAlt.flush(&inputState)
-    }
-
-    private func noteDeferredKeysChordedElsewhere() {
-        deferredWindowsKey.noteChordedElsewhere()
-        deferredRightAlt.noteChordedElsewhere()
-    }
-
-    /// Command and right Option held together make a chord of their own, so releasing them taps
-    /// neither the Windows key nor Alt, whether both are held back or one is already on the
-    /// server, as the Windows key is after a Command-click. So does a Command pressed while the
-    /// other Command's Windows key is on the server. A key or button pressed in the chord still
-    /// sends the held-back keys down first.
-    private func noteDeferredKeysChordedTogether() {
-        let isWindowsKeyOnServer = MacRDPDeferredWindowsKey.windowsKeys.contains(where: inputState.isScancodePressed)
-        let isWindowsKeyDown = deferredWindowsKey.isHoldingKeys || isWindowsKeyOnServer
-        let isRightAltDown = deferredRightAlt.isHoldingKeys || inputState.isScancodePressed(Self.rightAlt)
-        if isWindowsKeyDown, isRightAltDown {
-            noteDeferredKeysChordedElsewhere()
-        } else if isWindowsKeyOnServer {
-            deferredWindowsKey.noteChordedElsewhere()
-        }
+    private func sendKeyboardScancode(_ scancode: RDPKeyboardScancode, isReleased: Bool) {
+        let deferredKeyEvents = isReleased ? [] : deferredModifierKeys.flush(&inputState)
+        inputSession?.send(deferredKeyEvents + [inputState.keyboard(scancode: scancode, isReleased: isReleased)])
     }
 
     /// A Windows key or right Alt still held back never reached the server, so nothing is sent
     /// for it.
     private func releasePressedInputs() {
-        deferredWindowsKey.reset()
-        deferredRightAlt.reset()
-        isAfterChordedDeadKey = false
+        deferredModifierKeys.reset()
+        followsChordedDeadKey = false
         let releaseEvents = inputState.releasePressedInputs()
         inputSession?.send(releaseEvents)
     }
@@ -586,43 +515,52 @@ enum MacRDPScrollWheel {
 
 /// Command is sent as the Windows key, and a Windows key pressed and released with nothing in
 /// between opens the server's Start menu (GNOME Activities, the KDE launcher). Command chords the
-/// server never sees, such as Cmd-Tab and Spotlight, must not reach it as such a tap, so Win
-/// down is sent only before another key or button goes to the server while Command is held, or as
-/// a tap when Command is released alone. The capture view holds back right Option's Alt with a
-/// second instance, so that the characters Mac layouts type with Option go as text with no Alt.
-struct MacRDPDeferredWindowsKey {
+/// server never sees, such as Cmd-Tab, Spotlight and menu shortcuts, must not reach it as such a
+/// tap, so Win down is sent only before another key or button goes to the server while Command is
+/// held, or as a tap when Command is released alone. Scrolling with Command held is such a chord
+/// too: the wheel goes without Win, and releasing Command then sends nothing.
+///
+/// Right Option is held back the same way as Alt, so that it can type what the Mac layout puts
+/// on Option ("@" is Option-L on German) as Unicode, without Alt; releasing it after that sends
+/// nothing. Another modifier pressed meanwhile sends the Windows keys but not Alt, since
+/// Option-Shift types characters too. Left Option goes as Alt at once, for shortcuts.
+struct MacRDPDeferredModifierKeys {
+    /// Both Windows keys and right Alt.
+    private static let deferredScancodes = [
+        RDPKeyboardScancode(code: 0x5B, isExtended: true),
+        RDPKeyboardScancode(code: 0x5C, isExtended: true),
+        RDPKeyboardScancode(code: 0x38, isExtended: true),
+    ]
+
     private var heldScancodes: [RDPKeyboardScancode] = []
     private var isChordedElsewhere = false
 
-    static let windowsKeys = [
-        RDPKeyboardScancode(code: 0x5B, isExtended: true),
-        RDPKeyboardScancode(code: 0x5C, isExtended: true),
-    ]
-
-    static func isWindowsKey(_ scancode: RDPKeyboardScancode) -> Bool {
-        windowsKeys.contains(scancode)
+    static func isDeferred(_ scancode: RDPKeyboardScancode) -> Bool {
+        deferredScancodes.contains(scancode)
     }
 
-    var isHoldingKeys: Bool {
-        heldScancodes.isEmpty == false
+    private static func isWindowsKey(_ scancode: RDPKeyboardScancode) -> Bool {
+        scancode.isExtended && (scancode.code == 0x5B || scancode.code == 0x5C)
     }
 
     func isHeld(_ scancode: RDPKeyboardScancode) -> Bool {
         heldScancodes.contains(scancode)
     }
 
-    mutating func press(_ scancode: RDPKeyboardScancode) {
+    /// Keys held back together are a chord, and so is a key pressed while another one already
+    /// went to the server, as Command-click sends Win: releasing it sends nothing, rather than a
+    /// Win or Alt tap with that key still down.
+    mutating func press(_ scancode: RDPKeyboardScancode, inputState: RDPInputStateTracker) {
         guard heldScancodes.contains(scancode) == false else {
             return
         }
-        // Both Command keys held together are one chord, not two taps.
-        if isHoldingKeys {
+        if heldScancodes.isEmpty == false || Self.deferredScancodes.contains(where: inputState.isScancodePressed) {
             isChordedElsewhere = true
         }
         heldScancodes.append(scancode)
     }
 
-    /// Sends the held keys down, ahead of another key, a button or, for right Alt, a scroll.
+    /// Sends the held keys down, in the order they were pressed, ahead of another key or button.
     mutating func flush(_ inputState: inout RDPInputStateTracker) -> [RDPSlowPathInputEvent] {
         defer {
             reset()
@@ -630,10 +568,33 @@ struct MacRDPDeferredWindowsKey {
         return heldScancodes.map { inputState.keyboard(scancode: $0, isReleased: false) }
     }
 
-    /// The held key was used in a chord the server never sees with it, for example a menu
-    /// shortcut, a Command-scroll or Command with right Option, so releasing it sends nothing.
+    /// Sends the held Windows keys down, ahead of another modifier. Alt stays held back, but
+    /// releasing it is no longer a tap.
+    mutating func flushWindowsKeys(_ inputState: inout RDPInputStateTracker) -> [RDPSlowPathInputEvent] {
+        flush(&inputState, where: Self.isWindowsKey)
+    }
+
+    /// Sends a held right Alt down, ahead of a wheel event, so Alt-scroll reaches the server. The
+    /// Windows keys stay held back, but releasing them is no longer a tap.
+    mutating func flushRightAlt(_ inputState: inout RDPInputStateTracker) -> [RDPSlowPathInputEvent] {
+        flush(&inputState) { Self.isWindowsKey($0) == false }
+    }
+
+    private mutating func flush(
+        _ inputState: inout RDPInputStateTracker,
+        where isFlushed: (RDPKeyboardScancode) -> Bool
+    ) -> [RDPSlowPathInputEvent] {
+        let flushed = heldScancodes.filter(isFlushed)
+        heldScancodes.removeAll(where: isFlushed)
+        noteChordedElsewhere()
+        return flushed.map { inputState.keyboard(scancode: $0, isReleased: false) }
+    }
+
+    /// The held keys were used in a chord the server never sees with them, so releasing them
+    /// sends nothing: a key seen only as its key-up, such as a menu shortcut, a character Option
+    /// typed, or a key found held when the view never saw it go down.
     mutating func noteChordedElsewhere() {
-        isChordedElsewhere = isHoldingKeys
+        isChordedElsewhere = heldScancodes.isEmpty == false
     }
 
     mutating func release(_ scancode: RDPKeyboardScancode) -> [RDPSlowPathInputEvent] {
@@ -681,15 +642,81 @@ enum MacRDPKeyboardMapping {
     }
 
     /// A key the server holds keeps auto-repeating as its scancode after the modifier that sent it
-    /// there is released; repeating it as text would type on top of the held key.
+    /// there is released; repeating it as text would type on top of the held key. With Option down
+    /// but no Alt on the server, which is right Option held back (see MacRDPDeferredModifierKeys),
+    /// a key Option types a character with goes as that character instead. `isDeadKey` (see
+    /// `optionTypes`) is asked only then, and only when Option typed nothing.
     static func shouldSendScancode(
         forKeyCode keyCode: UInt16,
+        characters: String?,
+        charactersIgnoringModifiers: String?,
         modifierFlags: NSEvent.ModifierFlags,
-        isHeldAsScancode: Bool
+        isHeldAsScancode: Bool,
+        isAltPressed: Bool,
+        isDeadKey: () -> Bool
     ) -> Bool {
-        isHeldAsScancode
+        if isHeldAsScancode
             || scancodeOnlyKeyCodes.contains(Int(keyCode))
-            || modifierFlags.isDisjoint(with: [.command, .control, .option]) == false
+            || modifierFlags.isDisjoint(with: [.command, .control]) == false
+        {
+            return true
+        }
+        return modifierFlags.contains(.option) && (isAltPressed || optionTypes(
+            characters,
+            charactersIgnoringModifiers: charactersIgnoringModifiers,
+            isDeadKey: isDeadKey
+        ) == false)
+    }
+
+    /// Whether Option typed what the Mac layout puts on the key: printable characters other than
+    /// the key's own, or nothing, for a dead key such as Option-E on US, whose accent the next key
+    /// types. A key a custom layout gives no Option output without making it a dead key, as
+    /// `isDeadKey` tells, typed nothing.
+    static func optionTypes(
+        _ characters: String?,
+        charactersIgnoringModifiers: String?,
+        isDeadKey: () -> Bool
+    ) -> Bool {
+        guard let characters, characters != charactersIgnoringModifiers else {
+            return false
+        }
+        return characters.isEmpty ? isDeadKey() : isPrintable(characters)
+    }
+
+    /// The text a dead key left ahead of a key that types a control character, which macOS puts
+    /// in that key's `characters`: after Option-E on US, Return is "´\r", Tab "´\t" and Esc
+    /// "´\u{1B}", and after "^" on German, keypad Enter is "^\u{03}". Those keys go as their
+    /// scancodes, so the text has to go ahead of them. Nil unless `characters` is printable text
+    /// followed by exactly one control character; AppKit gives Delete, the arrows and the other
+    /// function keys characters of its own, with no text ahead. Whether
+    /// `charactersIgnoringModifiers` also keeps the accent is not something to rely on.
+    static func deadKeyText(aheadOf characters: String?) -> String? {
+        guard let scalars = characters?.unicodeScalars, let last = scalars.last, isControl(last) else {
+            return nil
+        }
+        let text = String(scalars.dropLast())
+        return text.isEmpty == false && isPrintable(text) ? text : nil
+    }
+
+    /// The characters to decide the key after a dead key by, when that dead key went to the
+    /// server as part of an Alt chord (Option-E as Alt-E on US): macOS still composes the next
+    /// key with its accent ("a" as "á"), which the server never asked for. `uncomposed` is what
+    /// the key types with no dead key pending; a control or function key keeps its own.
+    static func characters(afterChordedDeadKey characters: String?, uncomposed: String?) -> String? {
+        guard let uncomposed, uncomposed.isEmpty || isPrintable(uncomposed) else {
+            return characters
+        }
+        return uncomposed
+    }
+
+    /// No control characters and none of AppKit's function-key characters.
+    private static func isPrintable(_ text: String) -> Bool {
+        text.utf16.contains(where: functionKeyCharacters.contains) == false
+            && text.unicodeScalars.contains(where: isControl) == false
+    }
+
+    private static func isControl(_ scalar: Unicode.Scalar) -> Bool {
+        scalar.properties.generalCategory == .control
     }
 
     /// Whether Windows, with `layout`, types what the Mac typed for a character key: then the key
@@ -730,55 +757,6 @@ enum MacRDPKeyboardMapping {
     }
 
     private static let spaceScancode = RDPKeyboardScancode(code: 0x39)
-
-    /// Whether Option, with no ⌘ or ⌃ to make the key a shortcut, made it type what the Mac
-    /// layout puts on Option: a character the key does not type without Option, such as "@"
-    /// with Option-L on German, or nothing, for a dead key such as Option-E on US, whose accent
-    /// the next key types. `isDeadKey`, asked only for a key that types nothing, tells a dead
-    /// key from a key a custom layout gives no output with Option, which Option does not type
-    /// with. AppKit keeps Shift in `charactersIgnoringModifiers`, so Shift-Option characters
-    /// count. Control and function-key characters do not.
-    static func optionTypes(
-        _ characters: String?,
-        charactersIgnoringModifiers: String?,
-        modifierFlags: NSEvent.ModifierFlags,
-        isDeadKey: @autoclosure () -> Bool
-    ) -> Bool {
-        guard modifierFlags.contains(.option),
-              modifierFlags.isDisjoint(with: [.command, .control]),
-              let characters,
-              characters != charactersIgnoringModifiers
-        else {
-            return false
-        }
-        return characters.isEmpty ? isDeadKey() : isPrintable(characters)
-    }
-
-    /// What a dead key left ahead of the output of a key it does not compose with: macOS types
-    /// "´" and then a newline for Return after Option-E on US, so `characters` is printable
-    /// characters followed by the key's own control character. Empty for any other key. AppKit
-    /// reports Delete, the arrows and other function keys as their own characters alone, so of
-    /// the keys that go as scancodes, Return, Tab, Esc and Enter carry a prefix. The key's
-    /// output is read from `characters` alone: whether `charactersIgnoringModifiers` also keeps
-    /// the dead key's accent is not something to rely on.
-    static func deadKeyPrefix(_ characters: String?) -> String {
-        guard let scalars = characters?.unicodeScalars,
-              scalars.count > 1,
-              let output = scalars.last,
-              output.properties.generalCategory == .control
-        else {
-            return ""
-        }
-        let prefix = String(scalars.dropLast())
-        return isPrintable(prefix) ? prefix : ""
-    }
-
-    /// Control and function-key (private-use) characters are not text.
-    private static func isPrintable(_ characters: String) -> Bool {
-        characters.unicodeScalars.allSatisfy { scalar in
-            scalar.properties.generalCategory != .control && scalar.properties.generalCategory != .privateUse
-        }
-    }
 
     static func unicodeEvents(for characters: String) -> [RDPSlowPathInputEvent] {
         characters.utf16
@@ -882,6 +860,9 @@ struct MacRDPModifierKey {
         kVK_Shift, kVK_RightShift, kVK_Control, kVK_RightControl,
         kVK_Option, kVK_RightOption, kVK_Command, kVK_RightCommand,
     ].compactMap { MacRDPModifierKey(keyCode: UInt16($0)) }
+
+    /// Left and right Alt, which the Option keys go as.
+    static let altScancodes = [RDPKeyboardScancode(code: 0x38), RDPKeyboardScancode(code: 0x38, isExtended: true)]
 
     let scancode: RDPKeyboardScancode
     private let flag: NSEvent.ModifierFlags
