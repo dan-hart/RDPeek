@@ -235,17 +235,6 @@ final class DeviceListModel: ObservableObject {
             throw DeviceValidationError.missingPasswordForKeychain
         }
 
-        // The keychain entry is keyed by account name, so drop the old entry
-        // when host, port, username, or domain changed it — unless another
-        // profile still remembers its password under that account.
-        if hadRememberedPassword,
-           let oldKey = KeychainCredentialKey(identity: snapshot.identity),
-           oldKey.account != device.identity.credentialAccountName,
-           rememberedPasswordIsShared(snapshot.identity, excluding: device.id) == false
-        {
-            try credentialStore.deletePassword(for: oldKey)
-        }
-
         if let key = KeychainCredentialKey(identity: device.identity) {
             if device.rememberPassword {
                 try credentialStore.savePassword(password, for: key)
@@ -254,6 +243,19 @@ final class DeviceListModel: ObservableObject {
             {
                 try credentialStore.deletePassword(for: key)
             }
+        }
+
+        // The keychain entry is keyed by account name, so drop the old entry
+        // when host, port, username, or domain changed it — unless another
+        // profile still remembers its password under that account. Only now:
+        // if saving the new entry threw, the profile keeps its old identity
+        // and still needs the old entry.
+        if hadRememberedPassword,
+           let oldKey = KeychainCredentialKey(identity: snapshot.identity),
+           oldKey.account != device.identity.credentialAccountName,
+           rememberedPasswordIsShared(snapshot.identity, excluding: device.id) == false
+        {
+            try credentialStore.deletePassword(for: oldKey)
         }
     }
 

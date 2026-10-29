@@ -176,6 +176,30 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertEqual(harness.credentials.savedAccounts, [try account(for: edited)])
     }
 
+    func testSaveKeepsOldCredentialWhenSavingTheNewOneFails() throws {
+        let device = makeDevice(host: "old.example", rememberPassword: true)
+        let harness = try makeHarness(devices: [device])
+        let oldAccount = try account(for: device)
+        harness.credentials.passwords[oldAccount] = "pw"
+        harness.credentials.saveError = KeychainError.unexpectedStatus(-1)
+        let editor = DeviceEditorState(device: device, isNew: false)
+        var edited = device
+        edited.host = "new.example"
+
+        XCTAssertThrowsError(
+            try harness.model.save(
+                editor: editor,
+                editedDevice: edited,
+                password: "pw",
+                hadRememberedPassword: true
+            )
+        )
+
+        XCTAssertEqual(harness.credentials.deletedAccounts, [])
+        XCTAssertEqual(harness.credentials.passwords[oldAccount], "pw")
+        XCTAssertEqual(try DeviceProfileStore(defaults: harness.defaults).devices().first?.host, "old.example")
+    }
+
     func testSaveKeepsStaleCredentialSharedWithRememberingDevice() throws {
         let device = makeDevice(host: "shared.example", rememberPassword: true)
         let twin = makeDevice(name: "Twin", host: "shared.example", rememberPassword: true)
