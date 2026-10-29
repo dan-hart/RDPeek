@@ -34,7 +34,6 @@ final class SessionViewController: NSViewController {
     private var autoRetryTask: Task<Void, Never>?
     private var firstFrameWatchdogTask: Task<Void, Never>?
     private var audioMessage: String?
-    private var connectionTask: Task<Void, Never>?
     private var activeConnectionID: UUID?
     private var activeCancellation: RDPConnectionCancellation?
     private var sessionEndReason: RDPSessionEndReason?
@@ -579,9 +578,7 @@ final class SessionViewController: NSViewController {
         isAwaitingCredentials = false
         isAutoRetryPending = false
         activeCancellation?.cancel()
-        connectionTask?.cancel()
         cancelPendingDisplayResize(resetLastRequestedSize: true)
-        connectionTask = nil
         activeConnectionID = nil
         activeCancellation = nil
         sessionEndReason = nil
@@ -677,7 +674,10 @@ final class SessionViewController: NSViewController {
         let sink = SessionMainActorSink(controller: self, connectionID: connectionID)
         let credentialStore = credentialStore
         let clientLicenseStore = clientLicenseStore
-        connectionTask = Task.detached(priority: .userInitiated) {
+        // RDPSessionClient.run blocks for the whole session and waits on the
+        // decode queue, so it gets its own thread rather than pinning a Swift
+        // concurrency worker per session, which could starve the decode drain.
+        let sessionThread = Thread {
             var configuration = baseConfiguration
             configuration.storedClientLicense = try? clientLicenseStore.license(for: clientLicenseKey)
             let decodeQueue = RDPFrameDecodeQueue(
@@ -718,7 +718,7 @@ final class SessionViewController: NSViewController {
             )
             let wireReceiveCoalescer = RDPWireReceiveMetricsCoalescer(
                 shouldCancel: {
-                    Task.isCancelled || cancellation.isCancelled
+                    cancellation.isCancelled
                 },
                 onFlush: { sample in
                     sink.apply { controller in
@@ -741,7 +741,7 @@ final class SessionViewController: NSViewController {
                         frame,
                         receivedAt: Date(),
                         shouldContinue: {
-                            Task.isCancelled == false && cancellation.isCancelled == false
+                            cancellation.isCancelled == false
                         }
                     ).requireDecoded()
                 },
@@ -827,9 +827,6 @@ final class SessionViewController: NSViewController {
                     }
                 },
                 onAudioSample: { sample in
-                    guard Task.isCancelled == false else {
-                        return
-                    }
                     sink.apply { controller in
                         guard controller.audioPlaybackEnabled else {
                             return
@@ -854,26 +851,20 @@ final class SessionViewController: NSViewController {
                     }
                 },
                 onWireReceive: { sample in
-                    guard Task.isCancelled == false else {
-                        return
-                    }
                     wireReceiveCoalescer.record(sample)
                 },
-                cancellation: cancellation,
-                shouldCancel: {
-                    Task.isCancelled || cancellation.isCancelled
-                }
+                cancellation: cancellation
             )
             let finalWireReceiveSample = wireReceiveCoalescer.takePendingSample()
             // License persistence is not connection-scoped. Save an issued
-            // license even when closing the window cancelled this task, so
+            // license even when closing the window cancelled the session, so
             // the next connection can present it to the server.
             persistClientLicenseIfNeeded(
                 nextReport.rdpIssuedClientLicense,
                 key: clientLicenseKey,
                 store: clientLicenseStore
             )
-            guard Task.isCancelled == false else {
+            guard cancellation.isCancelled == false else {
                 return
             }
             let firstFrameDecodeResult = nextReport.rdpGraphicsFirstFrame.map(decodeReportFirstFrame)
@@ -918,7 +909,6 @@ final class SessionViewController: NSViewController {
                 controller.isConnecting = false
                 controller.activeConnectionID = nil
                 controller.activeCancellation = nil
-                controller.connectionTask = nil
                 // The channel is closed once the run loop returns; drop the
                 // session objects so clipboard sync/polling and the input
                 // wiring can't keep talking to a dead channel.
@@ -944,11 +934,14 @@ final class SessionViewController: NSViewController {
                 controller.render()
             }
         }
+        sessionThread.name = "RDPeek session"
+        sessionThread.qualityOfService = .userInitiated
+        sessionThread.start()
     }
 
     func cancelConnection(shouldRecordCancellation: Bool = true) {
         let shouldRecordCancellation = shouldRecordCancellation
-            && (isConnecting || activeConnectionID != nil || connectionTask != nil
+            && (isConnecting || activeConnectionID != nil
                 || isResolvingStoredCredentials || isAutoRetryPending)
         autoRetryTask?.cancel()
         autoRetryTask = nil
@@ -957,11 +950,9 @@ final class SessionViewController: NSViewController {
         isResolvingStoredCredentials = false
         hudModel.connectingStatusDetail = nil
         activeCancellation?.cancel()
-        connectionTask?.cancel()
         cancelPendingDisplayResize(resetLastRequestedSize: true)
         resetFramePresentationState()
         activeCancellation = nil
-        connectionTask = nil
         activeConnectionID = nil
         inputSession = nil
         displayControlSession = nil
@@ -1873,15 +1864,20 @@ private final class SessionMainActorSink: @unchecked Sendable {
         self.connectionID = connectionID
     }
 
+    /// Runs `operation` on the main queue in submission order, so frames
+    /// and audio stay ordered. The block keeps the sink alive: the session
+    /// thread releases it right after submitting the final update. The sink
+    /// holds the controller weakly, so this forms no cycle.
     func apply(_ operation: @escaping @MainActor (SessionViewController) -> Void) {
-        Task { @MainActor [weak self] in
-            guard let self,
-                  let controller,
-                  controller.acceptsConnectionEvent(id: connectionID)
-            else {
-                return
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard let controller = self.controller,
+                      controller.acceptsConnectionEvent(id: self.connectionID)
+                else {
+                    return
+                }
+                operation(controller)
             }
-            operation(controller)
         }
     }
 
@@ -1889,14 +1885,15 @@ private final class SessionMainActorSink: @unchecked Sendable {
     /// not connection-scoped, like a keychain write that finished after the
     /// session dropped and must still be reflected in tracked state.
     func applyIgnoringConnectionState(_ operation: @escaping @MainActor (SessionViewController) -> Void) {
-        Task { @MainActor [weak self] in
-            guard let self,
-                  let controller,
-                  controller.isClosed == false
-            else {
-                return
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard let controller = self.controller,
+                      controller.isClosed == false
+                else {
+                    return
+                }
+                operation(controller)
             }
-            operation(controller)
         }
     }
 }
