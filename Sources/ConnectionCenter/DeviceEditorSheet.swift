@@ -73,18 +73,6 @@ struct DeviceEditorSheet: View {
                         step: 1
                     )
                 }
-
-                if let validationMessage {
-                    Section {
-                        Label {
-                            Text(verbatim: validationMessage)
-                        } icon: {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.yellow)
-                        }
-                        .font(.callout)
-                    }
-                }
             }
             .formStyle(.grouped)
 
@@ -147,30 +135,45 @@ struct DeviceEditorSheet: View {
     }
 
     private var footer: some View {
-        HStack {
-            Button("Cancel", role: .cancel) {
-                dismiss()
+        VStack(alignment: .leading, spacing: 12) {
+            // In the footer, not the form: the form scrolls, and a message
+            // at its end would be out of view.
+            if let validationMessage {
+                Label {
+                    Text(verbatim: validationMessage)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                }
+                .font(.callout)
             }
-            .keyboardShortcut(.cancelAction)
 
-            Spacer()
-
-            Button("Save") {
-                if saveChanges() != nil {
+            HStack {
+                Button("Cancel", role: .cancel) {
                     dismiss()
                 }
-            }
-            .disabled(canSave == false)
+                .keyboardShortcut(.cancelAction)
 
-            Button("Save & Connect") {
-                if let device = saveChanges() {
-                    dismiss()
-                    deviceList.connect(device, using: launchStore)
+                Spacer()
+
+                Button("Save") {
+                    if saveChanges() != nil {
+                        dismiss()
+                    }
                 }
+                .disabled(canSave == false)
+
+                Button("Save & Connect") {
+                    if let device = saveChanges() {
+                        dismiss()
+                        deviceList.connect(device, using: launchStore)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(canSave == false)
             }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
-            .disabled(canSave == false)
         }
         .padding(16)
         .background(.bar)
