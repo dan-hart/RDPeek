@@ -362,16 +362,16 @@ final class SessionViewController: NSViewController {
         }
     }
 
+    /// Offers to trust a refused certificate. Certificates RDPeek lets
+    /// through need no notice; their warnings stay in Diagnostics.
     private func certificateNoticeState() -> SessionCertificateNotice? {
-        let canTrust = (liveCertificate?.sha256 ?? report?.certificateSHA256) != nil
+        let canTrust = liveCertificate?.sha256 != nil
         switch certificateRefusal {
         case .changed:
             return SessionCertificateNotice(
                 title: "Certificate Changed",
                 message: "Trust the new certificate only if you know why the server's certificate changed.",
-                systemImage: "lock.trianglebadge.exclamationmark.fill",
-                canTrust: canTrust,
-                trustActionTitle: "Trust and Connect"
+                canTrust: canTrust
             )
         case .untrusted:
             let fingerprint = liveCertificate?.sha256.map { " SHA-256: \($0)" } ?? ""
@@ -379,27 +379,11 @@ final class SessionViewController: NSViewController {
                 title: "Untrusted Certificate",
                 message: "This Mac does not trust the server's certificate. Trust it only if you expect it, "
                     + "such as a server's self-signed certificate.\(fingerprint)",
-                systemImage: "lock.trianglebadge.exclamationmark.fill",
-                canTrust: canTrust,
-                trustActionTitle: "Trust and Connect"
-            )
-        case nil:
-            break
-        }
-        if certificateTrustedByApp {
-            return nil
-        }
-        // The live callback fires at TLS time, so warnings surface while
-        // connecting and during the session, not only at disconnect.
-        if let warning = liveCertificate?.warnings.first ?? report?.warnings.first {
-            return SessionCertificateNotice(
-                title: "Certificate Warning",
-                message: warning.message,
-                systemImage: "lock.trianglebadge.exclamationmark.fill",
                 canTrust: canTrust
             )
+        case nil:
+            return nil
         }
-        return nil
     }
 
     private func toast(_ text: String, systemImage: String) {
@@ -680,7 +664,6 @@ final class SessionViewController: NSViewController {
         renderMetricsStore.reset()
         certificateTrustedByApp = false
         certificateRefusal = nil
-        certificateTrustMessage = nil
     }
 
     private func makeConnectionConfiguration(
@@ -1332,34 +1315,23 @@ final class SessionViewController: NSViewController {
 
     // MARK: - Certificate trust
 
+    /// Trusts the refused certificate and connects again.
     private func trustCurrentCertificate() {
         guard let key = currentCertificateTrustKey() else {
-            toast("No certificate fingerprint available", systemImage: "exclamationmark.triangle")
             return
         }
         trustedCertificateStore.trust(key)
-        // A connection refused for this certificate connects again now that
-        // it is trusted.
-        guard certificateRefusal == nil else {
-            startConnection()
-            return
-        }
-        certificateTrustedByApp = true
-        certificateTrustMessage = "Certificate trusted for this host."
-        toast("Certificate trusted for this host", systemImage: "checkmark.shield.fill")
-        render()
+        startConnection()
     }
 
     private func currentCertificateTrustKey() -> RDPServerCertificateTrustKey? {
-        guard let certificateSHA256 = liveCertificate?.sha256 ?? report?.certificateSHA256,
-              let target = try? RDPConnectionTarget(host: draft.host, portText: String(draft.port))
-        else {
+        guard let liveCertificate else {
             return nil
         }
         return RDPServerCertificateTrustKey(
-            host: liveCertificate?.host ?? target.host,
-            port: target.port,
-            sha256: certificateSHA256
+            host: liveCertificate.host,
+            port: draft.port,
+            sha256: liveCertificate.sha256
         )
     }
 

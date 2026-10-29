@@ -12,12 +12,19 @@ enum SessionPhase: Equatable {
     }
 }
 
+/// A server certificate RDPeek refused, offered for trust.
 struct SessionCertificateNotice: Equatable {
     var title: String
     var message: String
-    var systemImage: String
     var canTrust: Bool
-    var trustActionTitle = "Trust"
+
+    var systemImage: String {
+        "lock.trianglebadge.exclamationmark.fill"
+    }
+
+    var trustActionTitle: String {
+        "Trust and Connect"
+    }
 }
 
 struct SessionToast: Equatable, Identifiable {
