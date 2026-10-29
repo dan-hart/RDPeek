@@ -170,8 +170,8 @@ final class SessionViewController: NSViewController {
         view.addSubview(titlebarBackdrop)
 
         canvasView.translatesAutoresizingMaskIntoConstraints = false
-        canvasView.onSurfaceSizeChange = { [weak self] size in
-            self?.updateViewerSurfaceSize(size)
+        canvasView.onSurfaceChange = { [weak self] pointSize, backingScaleFactor in
+            self?.updateViewerSurface(pointSize: pointSize, backingScaleFactor: backingScaleFactor)
         }
         view.addSubview(canvasView)
         remoteDesktopRenderer.attach(canvasView.displayView)
@@ -1083,16 +1083,12 @@ final class SessionViewController: NSViewController {
         _ nextState: RDPFramePacingState,
         shouldRender: Bool = true
     ) -> Bool {
-        let currentBackingScaleFactor = framePacing.backingScaleFactor
         guard framePacing != nextState else {
             return false
         }
 
         framePacing = nextState
         updateViewerMetricsSummary(renderMetricsStore.metrics)
-        if currentBackingScaleFactor != nextState.backingScaleFactor {
-            refreshViewerPixelSize()
-        }
         if shouldRender {
             render()
         }
@@ -1178,24 +1174,11 @@ final class SessionViewController: NSViewController {
 
     // MARK: - Display control
 
-    private func updateViewerSurfaceSize(_ pointSize: CGSize) {
-        guard pointSize.width > 0, pointSize.height > 0 else {
-            return
-        }
+    /// The canvas reports its size and backing scale together, so the
+    /// remote desktop follows the window across displays of other scales.
+    private func updateViewerSurface(pointSize: CGSize, backingScaleFactor: CGFloat) {
         viewerPointSize = pointSize
-        refreshViewerPixelSize()
-        render()
-    }
-
-    private func refreshViewerPixelSize() {
-        guard viewerPointSize.width > 0, viewerPointSize.height > 0 else {
-            return
-        }
-        let scale = framePacing.backingScaleFactor
-            ?? view.window?.backingScaleFactor
-            ?? NSScreen.main?.backingScaleFactor
-            ?? 1
-        let nextSize = RDPViewerPixelSize(pointSize: viewerPointSize, backingScaleFactor: scale)
+        let nextSize = RDPViewerPixelSize(pointSize: pointSize, backingScaleFactor: backingScaleFactor)
         if viewerPixelSize != nextSize {
             viewerPixelSize = nextSize
             scheduleAutoDisplaySizeUpdate()
@@ -1256,14 +1239,10 @@ final class SessionViewController: NSViewController {
         guard let displayControlSession else {
             return
         }
-        let backingScaleFactor = viewerPixelSize?.backingScaleFactor
-            ?? framePacing.backingScaleFactor
-            ?? view.window?.backingScaleFactor
-            ?? 1
         let request = lastRequestedDisplayRequest ?? RDPDisplayRequest(
             width: UInt32(desktopSize.width),
             height: UInt32(desktopSize.height),
-            scaleFactors: RDPDisplayScaleFactors(backingScaleFactor: backingScaleFactor)
+            scaleFactors: RDPDisplayScaleFactors(backingScaleFactor: viewerPixelSize?.backingScaleFactor ?? 1)
         )
         displayControlSession.send(request)
     }
