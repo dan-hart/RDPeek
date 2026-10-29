@@ -9,7 +9,7 @@ settings:
     DEAD_CODE_STRIPPING: YES
     SWIFT_VERSION: "6.0"
     SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
-    GCC_TREAT_WARNINGS_AS_ERRORS: YES
+    CODE_SIGN_STYLE: Automatic
 packages:
   RDPKit:
     url: https://github.com/steelbrain/RDPKit.git
@@ -33,9 +33,6 @@ targets:
       path: Generated/Info.plist
       properties:
         CFBundleDisplayName: RDPeek
-        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
-        CFBundleName: $(PRODUCT_NAME)
-        CFBundlePackageType: APPL
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
@@ -48,7 +45,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: ai.aneesiqbal.rdpeek
         PRODUCT_NAME: RDPeek
         ENABLE_HARDENED_RUNTIME: YES
-        CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CURRENT_PROJECT_VERSION: "4"
         MARKETING_VERSION: "1.1.1"
@@ -87,4 +83,3 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.aneesiqbal.rdpeek-tests
         GENERATE_INFOPLIST_FILE: YES
-        CODE_SIGN_STYLE: Automatic
