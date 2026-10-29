@@ -52,6 +52,12 @@ struct HelpView: View {
                             "certificate for that host and port; a different certificate " +
                             "from that host is then refused until you trust it instead."
                     )
+                    HelpBody(
+                        "Hiding certificate warnings for a PC also stops RDPeek from " +
+                            "refusing a certificate this Mac does not trust: that PC " +
+                            "connects without asking. A certificate that replaced one you " +
+                            "trusted is still refused."
+                    )
                 }
 
                 HelpSection(title: "Keyboard Shortcuts", systemImage: "keyboard") {
@@ -78,7 +84,7 @@ struct HelpView: View {
                             "passwords. Passwords are stored in your macOS Keychain, one " +
                             "item per user and host, and are removed when you delete the " +
                             "PC or turn off remembering. Trusted certificate fingerprints " +
-                            "are pinned per host."
+                            "are pinned per host and port."
                     )
                 }
 
