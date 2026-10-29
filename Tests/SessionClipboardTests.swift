@@ -108,6 +108,28 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(session.publishedTexts, [nil])
     }
 
+    func testOnlySyncNowSaysTheClipboardSynced() {
+        pasteboard.clearContents()
+        pasteboard.setString("hello", forType: .string)
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard(isSharingEnabled: false)
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+        clipboard.startTemporarySharing()
+        clipboard.setSharingEnabled(true)
+        XCTAssertEqual(session.publishedTexts, [nil, "hello", "hello"])
+        XCTAssertEqual(toasts, ["Sharing clipboard for 30 seconds"])
+
+        clipboard.syncNow()
+        XCTAssertEqual(toasts.last, "Clipboard synced")
+
+        pasteboard.clearContents()
+        clipboard.syncNow()
+        XCTAssertEqual(session.publishedTexts.last, .some(nil))
+        XCTAssertEqual(toasts.last, "Clipboard has no text or files; remote clipboard cleared")
+    }
+
     // MARK: - Local files
 
     func testCopiedLocalFilesAreReadOffTheMainThread() async throws {

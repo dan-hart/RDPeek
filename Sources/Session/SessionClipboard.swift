@@ -128,7 +128,7 @@ final class SessionClipboard {
     }
 
     func syncNow() {
-        publishPasteboardIfChanged(force: true)
+        publishPasteboardIfChanged(force: true, announce: true)
     }
 
     func startTemporarySharing() {
@@ -241,7 +241,9 @@ final class SessionClipboard {
 
     // MARK: - Local pasteboard
 
-    private func publishPasteboardIfChanged(force: Bool = false) {
+    /// `announce` reports the result even when it is no news, for a sync
+    /// the user asked for.
+    private func publishPasteboardIfChanged(force: Bool = false, announce: Bool = false) {
         guard isSharingEnabled, session != nil else {
             pasteboardChangeCount = pasteboard.changeCount
             return
@@ -271,21 +273,21 @@ final class SessionClipboard {
                 guard Task.isCancelled == false else {
                     return
                 }
-                self?.publish(payload, force: force)
+                self?.publish(payload, announce: announce)
             }
             return
         }
-        publish(localTextPayload(), force: force)
+        publish(localTextPayload(), announce: announce)
     }
 
-    private func publish(_ payload: SessionLocalClipboardPayload, force: Bool) {
+    private func publish(_ payload: SessionLocalClipboardPayload, announce: Bool) {
         guard isSharingEnabled, let session else {
             return
         }
         switch payload {
         case let .text(text):
             session.publishLocalUnicodeText(text)
-            if force {
+            if announce {
                 onToast("Clipboard synced", "doc.on.clipboard.fill")
             }
         case let .files(files):
@@ -294,6 +296,9 @@ final class SessionClipboard {
             onToast(message, "doc.on.clipboard.fill")
         case .empty:
             session.publishLocalUnicodeText(nil)
+            if announce {
+                onToast("Clipboard has no text or files; remote clipboard cleared", "doc.on.clipboard")
+            }
         case let .unsupported(message):
             session.publishLocalUnicodeText(nil)
             onToast(message, "exclamationmark.triangle")
@@ -310,7 +315,7 @@ final class SessionClipboard {
     private func localTextPayload() -> SessionLocalClipboardPayload {
         if let text = pasteboard.string(forType: .string) {
             guard RDPClipboardLimits.canPublishUnicodeText(text) else {
-                return .ignored("Local text is too large to sync.")
+                return .ignored("Local text is too large to sync")
             }
             return .text(text)
         }
@@ -349,36 +354,36 @@ final class SessionClipboard {
             let fileURL = url.standardizedFileURL
             let fileName = fileURL.lastPathComponent
             guard fileName.isEmpty == false else {
-                return .unsupported("Local file clipboard was not shared.")
+                return .unsupported("Local file clipboard was not shared")
             }
 
             do {
                 let resourceValues = try fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
                 guard resourceValues.isRegularFile == true else {
-                    return .unsupported("Local clipboard has non-file items; remote clipboard cleared.")
+                    return .unsupported("Local clipboard has non-file items; remote clipboard cleared")
                 }
 
                 guard let byteCount = resourceValues.fileSize,
                       byteCount >= 0
                 else {
-                    return .unsupported("Local file clipboard could not be read; remote clipboard cleared.")
+                    return .unsupported("Local file clipboard could not be read; remote clipboard cleared")
                 }
                 guard byteCount <= sessionMaximumLocalClipboardFileBytes,
                       totalByteCount <= sessionMaximumLocalClipboardFileBytes - byteCount
                 else {
-                    return .unsupported("Local clipboard files exceed 32 MiB; remote clipboard cleared.")
+                    return .unsupported("Local clipboard files exceed 32 MiB; remote clipboard cleared")
                 }
 
                 let contents = try Data(contentsOf: fileURL)
                 guard contents.count <= sessionMaximumLocalClipboardFileBytes,
                       totalByteCount <= sessionMaximumLocalClipboardFileBytes - contents.count
                 else {
-                    return .unsupported("Local clipboard files exceed 32 MiB; remote clipboard cleared.")
+                    return .unsupported("Local clipboard files exceed 32 MiB; remote clipboard cleared")
                 }
                 totalByteCount += contents.count
                 files.append(RDPClipboardLocalFile(fileName: fileName, contents: contents))
             } catch {
-                return .unsupported("Local file clipboard could not be read; remote clipboard cleared.")
+                return .unsupported("Local file clipboard could not be read; remote clipboard cleared")
             }
         }
 
@@ -516,7 +521,7 @@ final class SessionClipboard {
         case .emptyFileList:
             "Remote file clipboard is empty"
         case .containsOnlyDirectories:
-            "Remote clipboard has folders; file copy is not ready"
+            "Copying folders from the remote is not supported"
         case .invalidFileIndex:
             "Remote file index is not valid"
         case .totalByteLimitExceeded:
