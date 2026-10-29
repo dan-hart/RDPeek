@@ -760,6 +760,29 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    func testModifierTappedWhileRightOptionIsHeldBackTapsNoAlt() {
+        // The server sees Shift, Control or left Alt go down and up, so right
+        // Option released after it is no Alt tap, which would open a Windows
+        // app's menu bar there.
+        let modifiers: [(keyCode: UInt16, flags: NSEvent.ModifierFlags, scancode: RDPKeyboardScancode)] = [
+            (UInt16(kVK_Shift), .leftShiftDown, .leftShift),
+            (.leftControl, .leftControlDown, .leftControl),
+            (UInt16(kVK_Option), .leftOptionDown, .leftAlt),
+        ]
+        for modifier in modifiers {
+            let harness = makeHarness()
+            harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+            harness.view.flagsChanged(with: flagsEvent(keyCode: modifier.keyCode, flags: modifier.flags.union(.rightOptionDown)))
+            harness.view.flagsChanged(with: flagsEvent(keyCode: modifier.keyCode, flags: .rightOptionDown))
+            harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+
+            XCTAssertEqual(harness.recorder.events, [
+                .keyboard(scancode: modifier.scancode, isReleased: false),
+                .keyboard(scancode: modifier.scancode, isReleased: true),
+            ])
+        }
+    }
+
     // MARK: - Command with right Option
 
     func testCommandAndRightOptionReleasedWithNothingBetweenTapNeither() {

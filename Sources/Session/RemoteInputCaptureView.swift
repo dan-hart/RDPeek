@@ -424,7 +424,7 @@ final class RemoteInputCaptureNSView: NSView {
     /// not yet on the server is held back by `deferredWindowsKey` or
     /// `deferredRightAlt`, and any other press sends a held-back Windows key
     /// down first. Right Alt stays held back, since Shift-Option types
-    /// characters too.
+    /// characters too, but releasing it is no longer a tap.
     private func modifierEvents(_ scancode: RDPKeyboardScancode, isDown: Bool) -> [RDPSlowPathInputEvent] {
         if MacRDPDeferredWindowsKey.isWindowsKey(scancode), inputState.isScancodePressed(scancode) == false {
             if isDown {
@@ -443,6 +443,7 @@ final class RemoteInputCaptureNSView: NSView {
             return deferredRightAlt.release(scancode)
         }
         if isDown {
+            deferredRightAlt.noteChordedElsewhere()
             return deferredWindowsKey.flush(&inputState) + [inputState.keyboard(scancode: scancode, isReleased: false)]
         }
         return [inputState.keyboard(scancode: scancode, isReleased: true)]
