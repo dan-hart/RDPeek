@@ -7,6 +7,7 @@ struct ConnectionCenterView: View {
     @EnvironmentObject private var launchStore: SessionLaunchStore
 
     @State private var selectedDeviceID: UUID?
+    @FocusState private var isGridFocused: Bool
 
     private let columns = [
         GridItem(.adaptive(minimum: 230, maximum: 320), spacing: 18),
@@ -108,7 +109,7 @@ struct ConnectionCenterView: View {
                     DeviceCardView(
                         device: device,
                         isSelected: selectedDeviceID == device.id,
-                        onSelect: { selectedDeviceID = device.id },
+                        onSelect: { select(device.id) },
                         onConnect: { connect(device) },
                         onEdit: { deviceList.edit(device) },
                         onDuplicate: { deviceList.duplicate(device) },
@@ -125,32 +126,39 @@ struct ConnectionCenterView: View {
                 ContentUnavailableView.search(text: deviceList.searchText)
             }
         }
-        .background {
-            // Return connects the selection; Delete asks to remove it.
-            Button("") {
-                if let device = devices.first(where: { $0.id == selectedDeviceID }) {
-                    connect(device)
-                }
-            }
-            .keyboardShortcut(.return, modifiers: [])
-            .opacity(0)
-
-            Button("") {
-                if let device = devices.first(where: { $0.id == selectedDeviceID }) {
-                    deviceList.requestDeletion(of: device)
-                }
-            }
-            .keyboardShortcut(.delete, modifiers: [])
-            .opacity(0)
-        }
         .contentShape(Rectangle())
         .onTapGesture {
-            selectedDeviceID = nil
+            select(nil)
+        }
+        // Return connects the selection and Delete asks to remove it, only
+        // while the grid has keyboard focus: as window-wide shortcuts they
+        // also fired while typing in the search field.
+        .focusable(interactions: .edit)
+        .focusEffectDisabled()
+        .focused($isGridFocused)
+        .onKeyPress(.return) {
+            guard let device = devices.first(where: { $0.id == selectedDeviceID }) else {
+                return .ignored
+            }
+            connect(device)
+            return .handled
+        }
+        .onDeleteCommand {
+            if let device = devices.first(where: { $0.id == selectedDeviceID }) {
+                deviceList.requestDeletion(of: device)
+            }
         }
     }
 
+    /// Selecting, or clicking the empty grid, also gives the grid keyboard
+    /// focus, so Return and Delete act on the selection.
+    private func select(_ deviceID: UUID?) {
+        selectedDeviceID = deviceID
+        isGridFocused = true
+    }
+
     private func connect(_ device: DeviceProfile) {
-        selectedDeviceID = device.id
+        select(device.id)
         deviceList.connect(device, using: launchStore)
     }
 
