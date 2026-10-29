@@ -104,6 +104,30 @@ func compactViewerMetricsSummary(
     return parts.joined(separator: "  ·  ")
 }
 
+/// Where the session went: after a Server Redirection, the server the one
+/// typed in passed it on to.
+func connectionTargetSummary(_ report: RDPConnectionReport) -> String {
+    switch report.redirectionDepth {
+    case 0:
+        report.target
+    case 1:
+        "\(report.target), after a server redirection"
+    default:
+        "\(report.target), after \(report.redirectionDepth) server redirections"
+    }
+}
+
+/// How the server ended the session, when it said: the Set Error Info
+/// code's name, the Disconnect Provider Ultimatum reason, and RDPKit's
+/// category for them.
+func remoteTerminationSummary(_ termination: RDPRemoteTermination?) -> String {
+    guard let termination else {
+        return "none"
+    }
+    let names = [termination.errorInfoName, termination.disconnectReasonName].compactMap { $0 }
+    return "\(names.joined(separator: ", ")) (\(termination.category.rawValue))"
+}
+
 private struct PerformanceMetricsView: View {
     var metrics: RDPRenderMetrics
     var rollingFramesPerSecond: Double?
@@ -182,7 +206,10 @@ struct RemoteSessionDiagnosticsSnapshot: Equatable {
     var serverCertificateInfo: RDPServerCertificateInfo?
     var viewerPixelSize: RDPViewerPixelSize?
     var requestedDesktopSize = "unknown"
+    /// The name this connection gave servers for the Mac.
+    var clientName: String?
     var inputReady = false
+    var supportsUnicodeInput = false
     var displayControlReady = false
     var clipboardReady = false
     var clipboardSharingEnabled = false
@@ -232,9 +259,11 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                 }
 
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 24, verticalSpacing: 10) {
-                    DiagnosticRow("Target", snapshot.report?.target ?? snapshot.title)
+                    DiagnosticRow("Target", snapshot.report.map(connectionTargetSummary) ?? snapshot.title)
+                    DiagnosticRow("Client Name", snapshot.clientName ?? "none")
                     DiagnosticRow("Status", statusText(snapshot))
                     DiagnosticRow("Disconnect Reason", disconnectReason(snapshot))
+                    DiagnosticRow("Termination", remoteTerminationSummary(snapshot.report?.remoteTermination))
                     DiagnosticRow("Warnings", warnings(snapshot.report))
                     DiagnosticRow("Requested Desktop", snapshot.requestedDesktopSize)
                     DiagnosticRow("Viewer Size", snapshot.viewerPixelSize?.label ?? "unknown")
@@ -245,7 +274,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                             : "default"
                     )
                     DiagnosticRow("Certificate", certificateState(snapshot))
-                    DiagnosticRow("Input", snapshot.inputReady ? "ready" : "not ready")
+                    DiagnosticRow("Input", inputState(snapshot))
                     DiagnosticRow("Display Control", snapshot.displayControlReady ? "ready" : "not ready")
                     DiagnosticRow("Audio Requested", metricBool(snapshot.connectionRequestsAudio))
                     DiagnosticRow("Clipboard", clipboardState(snapshot))
@@ -277,7 +306,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                         DiagnosticRow("Auto-Detect", report.rdpAutoDetectRequestType ?? "not requested")
                         DiagnosticRow("Auto-Detect Seq", optionalValue(report.rdpAutoDetectSequenceNumber))
                         DiagnosticRow("Post Auto-Detect", report.rdpPostAutoDetectResponseType ?? "none")
-                        DiagnosticRow("Licensing", report.rdpLicensingResponseType ?? "not observed")
+                        DiagnosticRow("Licensing", licensingSummary(report))
                         DiagnosticRow("License Code", hexValue(report.rdpLicensingErrorCode))
                         DiagnosticRow("Post Licensing", report.rdpPostLicensingResponseType ?? "none")
                         DiagnosticRow("Demand Share", hexValue(report.rdpDemandActiveShareID))
@@ -510,6 +539,19 @@ struct RemoteSessionDiagnosticsWindowContent: View {
             return "not available"
         }
         return trusted ? "trusted" : "unrecognized"
+    }
+
+    private func inputState(_ snapshot: RemoteSessionDiagnosticsSnapshot) -> String {
+        guard snapshot.inputReady else {
+            return "not ready"
+        }
+        return snapshot.supportsUnicodeInput ? "ready, Unicode" : "ready, scancodes only"
+    }
+
+    /// The first licensing message, and whether the server issued a license.
+    private func licensingSummary(_ report: RDPConnectionReport) -> String {
+        let firstMessage = report.rdpLicensingResponseType ?? "not observed"
+        return report.rdpIssuedClientLicense == nil ? firstMessage : "\(firstMessage), license issued"
     }
 
     private func graphicsCapability(_ report: RDPConnectionReport?) -> String {

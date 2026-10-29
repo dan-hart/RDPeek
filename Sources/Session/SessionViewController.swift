@@ -27,6 +27,8 @@ final class SessionViewController: NSViewController {
     private var isPCDeleted = false
 
     private var requestedDesktopSizeLabel = "auto"
+    /// The name the last connection gave servers for the Mac.
+    private var sentClientName: String?
     /// The password the Keychain holds for the draft's identity, when known.
     private var rememberedPassword: String?
     private var isAwaitingCredentials = false
@@ -548,7 +550,9 @@ final class SessionViewController: NSViewController {
             serverCertificateInfo: liveCertificate,
             viewerPixelSize: viewerPixelSize,
             requestedDesktopSize: requestedDesktopSizeLabel,
+            clientName: sentClientName,
             inputReady: inputSession != nil,
+            supportsUnicodeInput: inputSession?.supportsUnicodeInput ?? false,
             displayControlReady: displayControlSession != nil,
             clipboardReady: clipboard.session != nil,
             clipboardSharingEnabled: clipboard.isSharingEnabled,
@@ -558,6 +562,15 @@ final class SessionViewController: NSViewController {
             isConnecting: isConnecting
         )
         diagnosticsModel.updateSnapshot(nextSnapshot)
+    }
+
+    /// Keeps what Stats for Nerds shows of the settings a connection sends,
+    /// in the form Display Control requests are shown in.
+    private func recordSentSettings(_ configuration: RDPConnectionConfiguration) {
+        let scale = configuration.scaleFactors
+        requestedDesktopSizeLabel = "\(configuration.desktopWidth)x\(configuration.desktopHeight), "
+            + "RDP scale \(scale.desktopScaleFactor)%/\(scale.deviceScaleFactor)%"
+        sentClientName = configuration.clientName
     }
 
     /// The user never picks a resolution: the remote desktop starts at the
@@ -769,6 +782,7 @@ final class SessionViewController: NSViewController {
             credentials: credentials,
             desktopSize: desktopSize
         )
+        recordSentSettings(configuration)
 
         let connectionID = UUID()
         let cancellation = RDPConnectionCancellation()
@@ -820,7 +834,6 @@ final class SessionViewController: NSViewController {
         credentials: RDPCredentials?,
         desktopSize: RDPDesktopSize
     ) -> RDPConnectionConfiguration {
-        requestedDesktopSizeLabel = "\(desktopSize.width)x\(desktopSize.height)"
         // Announce the Mac's keyboard layout so the server maps scancodes to
         // the characters the keys are labelled with; the input layer sends
         // keys by the layout this session announced.

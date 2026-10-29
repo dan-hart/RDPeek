@@ -75,3 +75,46 @@ final class ViewerMetricsSummaryTests: XCTestCase {
         )
     }
 }
+
+final class ConnectionReportSummaryTests: XCTestCase {
+    func testTargetSaysHowManyRedirectionsLedThere() {
+        XCTAssertEqual(connectionTargetSummary(report(redirectionDepth: 0)), "winbox:3389")
+        XCTAssertEqual(
+            connectionTargetSummary(report(redirectionDepth: 1)),
+            "winbox:3389, after a server redirection"
+        )
+        XCTAssertEqual(
+            connectionTargetSummary(report(redirectionDepth: 2)),
+            "winbox:3389, after 2 server redirections"
+        )
+    }
+
+    func testTerminationNamesTheServersCodesAndTheirCategory() {
+        XCTAssertEqual(remoteTerminationSummary(nil), "none")
+        XCTAssertEqual(
+            remoteTerminationSummary(RDPRemoteTermination(errorInfo: 0x0000_0003, disconnectReason: 3)),
+            "ERRINFO_IDLE_TIMEOUT, rn-user-requested (timeLimit)"
+        )
+        XCTAssertEqual(
+            remoteTerminationSummary(RDPRemoteTermination(disconnectReason: 3)),
+            "rn-user-requested (unspecified)"
+        )
+        XCTAssertEqual(
+            remoteTerminationSummary(RDPRemoteTermination(errorInfo: 0x0000_ABCD)),
+            "ERRINFO_0x0000abcd (unknown)"
+        )
+    }
+
+    private func report(redirectionDepth: Int) -> RDPConnectionReport {
+        RDPConnectionReport(
+            status: "running",
+            stage: "rdp-graphics-dynamic-channel",
+            target: "winbox:3389",
+            redirectionDepth: redirectionDepth,
+            passwordConfigured: true,
+            requestedProtocols: [],
+            requestHex: "",
+            warnings: []
+        )
+    }
+}
