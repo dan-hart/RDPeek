@@ -34,6 +34,9 @@ final class SessionViewController: NSViewController {
     private var autoRetryCount = 0
     private var didRetryFirstFrameTimeout = false
     private var isAutoRetryPending = false
+    /// Why the session is connecting again on its own, for the connecting
+    /// overlay; nil for a connection the user started.
+    private var autoRetryReason: SessionAutoRetryReason?
     private var autoRetryTask: Task<Void, Never>?
     private var firstFrameWatchdogTask: Task<Void, Never>?
     /// This connection offers only RSA key exchange, after the server's
@@ -292,6 +295,10 @@ final class SessionViewController: NSViewController {
             hudModel.phase = nextPhase
             updateOverlayVisibility(for: nextPhase)
         }
+        hudModel.update(
+            \.connectingStatusDetail,
+            to: nextPhase == .connecting ? autoRetryReason?.statusDetail : nil
+        )
         hudModel.update(\.certificateNotice, to: certificateNoticeState())
         hudModel.update(\.isMetricsOverlayVisible, to: isMetricsOverlayVisible)
         hudModel.update(\.metricsSummary, to: viewerMetricsSummary)
@@ -545,7 +552,7 @@ final class SessionViewController: NSViewController {
         didRetryFirstFrameTimeout = false
         isAutoRetryPending = false
         usesLegacyRSAKeyExchange = false
-        hudModel.connectingStatusDetail = nil
+        autoRetryReason = nil
         guard draft.password.isEmpty else {
             startConnectionAttempt()
             return
@@ -553,11 +560,11 @@ final class SessionViewController: NSViewController {
         resolveStoredCredentialsAndConnect()
     }
 
-    /// Waits briefly, then connects again; `connectingStatusDetail` says why
-    /// meanwhile.
-    private func scheduleAutoRetry() {
+    /// Waits briefly, then connects again; the connecting overlay says why
+    /// until the desktop shows.
+    private func scheduleAutoRetry(_ reason: SessionAutoRetryReason) {
         isAutoRetryPending = true
-        hudModel.connectingStatusDetail = "Network hiccup — retrying…"
+        autoRetryReason = reason
         render()
 
         autoRetryTask?.cancel()
@@ -595,7 +602,7 @@ final class SessionViewController: NSViewController {
                 render()
             } else {
                 didRetryFirstFrameTimeout = true
-                scheduleAutoRetry()
+                scheduleAutoRetry(.firstFrameTimeout)
             }
         }
     }
@@ -968,7 +975,7 @@ final class SessionViewController: NSViewController {
             startConnectionAttempt()
         case .retry:
             autoRetryCount += 1
-            scheduleAutoRetry()
+            scheduleAutoRetry(.networkHiccup)
         case let .promptForCredentials(message):
             forgetRejectedPassword()
             promptForCredentials(errorMessage: message)
@@ -989,7 +996,7 @@ final class SessionViewController: NSViewController {
         credentialResolutionTask = nil
         isAutoRetryPending = false
         isResolvingStoredCredentials = false
-        hudModel.connectingStatusDetail = nil
+        autoRetryReason = nil
         activeCancellation?.cancel()
         detachSessionChannels()
         resetFramePresentationState()
@@ -1113,7 +1120,6 @@ final class SessionViewController: NSViewController {
             hasEverPresentedFrame = true
             autoRetryCount = 0
             firstFrameWatchdogTask?.cancel()
-            hudModel.connectingStatusDetail = nil
         }
         return wasFirstPresentedFrame || sizeChanged
     }
@@ -1491,6 +1497,23 @@ private final class SessionMainActorSink: @unchecked Sendable {
                 }
                 operation(controller)
             }
+        }
+    }
+}
+
+/// Why a session connects again on its own.
+private enum SessionAutoRetryReason {
+    /// The server could not be reached.
+    case networkHiccup
+    /// The server accepted the sign-in but sent no desktop in time.
+    case firstFrameTimeout
+
+    var statusDetail: String {
+        switch self {
+        case .networkHiccup:
+            "Network hiccup — retrying…"
+        case .firstFrameTimeout:
+            "The desktop is taking too long — reconnecting…"
         }
     }
 }
