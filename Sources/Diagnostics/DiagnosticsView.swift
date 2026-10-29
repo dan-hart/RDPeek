@@ -143,8 +143,6 @@ struct RemoteSessionDiagnosticsSnapshot: Equatable {
     var title = "Remote Desktop"
     var report: RDPConnectionReport?
     var previewFrame: RDPFrameMetadata?
-    var previewFrameCount = 0
-    var previewDecodeError: String?
     var renderMetrics = RDPRenderMetrics()
     var framePacing = RDPFramePacingState()
     var sessionEndReason: RDPSessionEndReason?
@@ -194,10 +192,10 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                     InlineNotice(title: "Input", message: formError, systemImage: "exclamationmark.triangle.fill")
                 }
 
-                if let previewDecodeError = snapshot.previewDecodeError {
+                if let decodeError = snapshot.renderMetrics.lastDecodeError {
                     InlineNotice(
-                        title: "VideoToolbox",
-                        message: previewDecodeError,
+                        title: "Decode Error",
+                        message: decodeError,
                         systemImage: "exclamationmark.triangle.fill"
                     )
                 }
@@ -248,7 +246,6 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                     DiagnosticRow("Graphics Updates", graphicsUpdateSummary(snapshot.report?.rdpGraphicsUpdateMessages))
                     DiagnosticRow("Graphics Failure", graphicsFailureSummary(snapshot.report))
                     DiagnosticRow("Update Packets", countSummary(snapshot.report?.rdpGraphicsUpdateResponseCount))
-                    DiagnosticRow("Presented Frames", "\(snapshot.previewFrameCount)")
                     DiagnosticRow("Input", snapshot.inputReady ? "ready" : "not ready")
                     DiagnosticRow("Display Control", snapshot.displayControlReady ? "ready" : "not ready")
                     DiagnosticRow("Display Channel ID", dynamicChannelID(snapshot.report?.rdpDisplayControlChannelID))
@@ -435,7 +432,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
 
     private func statusText(_ snapshot: RemoteSessionDiagnosticsSnapshot) -> String {
         if snapshot.isConnecting {
-            return snapshot.previewFrameCount > 0 ? "Receiving" : "Connecting"
+            return snapshot.renderMetrics.decodedFrameCount > 0 ? "Receiving" : "Connecting"
         }
         if let sessionEndReason = snapshot.sessionEndReason {
             return sessionEndReason.statusText

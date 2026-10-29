@@ -70,9 +70,18 @@ final class SessionHUDModel: ObservableObject {
     var onSetClipboardSharing: (Bool) -> Void = { _ in }
     var onSetAudioPlayback: (Bool) -> Void = { _ in }
     var onSetFollowWindowSize: (Bool) -> Void = { _ in }
+    var onSetMetricsOverlayVisible: (Bool) -> Void = { _ in }
     var onOpenDiagnostics: () -> Void = {}
 
     private var toastDismissTask: Task<Void, Never>?
+
+    /// Assigns only a changed value, so a render that changes nothing
+    /// publishes nothing to the SwiftUI layers.
+    func update<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<SessionHUDModel, Value>, to value: Value) {
+        if self[keyPath: keyPath] != value {
+            self[keyPath: keyPath] = value
+        }
+    }
 
     func showToast(_ text: String, systemImage: String) {
         let nextToast = SessionToast(text: text, systemImage: systemImage)
@@ -637,7 +646,7 @@ struct SessionTitlebarAccessory: View {
     private var metricsBinding: Binding<Bool> {
         Binding(
             get: { model.isMetricsOverlayVisible },
-            set: { model.isMetricsOverlayVisible = $0 }
+            set: { model.onSetMetricsOverlayVisible($0) }
         )
     }
 }

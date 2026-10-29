@@ -58,9 +58,8 @@ final class SessionViewController: NSViewController {
     private var report: RDPConnectionReport?
     private var liveCertificate: RDPServerCertificateInfo?
     private var previewFrame: RDPFrameMetadata?
-    private var previewFrameCount = 0
     private var viewerMetricsSummary: String?
-    private var previewDecodeError: String?
+    private var isMetricsOverlayVisible = false
     private var hasPresentedFrame = false
     private var framePresentationBuffer = RDPFramePresentationBuffer()
     private var framePacing = RDPFramePacingState()
@@ -246,9 +245,6 @@ final class SessionViewController: NSViewController {
     private func configureHUDModel() {
         hudModel.deviceName = draft.displayName
         hudModel.hostLabel = draft.port == 3389 ? draft.host : "\(draft.host):\(draft.port)"
-        hudModel.isClipboardSharingEnabled = clipboard.isSharingEnabled
-        hudModel.isAudioPlaybackEnabled = audioPlaybackEnabled
-        hudModel.isFollowWindowSizeEnabled = autoApplyViewerSize
 
         hudModel.onReconnect = { [weak self] in self?.startConnection() }
         hudModel.onCancel = { [weak self] in self?.cancelConnection() }
@@ -269,15 +265,20 @@ final class SessionViewController: NSViewController {
         hudModel.onSetFollowWindowSize = { [weak self] enabled in
             self?.setFollowWindowSize(enabled)
         }
+        hudModel.onSetMetricsOverlayVisible = { [weak self] visible in
+            self?.setMetricsOverlayVisible(visible)
+        }
         hudModel.onOpenDiagnostics = { [weak self] in self?.openDiagnosticsWindow() }
     }
 
     // MARK: - Rendering
 
+    /// Pushes session state to the canvas, the HUD, and the Session menu.
+    /// It runs for every state change, so it publishes only what changed;
+    /// the diagnostics loop picks up the rest.
     private func render() {
-        let frame = previewFrame ?? report?.rdpGraphicsFirstFrame.map(RDPFrameMetadata.init)
         canvasView.update(
-            frame: frame,
+            frame: previewFrame,
             hasPresentedFrame: hasPresentedFrame,
             inputSession: inputSession
         )
@@ -287,22 +288,22 @@ final class SessionViewController: NSViewController {
             hudModel.phase = nextPhase
             updateOverlayVisibility(for: nextPhase)
         }
-        hudModel.certificateNotice = certificateNoticeState()
-        hudModel.metricsSummary = viewerMetricsSummary
-        hudModel.isClipboardSharingEnabled = clipboard.isSharingEnabled
-        hudModel.isAudioPlaybackEnabled = audioPlaybackEnabled
-        hudModel.isFollowWindowSizeEnabled = autoApplyViewerSize
-        hudModel.temporaryClipboardSecondsRemaining = clipboard.temporarySharingSecondsRemaining
+        hudModel.update(\.certificateNotice, to: certificateNoticeState())
+        hudModel.update(\.isMetricsOverlayVisible, to: isMetricsOverlayVisible)
+        hudModel.update(\.metricsSummary, to: viewerMetricsSummary)
+        hudModel.update(\.isClipboardSharingEnabled, to: clipboard.isSharingEnabled)
+        hudModel.update(\.isAudioPlaybackEnabled, to: audioPlaybackEnabled)
+        hudModel.update(\.isFollowWindowSizeEnabled, to: autoApplyViewerSize)
+        hudModel.update(\.temporaryClipboardSecondsRemaining, to: clipboard.temporarySharingSecondsRemaining)
         // One command state feeds the HUD and the Session menu, so they
         // agree on what can be done.
         let commands = sessionCommandState
-        hudModel.canReconnect = commands.canStart
-        hudModel.canCancel = commands.canCancel
-        hudModel.canSyncClipboard = commands.canSyncClipboard
-        hudModel.canShareClipboardTemporarily = commands.canShareClipboardTemporarily
+        hudModel.update(\.canReconnect, to: commands.canStart)
+        hudModel.update(\.canCancel, to: commands.canCancel)
+        hudModel.update(\.canSyncClipboard, to: commands.canSyncClipboard)
+        hudModel.update(\.canShareClipboardTemporarily, to: commands.canShareClipboardTemporarily)
 
         updateFrameClock()
-        syncDiagnosticsSnapshot()
         publishSessionCommandStateIfKey(commands)
     }
 
@@ -453,8 +454,6 @@ final class SessionViewController: NSViewController {
             title: draft.displayName,
             report: report,
             previewFrame: previewFrame,
-            previewFrameCount: previewFrameCount,
-            previewDecodeError: previewDecodeError,
             renderMetrics: renderMetricsStore.metrics,
             framePacing: framePacing,
             sessionEndReason: sessionEndReason,
@@ -676,9 +675,7 @@ final class SessionViewController: NSViewController {
         report = nil
         liveCertificate = nil
         previewFrame = nil
-        previewFrameCount = 0
         viewerMetricsSummary = nil
-        previewDecodeError = nil
         resetFramePresentationState()
         renderMetricsStore.reset()
         certificateTrustedByApp = false
@@ -744,7 +741,6 @@ final class SessionViewController: NSViewController {
                 },
                 onDecoded: { presentation, receivedAt, decodedAt, timing in
                     sink.apply { controller in
-                        controller.previewDecodeError = nil
                         let shouldForceMetricsSnapshot = !controller.hasPresentedFrame
                         controller.renderMetricsStore.recordDecodedFrame(
                             presentation.frame,
@@ -764,13 +760,13 @@ final class SessionViewController: NSViewController {
                 },
                 onDecodeFailed: { receivedAt, errorDescription in
                     sink.apply { controller in
-                        controller.previewDecodeError = errorDescription
                         controller.renderMetricsStore.recordDecodeFailure(
                             receivedAt: receivedAt,
                             errorDescription: errorDescription
                         )
-                        controller.publishRenderMetricsSnapshotIfNeeded(at: receivedAt)
-                        controller.render()
+                        if controller.publishRenderMetricsSnapshotIfNeeded(at: receivedAt) {
+                            controller.render()
+                        }
                     }
                 }
             )
@@ -1115,13 +1111,17 @@ final class SessionViewController: NSViewController {
         return applyFramePresentation(pendingFramePresentation)
     }
 
+    /// Returns whether the canvas needs a render: on the first frame and
+    /// when the desktop size changes. AVC444 can alternate codec names frame
+    /// by frame, which updates the metadata but must not render each frame.
     @discardableResult
     private func applyFramePresentation(_ presentation: RDPDecodedFramePresentation) -> Bool {
         let wasFirstPresentedFrame = hasPresentedFrame == false
-        let shouldUpdateFrameMetadata = shouldPublishFrameMetadata(presentation.frame)
+        let frame = presentation.frame
+        let sizeChanged = previewFrame?.width != frame.width || previewFrame?.height != frame.height
         remoteDesktopRenderer.present(presentation, id: renderMetricsStore.metrics.decodedFrameCount)
-        if shouldUpdateFrameMetadata {
-            previewFrame = RDPFrameMetadata(presentation.frame)
+        if shouldPublishFrameMetadata(frame) {
+            previewFrame = RDPFrameMetadata(frame)
         }
         if wasFirstPresentedFrame {
             hasPresentedFrame = true
@@ -1130,7 +1130,7 @@ final class SessionViewController: NSViewController {
             firstFrameWatchdogTask?.cancel()
             hudModel.connectingStatusDetail = nil
         }
-        return wasFirstPresentedFrame || shouldUpdateFrameMetadata
+        return wasFirstPresentedFrame || sizeChanged
     }
 
     private func shouldPublishFrameMetadata(_ frame: RDPGraphicsFrameSnapshot) -> Bool {
@@ -1151,23 +1151,27 @@ final class SessionViewController: NSViewController {
         guard let snapshot = renderMetricsStore.snapshotIfNeeded(force: force, at: timestamp) else {
             return false
         }
-        var didChange = false
-        if previewFrameCount != snapshot.decodedFrameCount {
-            previewFrameCount = snapshot.decodedFrameCount
-            didChange = true
-        }
-        didChange = updateViewerMetricsSummary(snapshot) || didChange
-        return didChange
+        return updateViewerMetricsSummary(snapshot)
     }
 
+    /// The summary only feeds the performance overlay, so it is left unset
+    /// while the overlay is hidden.
     @discardableResult
     private func updateViewerMetricsSummary(_ metrics: RDPRenderMetrics) -> Bool {
-        let nextSummary = compactViewerMetricsSummary(metrics: metrics, framePacing: framePacing)
+        let nextSummary = isMetricsOverlayVisible
+            ? compactViewerMetricsSummary(metrics: metrics, framePacing: framePacing)
+            : nil
         if viewerMetricsSummary != nextSummary {
             viewerMetricsSummary = nextSummary
             return true
         }
         return false
+    }
+
+    private func setMetricsOverlayVisible(_ visible: Bool) {
+        isMetricsOverlayVisible = visible
+        updateViewerMetricsSummary(renderMetricsStore.metrics)
+        render()
     }
 
     private func resetFramePresentationState() {

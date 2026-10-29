@@ -43,7 +43,6 @@ final class RemoteDesktopCanvasNSView: NSView {
         inputView.isHidden = !shouldShowDesktop
         inputView.rdpFrame = frame
         inputView.inputSession = shouldShowDesktop ? inputSession : nil
-        needsLayout = true
     }
 
     func makeInputFirstResponder() {
