@@ -121,18 +121,19 @@ final class DeviceListModel: ObservableObject {
         editorState = DeviceEditorState(device: device, isNew: false)
     }
 
-    /// The device's remembered password, or nil when it has none or the
-    /// keychain read fails. The read runs off the main actor: it can block
-    /// on the access-approval dialog.
-    func savedPassword(for device: DeviceProfile) async -> String? {
+    /// The device's remembered password, nil when it has none, or why the
+    /// keychain read failed — the user denied access, say, so an item may
+    /// still exist. The read runs off the main actor: it can block on the
+    /// access-approval dialog.
+    func savedPassword(for device: DeviceProfile) async -> Result<String?, any Error> {
         guard device.rememberPassword,
               let key = KeychainCredentialKey(identity: device.identity)
         else {
-            return nil
+            return .success(nil)
         }
         let credentialStore = credentialStore
         return await Task.detached(priority: .userInitiated) {
-            try? credentialStore.password(for: key)
+            Result { try credentialStore.password(for: key) }
         }.value
     }
 

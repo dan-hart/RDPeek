@@ -282,6 +282,26 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertEqual(harness.credentials.savedAccounts, [])
     }
 
+    func testSaveDeletesCredentialWhenRememberTurnedOffAfterAFailedRead() throws {
+        let device = makeDevice(rememberPassword: true)
+        let harness = try makeHarness(devices: [device])
+        let editor = DeviceEditorState(device: device, isNew: false)
+        var edited = device
+        edited.rememberPassword = false
+
+        // The editor could not read the item, so it loaded no password but
+        // counts the item as there.
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "",
+            loadedPassword: nil,
+            hadRememberedPassword: true
+        )
+
+        XCTAssertEqual(harness.credentials.deletedAccounts, [try account(for: device)])
+    }
+
     func testSaveKeepsCredentialWhenRememberTurnedOffButTwinRemembers() throws {
         let device = makeDevice(rememberPassword: true)
         let twin = makeDevice(name: "Twin", rememberPassword: true)
@@ -646,7 +666,7 @@ final class DeviceListModelTests: XCTestCase {
         let account = try account(for: device)
         harness.credentials.passwords[account] = "secret"
 
-        let password = await harness.model.savedPassword(for: device)
+        let password = try await harness.model.savedPassword(for: device).get()
 
         XCTAssertEqual(password, "secret")
         XCTAssertEqual(harness.credentials.readAccounts, [account])
@@ -657,20 +677,20 @@ final class DeviceListModelTests: XCTestCase {
         let harness = try makeHarness(devices: [device])
         harness.credentials.passwords[try account(for: device)] = "secret"
 
-        let password = await harness.model.savedPassword(for: device)
+        let password = try await harness.model.savedPassword(for: device).get()
 
         XCTAssertNil(password)
         XCTAssertEqual(harness.credentials.readAccounts, [])
     }
 
-    func testSavedPasswordTreatsReadFailureAsNone() async throws {
+    func testSavedPasswordReportsReadFailure() async throws {
         let device = makeDevice(rememberPassword: true)
         let harness = try makeHarness(devices: [device])
         harness.credentials.readError = KeychainError.unexpectedStatus(-1)
 
-        let password = await harness.model.savedPassword(for: device)
+        let result = await harness.model.savedPassword(for: device)
 
-        XCTAssertNil(password)
+        XCTAssertThrowsError(try result.get())
     }
 
     // MARK: - connect

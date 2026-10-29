@@ -96,10 +96,18 @@ struct DeviceEditorSheet: View {
         guard isLoadingPassword else {
             return
         }
-        if let savedPassword = await deviceList.savedPassword(for: editorState.device) {
+        switch await deviceList.savedPassword(for: editorState.device) {
+        case let .success(savedPassword?):
             password = savedPassword
             loadedPassword = savedPassword
             hadRememberedPassword = true
+        case .success(nil):
+            break
+        case let .failure(error):
+            // The item may exist all the same: count it, so turning
+            // Remember off still deletes it.
+            hadRememberedPassword = true
+            validationMessage = "Password not read from Keychain: \(error)"
         }
         isLoadingPassword = false
     }
