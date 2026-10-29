@@ -15,7 +15,8 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
 - Trusting a certificate for a host replaces the one trusted before,
   and a server redirection's certificate is pinned under its own host.
 - “Hide certificate warnings” is now “Accept untrusted certificates”,
-  which says what it does.
+  which says what it does, and its help says credentials then go to a
+  server nobody verified.
 - Files pasted from the remote clipboard are quarantined like
   downloads, so Gatekeeper checks them before they open.
 - A password is kept only after the server accepts it, the Keychain is
@@ -33,7 +34,13 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   retried automatically, so a failed sign-in is not repeated and a
   mistyped host name is reported at once.
 - Servers whose RSA certificate does not allow digital signatures
-  connect, using the RSA key exchange for that connection.
+  connect, using the RSA key exchange for that connection. It is never
+  used to reconnect to a server that passed the session on, so a
+  sign-in that server took is not sent again without forward secrecy.
+- When a server passes the session on to one that cannot be found or
+  reached, the message says so instead of blaming the host typed in.
+- Signing in with every field empty to a server that needs a sign-in
+  asks for a user name and password again.
 - “DOMAIN\user” user names sign in to that domain.
 - The remote desktop starts at the window's size in points and grows to
   full Retina resolution on servers that support resizing, so servers
@@ -46,7 +53,8 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
 
 - The remote desktop is told the Mac's keyboard layout instead of US
   English, and a key that types the same character there is sent as
-  its scancode, so remote input methods see it.
+  its scancode, so remote input methods see it, letters typed with
+  Caps Lock included.
 - Right ⌥ types the character it gives on the Mac, such as @ with ⌥L on
   a German layout, and its dead keys compose accents without sending
   Alt; left ⌥ stays Alt.
@@ -55,8 +63,12 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   open the remote Start menu; neither do ⌘-clicking a background
   session window, scrolling with ⌘ held, pressing both ⌘ keys, or
   tapping ⌘ or right ⌥ while the other is already held on the remote.
+  Releasing right ⌥ after pressing another modifier with it taps no
+  Alt, which opened the app's menu bar.
 - A dead key's accent is no longer lost when Return, Tab, or Esc
-  follows it.
+  follows it, and is not typed ahead of a ⌘ or ⌃ shortcut. After an
+  Alt shortcut on a dead key with left ⌥, such as ⌥E on a US layout,
+  the next key reaches the remote as itself, so Alt+E then A works.
 - Keys pressed with ⌘ are released on the remote as soon as they go up,
   so pressing ⌘W twice quickly works.
 - Modifiers whose release the window never saw, for example with a
@@ -86,8 +98,18 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   way to a newer copy, stops when the server stops answering, and its
   files are deleted once they leave the clipboard, or at a later launch.
 - Copied files whose names Windows rejects are renamed, and files with
-  the same name are numbered.
-- “Clipboard synced” appears only after Sync Now.
+  the same name are numbered. Names keep zero-width joiners, soft
+  hyphens, and direction marks.
+- Files copied from folders on Windows arrive without their folders,
+  and RDPeek says so.
+- Sync Now sends the Mac clipboard again only when the server does not
+  have it, for example a file iCloud had not downloaded, so it never
+  strips the formatting of a copy made on the server or cancels a
+  download; otherwise it says the clipboard is up to date. “Clipboard
+  synced” appears only after Sync Now.
+- Turning sharing off, or a 30-second share ending, takes back the
+  Mac's copy only while the server still holds it, so a copy made on
+  the server since is kept.
 
 ### Sessions
 
@@ -107,8 +129,24 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   Reconnect, and the connecting status says why a session reconnects.
 - On a 1x display the remote desktop is no longer resized by a pixel
   right after connecting.
+- When the server ends a session, the desktop is hidden as after
+  Disconnect: the ended screen's buttons can be reached from the
+  keyboard, and the last frame no longer stays in memory.
+- After the video layer fails, the desktop reappears even when nothing
+  on it changes.
+- A session window follows edits to its PC: a new name shows at once,
+  and other settings apply from the next connection. Connect on a PC
+  whose session ended connects that window again, and a window whose
+  PC was deleted keeps no password.
+- The performance overlay shows only over the live desktop and says
+  idle when the desktop is still.
 - Stats for Nerds shows the server's warnings and whether the RSA key
-  exchange was used. The overlays respect Reduce Motion.
+  exchange, without forward secrecy, was used. It shows connection
+  details once the session ends instead of placeholders, counts frame
+  acknowledgements past the 8 RDPKit records as “8+”, and updates only
+  while it is open.
+- The overlays respect Reduce Motion, and VoiceOver announces session
+  messages.
 
 ### Connection Center
 
@@ -118,22 +156,29 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   where they can be seen, opens without waiting for the Keychain, and
   is no longer discarded by ⌘N.
 - PC cards have VoiceOver actions for Connect, Edit, Duplicate, and
-  Delete.
+  Delete, and VoiceOver reads each card's user, host, and last use. The
+  arrow keys move the selection, and the Connection Center respects
+  Reduce Motion.
 - Saved PCs stay readable when one is damaged or was written by another
   version, and an unreadable list is reported instead of shown empty.
   PCs this version cannot read are kept and counted in a notice, and
   settings a newer version added survive a save.
-- Saving the PC editor no longer undoes a Remember Password change a
-  session made while it was open.
+- Saving the PC editor no longer undoes a Remember Password change, or
+  a newer password, a session saved while it was open.
+- Changing a PC's host or user keeps its saved password if saving the
+  new Keychain item fails, and the editor says when it cannot read the
+  saved password; turning Remember off then still removes it.
 - Duplicating a PC keeps Remember Password, and deleting one keeps a
-  password that another PC still remembers.
+  password that another PC still remembers, including one that writes
+  the same sign-in as “CORP\bob” instead of “bob” in domain “CORP”.
 
 ### Under the hood
 
 - Updated to RDPKit 0.4.0: timeouts bound every step before the first
   frame, errors name their reason, and Windows, KRdp and
   gnome-remote-desktop video and bitmap codecs are faster and more
-  correct.
+  correct. Servers now see the client name RDPKIT instead of
+  KRDPSWIFT.
 - Package versions are pinned in Package.resolved, CI builds with a
   pinned Xcode, SwiftLint checks the tests too, and its analyzer guards
   against unused code.
