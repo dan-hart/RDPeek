@@ -40,6 +40,7 @@ targets:
         LSMinimumSystemVersion: "14.0"
         LSApplicationCategoryType: public.app-category.productivity
         NSHumanReadableCopyright: Copyright © 2026 Anees Iqbal.
+        NSLocalNetworkUsageDescription: RDPeek connects to the remote desktops you add on your local network.
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:
