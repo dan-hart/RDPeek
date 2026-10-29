@@ -147,16 +147,145 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.attach(session)
         clipboard.startTemporarySharing()
         clipboard.setSharingEnabled(true)
-        XCTAssertEqual(session.publishedTexts, [nil, "hello", "hello"])
+        XCTAssertEqual(session.publishedTexts, [nil, "hello"])
         XCTAssertEqual(toasts, ["Sharing clipboard for 30 seconds"])
 
+        // Already sent, so Sync Now only says so.
         clipboard.syncNow()
+        XCTAssertEqual(session.publishedTexts, [nil, "hello"])
+        XCTAssertEqual(toasts.last, "Clipboard is up to date")
+
+        toasts.removeAll()
+        pasteboard.clearContents()
+        pasteboard.setString("newer", forType: .string)
+        clipboard.poll()
+        XCTAssertEqual(session.publishedTexts.last, "newer")
+        XCTAssertTrue(toasts.isEmpty)
+        pasteboard.clearContents()
+        pasteboard.setString("newest", forType: .string)
+        clipboard.syncNow()
+        XCTAssertEqual(session.publishedTexts.last, "newest")
         XCTAssertEqual(toasts.last, "Clipboard synced")
 
         pasteboard.clearContents()
         clipboard.syncNow()
         XCTAssertEqual(session.publishedTexts.last, .some(nil))
         XCTAssertEqual(toasts.last, "Clipboard has no text or files; remote clipboard cleared")
+    }
+
+    /// The server's own copy, which may hold more than the text it put on
+    /// the pasteboard, is newer, so neither Sync Now nor another 30-second
+    /// share sends that text back over it.
+    func testSyncingAnUnchangedPasteboardKeepsARemoteCopy() {
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard(isSharingEnabled: false)
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+        clipboard.startTemporarySharing()
+        XCTAssertEqual(session.publishedTexts, [nil, "local"])
+
+        clipboard.receiveText("remote cells")
+        clipboard.syncNow()
+        XCTAssertEqual(toasts.last, "Clipboard is up to date")
+        clipboard.startTemporarySharing()
+        clipboard.setSharingEnabled(true)
+        clipboard.poll()
+        XCTAssertEqual(session.publishedTexts, [nil, "local"])
+        XCTAssertEqual(pasteboard.string(forType: .string), "remote cells")
+    }
+
+    /// Nor do they replace remote files still downloading, or send the
+    /// downloaded files back.
+    func testSyncingAnUnchangedPasteboardKeepsARemoteDownload() throws {
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard(isSharingEnabled: false)
+        clipboard.attach(session)
+        clipboard.startTemporarySharing()
+
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        clipboard.syncNow()
+        clipboard.startTemporarySharing()
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(copiedFileURL())), Data(count: 10))
+
+        clipboard.syncNow()
+        clipboard.startTemporarySharing()
+        clipboard.poll()
+        XCTAssertNil(clipboard.localFileRead)
+        XCTAssertEqual(session.publishedTexts, [nil, "local"])
+        XCTAssertTrue(session.publishedFiles.isEmpty)
+
+        // A change is sent at once.
+        pasteboard.clearContents()
+        pasteboard.setString("newer local", forType: .string)
+        clipboard.syncNow()
+        XCTAssertEqual(session.publishedTexts.last, "newer local")
+    }
+
+    /// Sync Now and another 30-second share send again a local copy that
+    /// did not reach the server, such as a file iCloud had not downloaded
+    /// yet; the poll does not, and none sends one that did.
+    func testSyncingSendsAgainALocalCopyThatFailed() async throws {
+        let fileURL = try makeLocalFile(named: "notes.txt", contents: Data())
+        try FileManager.default.removeItem(at: fileURL)
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard(isSharingEnabled: false)
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+
+        // Copied before the file is there: a share that starts sends it.
+        pasteboard.clearContents()
+        pasteboard.writeObjects([fileURL as NSURL])
+        clipboard.startTemporarySharing()
+        try await XCTUnwrap(clipboard.localFileRead).value
+        XCTAssertEqual(session.publishedTexts, [nil, nil])
+        try Data("first".utf8).write(to: fileURL)
+        clipboard.poll()
+        XCTAssertNil(clipboard.localFileRead, "The poll does not try again")
+        clipboard.startTemporarySharing()
+        try await XCTUnwrap(clipboard.localFileRead).value
+
+        // Copied before the file is there: the poll sends it.
+        try FileManager.default.removeItem(at: fileURL)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([fileURL as NSURL])
+        clipboard.poll()
+        try await XCTUnwrap(clipboard.localFileRead).value
+        XCTAssertEqual(toasts.last, "Local file clipboard could not be read; remote clipboard cleared")
+        try Data("second".utf8).write(to: fileURL)
+        clipboard.syncNow()
+        try await XCTUnwrap(clipboard.localFileRead).value
+        XCTAssertEqual(toasts.last, "1 file shared to remote")
+
+        // Sent, so neither sends it again.
+        clipboard.syncNow()
+        clipboard.startTemporarySharing()
+        XCTAssertNil(clipboard.localFileRead)
+        XCTAssertEqual(toasts.suffix(2), ["Clipboard is up to date", "Sharing clipboard for 30 seconds"])
+        XCTAssertEqual(
+            session.publishedFiles.map { $0.map(\.contents) },
+            [[Data("first".utf8)], [Data("second".utf8)]]
+        )
+
+        // A remote copy after a failed one is newer, so it is kept.
+        try FileManager.default.removeItem(at: fileURL)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([fileURL as NSURL])
+        clipboard.poll()
+        try await XCTUnwrap(clipboard.localFileRead).value
+        try Data("third".utf8).write(to: fileURL)
+        clipboard.receiveText("remote")
+        clipboard.syncNow()
+        clipboard.startTemporarySharing()
+        XCTAssertNil(clipboard.localFileRead)
+        XCTAssertEqual(session.publishedFiles.count, 2)
+        XCTAssertEqual(pasteboard.string(forType: .string), "remote")
     }
 
     // MARK: - Local files
@@ -210,8 +339,12 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(session.publishedFiles.count, 3)
         XCTAssertEqual(toasts, ["Sharing clipboard for 30 seconds"])
 
+        // Sync Now reports a read already running once it is sent.
+        clipboard.detach()
+        clipboard.attach(session)
         clipboard.syncNow()
         try await XCTUnwrap(clipboard.localFileRead).value
+        XCTAssertEqual(session.publishedFiles.count, 4)
         XCTAssertEqual(toasts.last, "1 file shared to remote")
 
         // The same holds for a copy that cannot be shared.

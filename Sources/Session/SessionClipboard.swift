@@ -49,8 +49,16 @@ final class SessionClipboard {
     /// Holds a directory for each remote file download.
     private let downloadRoot: URL
     private var pasteboardChangeCount: Int
-    /// Reads copied local files off the main thread; tests await it.
+    /// Whether the local copy last seen has not reached the server: it
+    /// could not be read or sent, or its read was cut short. A remote copy
+    /// since is newer, which clears it.
+    private var localCopyIsUnsent = false
+    /// Reads copied local files off the main thread; nil once the read has
+    /// finished. Tests await it.
     private(set) var localFileRead: Task<Void, Never>?
+    /// Whether the running read reports its result even when it is no news,
+    /// for a sync the user asked for.
+    private var localFileReadAnnounces = false
     private var temporarySharingExpiresAt: Date?
     private var fileTransfer: SessionRemoteClipboardFileTransfer?
     /// The last download put on the pasteboard, and the pasteboard's change
@@ -123,6 +131,7 @@ final class SessionClipboard {
 
     /// The user's choice, which also ends a temporary share.
     func setSharingEnabled(_ enabled: Bool) {
+        let wasEnabled = isSharingEnabled
         isSharingEnabled = enabled
         temporarySharingExpiresAt = nil
         guard enabled else {
@@ -132,11 +141,32 @@ final class SessionClipboard {
             pasteboardChangeCount = pasteboard.changeCount
             return
         }
+        // Already on, the server may hold a newer copy, or be sending one,
+        // that sending the pasteboard again would replace, so only what Sync
+        // Now would send goes.
+        guard wasEnabled == false else {
+            publishPasteboardIfChanged(force: resendsUnsentLocalCopy)
+            return
+        }
         publishPasteboardIfChanged(force: true)
     }
 
+    /// Sends a local copy the poll has not yet, or again one that has not
+    /// reached the server, such as a file iCloud had not downloaded yet. A
+    /// pasteboard the server has, or that a newer remote copy replaced, is
+    /// not sent again, so that copy, or its download, is kept.
     func syncNow() {
-        publishPasteboardIfChanged(force: true, announce: true)
+        guard publishPasteboardIfChanged(force: resendsUnsentLocalCopy, announce: true) == false,
+              canSync
+        else {
+            return
+        }
+        if localFileRead != nil {
+            // The copied files are still being read; their result is news.
+            localFileReadAnnounces = true
+        } else {
+            onToast("Clipboard is up to date", "doc.on.clipboard.fill")
+        }
     }
 
     func startTemporarySharing() {
@@ -177,6 +207,7 @@ final class SessionClipboard {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         pasteboardChangeCount = pasteboard.changeCount
+        localCopyIsUnsent = false
         removeCopiedDownloadIfReplaced()
         onToast("Remote text copied", "doc.on.clipboard")
     }
@@ -186,11 +217,13 @@ final class SessionClipboard {
             return
         }
         // The remote copy is newer than what the Mac pasteboard holds now,
-        // so a local copy the poll has not published yet must not replace
-        // it; only one made from here on is newer.
+        // so a local copy the poll has not published yet, or that never
+        // reached the server, must not replace it; only one made from here
+        // on is newer.
         cancelLocalFileRead()
         discardFileTransfer()
         pasteboardChangeCount = pasteboard.changeCount
+        localCopyIsUnsent = false
         removeCopiedDownloadIfReplaced()
         do {
             let files = try descriptorList.remoteFileTransferFiles(
@@ -256,18 +289,28 @@ final class SessionClipboard {
 
     // MARK: - Local pasteboard
 
-    /// `announce` reports the result even when it is no news, for a sync
-    /// the user asked for.
-    private func publishPasteboardIfChanged(force: Bool = false, announce: Bool = false) {
+    /// Whether an unchanged pasteboard is sent again: its last send failed
+    /// or was cut short, and no read of it is still running.
+    private var resendsUnsentLocalCopy: Bool {
+        localCopyIsUnsent && localFileRead == nil
+    }
+
+    /// `force` sends an unchanged pasteboard too: to a server that has had
+    /// nothing of it, one just attached or with sharing just turned on, or
+    /// again after a send that failed. `announce` reports the result even
+    /// when it is no news, for a sync the user asked for. Returns whether
+    /// it sends, or starts reading files to send.
+    @discardableResult
+    private func publishPasteboardIfChanged(force: Bool = false, announce: Bool = false) -> Bool {
         guard isSharingEnabled, session != nil else {
             pasteboardChangeCount = pasteboard.changeCount
-            return
+            return false
         }
 
         let nextChangeCount = pasteboard.changeCount
         let isNewCopy = nextChangeCount != pasteboardChangeCount
         guard force || isNewCopy else {
-            return
+            return false
         }
 
         if isNewCopy {
@@ -277,6 +320,7 @@ final class SessionClipboard {
             removeCopiedDownloadIfReplaced()
         }
         pasteboardChangeCount = nextChangeCount
+        localCopyIsUnsent = true
         cancelLocalFileRead()
         let fileURLs = pasteboardFileURLs()
         guard fileURLs.isEmpty else {
@@ -284,18 +328,21 @@ final class SessionClipboard {
             // on the main thread would stall the window and its input. A
             // newer local copy, remote clipboard, or sharing turned off
             // cancels the publish.
+            localFileReadAnnounces = announce
             localFileRead = Task { [weak self] in
                 let payload = await Task.detached(priority: .userInitiated) {
                     Self.localFiles(from: fileURLs)
                 }.value
-                guard Task.isCancelled == false else {
+                guard Task.isCancelled == false, let self else {
                     return
                 }
-                self?.publish(payload, announce: announce, isNewCopy: isNewCopy)
+                localFileRead = nil
+                publish(payload, announce: localFileReadAnnounces, isNewCopy: isNewCopy)
             }
-            return
+            return true
         }
         publish(localTextPayload(), announce: announce, isNewCopy: isNewCopy)
+        return true
     }
 
     /// Reports files shared, or a copy that could not be, for a new local
@@ -310,17 +357,20 @@ final class SessionClipboard {
         switch payload {
         case let .text(text):
             session.publishLocalUnicodeText(text)
+            localCopyIsUnsent = false
             if announce {
                 onToast("Clipboard synced", "doc.on.clipboard.fill")
             }
         case let .files(files):
             session.publishLocalFiles(files)
+            localCopyIsUnsent = false
             if reportsResult {
                 let message = files.count == 1 ? "1 file shared to remote" : "\(files.count) files shared to remote"
                 onToast(message, "doc.on.clipboard.fill")
             }
         case .empty:
             session.publishLocalUnicodeText(nil)
+            localCopyIsUnsent = false
             if announce {
                 onToast("Clipboard has no text or files; remote clipboard cleared", "doc.on.clipboard")
             }
