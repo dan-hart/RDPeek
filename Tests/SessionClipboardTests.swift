@@ -540,6 +540,17 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.poll()
         XCTAssertFalse(fileExists(fileURL))
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: downloadRoot.path), [])
+
+        // A local copy the poll has not seen, then remote files.
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        fileURL = try XCTUnwrap(copiedFileURL())
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 1, fileName: "next.bin"),
+        ]))
+        XCTAssertFalse(fileExists(fileURL))
     }
 
     func testDownloadsLeftByAnEarlierRunAreRemoved() throws {

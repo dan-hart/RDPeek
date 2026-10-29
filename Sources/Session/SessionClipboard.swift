@@ -191,6 +191,7 @@ final class SessionClipboard {
         cancelLocalFileRead()
         discardFileTransfer()
         pasteboardChangeCount = pasteboard.changeCount
+        removeCopiedDownloadIfReplaced()
         do {
             let files = try descriptorList.remoteFileTransferFiles(
                 maximumTotalByteCount: UInt64(sessionMaximumLocalClipboardFileBytes)
