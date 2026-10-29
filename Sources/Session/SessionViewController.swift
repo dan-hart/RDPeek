@@ -127,7 +127,6 @@ final class SessionViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         launchStore?.registerDiagnostics(diagnosticsModel, for: sessionID)
-        startDiagnosticsLoop()
         startClipboardPollingLoop()
         render()
     }
@@ -446,17 +445,27 @@ final class SessionViewController: NSViewController {
         activeConnectionID == id
     }
 
-    private func startDiagnosticsLoop() {
-        diagnosticsTask?.cancel()
+    /// Keeps the snapshot current while Stats for Nerds, its only viewer,
+    /// is open; opening it again starts the loop again.
+    private func startDiagnosticsLoopIfNeeded() {
+        guard diagnosticsTask == nil else {
+            return
+        }
         diagnosticsTask = Task { @MainActor [weak self] in
-            while Task.isCancelled == false {
-                // Only the Stats for Nerds window shows the snapshot.
-                if let self, launchStore?.isShowingDiagnostics(for: sessionID) == true {
-                    syncDiagnosticsSnapshot()
-                }
+            while Task.isCancelled == false, self?.refreshDiagnosticsIfShowing() == true {
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
         }
+    }
+
+    /// Returns false, ending the loop, once Stats for Nerds is closed.
+    private func refreshDiagnosticsIfShowing() -> Bool {
+        guard launchStore?.isShowingDiagnostics(for: sessionID) == true else {
+            diagnosticsTask = nil
+            return false
+        }
+        syncDiagnosticsSnapshot()
+        return true
     }
 
     private var isMetricsOverlayShowing: Bool {
@@ -508,6 +517,7 @@ final class SessionViewController: NSViewController {
     func openDiagnosticsWindow() {
         syncDiagnosticsSnapshot()
         launchStore?.openDiagnostics(for: sessionID)
+        startDiagnosticsLoopIfNeeded()
     }
 
     private func syncDiagnosticsSnapshot() {
