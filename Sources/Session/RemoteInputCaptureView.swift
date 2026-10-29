@@ -5,6 +5,8 @@ import RDPKit
 /// Destination for the input events the capture view emits. The live
 /// implementation is `RDPInputSession`; tests substitute a recorder.
 protocol RemoteInputEventSink: AnyObject {
+    /// Whether `send` delivers `.unicode` events; without them, text goes as the keys pressed.
+    var supportsUnicodeInput: Bool { get }
     func send(_ events: [RDPSlowPathInputEvent])
 }
 
@@ -38,6 +40,12 @@ final class RemoteInputCaptureNSView: NSView {
     /// A dead key went to the server as an Alt chord, so macOS composes the next key with its accent.
     private var followsChordedDeadKey = false
     private var commandKeyUpMonitor: Any?
+
+    /// A server that takes no Unicode input gets every key as its scancode, so its own layout
+    /// types the text, including what its dead keys compose; the Mac's text never goes.
+    private var isUnicodeInputSupported: Bool {
+        inputSession?.supportsUnicodeInput ?? true
+    }
 
     /// A view released while still in its window was never told to stop observing it. The
     /// notification observers go with the view, but the key-up monitor must be removed.
@@ -218,11 +226,11 @@ final class RemoteInputCaptureNSView: NSView {
                for: scancode,
                modifierFlags: event.modifierFlags,
                layout: keyboardLayout
-           )
+           ) || isUnicodeInputSupported == false
         {
             // A dead key's accent ahead of Return or Tab, unless that dead key went as a chord;
             // a repeat types it no more, and text never goes with Command or Control.
-            if event.isARepeat == false, isComposedByChordedDeadKey == false,
+            if isUnicodeInputSupported, event.isARepeat == false, isComposedByChordedDeadKey == false,
                event.modifierFlags.isDisjoint(with: [.command, .control]),
                let text = MacRDPKeyboardMapping.deadKeyText(aheadOf: characters)
             {
@@ -233,7 +241,7 @@ final class RemoteInputCaptureNSView: NSView {
             followsChordedDeadKey = characters?.isEmpty == true && isDeadKey(event.keyCode, event.modifierFlags)
             return
         }
-        guard event.modifierFlags.isDisjoint(with: [.command, .control]) else {
+        guard event.modifierFlags.isDisjoint(with: [.command, .control]), isUnicodeInputSupported else {
             return
         }
         // Right Option, if held back, typed this or started a dead key, so it is no Alt tap.
@@ -390,12 +398,14 @@ final class RemoteInputCaptureNSView: NSView {
         inputState.isScancodePressed(scancode) || deferredModifierKeys.isHeld(scancode)
     }
 
-    /// The events that press or release a modifier. A Windows key or right Alt not yet on the
-    /// server is held back by `deferredModifierKeys`, and any other press sends the held-back
-    /// Windows keys down first. Right Alt stays held back, since Shift-Option types characters
-    /// too, but releasing it is no longer a tap.
+    /// The events that press or release a modifier. A Windows key not yet on the server is held
+    /// back by `deferredModifierKeys`, and so is right Alt while the server takes Unicode input;
+    /// any other press sends the held-back Windows keys down first. Right Alt stays held back,
+    /// since Shift-Option types characters too, but releasing it is no longer a tap.
     private func modifierEvents(_ scancode: RDPKeyboardScancode, isDown: Bool) -> [RDPSlowPathInputEvent] {
-        if MacRDPDeferredModifierKeys.isDeferred(scancode), inputState.isScancodePressed(scancode) == false {
+        if MacRDPDeferredModifierKeys.isDeferred(scancode, holdsBackAlt: isUnicodeInputSupported),
+           inputState.isScancodePressed(scancode) == false
+        {
             if isDown {
                 deferredModifierKeys.press(scancode, inputState: inputState)
                 return []
@@ -535,8 +545,10 @@ struct MacRDPDeferredModifierKeys {
     private var heldScancodes: [RDPKeyboardScancode] = []
     private var isChordedElsewhere = false
 
-    static func isDeferred(_ scancode: RDPKeyboardScancode) -> Bool {
-        deferredScancodes.contains(scancode)
+    /// Right Alt is held back only while Option's characters can go as Unicode; a server that
+    /// takes none gets it at once, as left Option goes, so its layout types them (AltGr).
+    static func isDeferred(_ scancode: RDPKeyboardScancode, holdsBackAlt: Bool) -> Bool {
+        isWindowsKey(scancode) || (holdsBackAlt && deferredScancodes.contains(scancode))
     }
 
     private static func isWindowsKey(_ scancode: RDPKeyboardScancode) -> Bool {

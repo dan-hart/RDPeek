@@ -70,8 +70,11 @@ final class RemoteInputMappingTests: XCTestCase {
         let rightAlt = RDPKeyboardScancode(code: 0x38, isExtended: true)
         let nothingDown = RDPInputStateTracker()
         var heldKeys = MacRDPDeferredModifierKeys()
-        XCTAssertTrue(MacRDPDeferredModifierKeys.isDeferred(rightAlt))
-        XCTAssertFalse(MacRDPDeferredModifierKeys.isDeferred(RDPKeyboardScancode(code: 0x38)))
+        XCTAssertTrue(MacRDPDeferredModifierKeys.isDeferred(rightAlt, holdsBackAlt: true))
+        XCTAssertFalse(MacRDPDeferredModifierKeys.isDeferred(RDPKeyboardScancode(code: 0x38), holdsBackAlt: true))
+        // A server without Unicode input gets right Alt at once, but the Windows keys still wait.
+        XCTAssertFalse(MacRDPDeferredModifierKeys.isDeferred(rightAlt, holdsBackAlt: false))
+        XCTAssertTrue(MacRDPDeferredModifierKeys.isDeferred(leftWindows, holdsBackAlt: false))
 
         // Released alone: an Alt tap; ahead of another key: Alt down.
         var keyState = RDPInputStateTracker()

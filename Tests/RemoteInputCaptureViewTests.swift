@@ -1311,12 +1311,75 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    // MARK: - Servers without Unicode input
+
+    /// A server that takes no Unicode input gets the keys pressed, so its own layout types the
+    /// text: right Option goes as Alt at once (AltGr), and a key whose character would have gone
+    /// as Unicode, a dead key included, goes as its scancode with Shift as held. The Mac's
+    /// composed characters and accents never go, and no other key stands in for them.
+    func testWithoutUnicodeInputEveryKeyGoesAsItsScancode() {
+        let harness = makeHarness(supportsUnicodeInput: false)
+        harness.view.keyboardLayout = RDPKeyboardLayout(rawValue: 0x0000_0407)
+        harness.view.isDeadKey = { keyCode, _ in Int(keyCode) == kVK_ANSI_Equal }
+        harness.view.uncomposedOutput = { keyCode, _ in [kVK_ANSI_E: "e", kVK_Return: "\r"][Int(keyCode)] }
+        func press(_ keyCode: Int, _ characters: String, _ ignoring: String, _ flags: NSEvent.ModifierFlags = []) {
+            harness.view.keyDown(with: keyEvent(
+                .keyDown,
+                keyCode: UInt16(keyCode),
+                characters: characters,
+                charactersIgnoringModifiers: ignoring,
+                flags: flags
+            ))
+            harness.view.keyUp(with: keyEvent(
+                .keyUp,
+                keyCode: UInt16(keyCode),
+                characters: characters,
+                charactersIgnoringModifiers: ignoring,
+                flags: flags
+            ))
+        }
+        func scancodes(_ codes: UInt16...) -> [RDPSlowPathInputEvent] {
+            codes.flatMap { code in
+                [false, true].map { RDPSlowPathInputEvent.keyboard(scancode: RDPKeyboardScancode(code: code), isReleased: $0) }
+            }
+        }
+
+        // German Mac: Option-L types "@", which German Windows has on AltGr-Q.
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        press(kVK_ANSI_L, "@", "l", .rightOptionDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+        // The dead key "´", then "e", which the Mac composes to "é"; then "´" and Return ("´\r").
+        press(kVK_ANSI_Equal, "", "´")
+        press(kVK_ANSI_E, "é", "e")
+        press(kVK_ANSI_Equal, "", "´")
+        press(kVK_Return, "´\r", "\r")
+        // A layout with no table: every character would have gone as Unicode.
+        harness.view.keyboardLayout = RDPKeyboardLayout(rawValue: 0x1234_5678)
+        press(kVK_ANSI_Q, "q", "q")
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: .leftShiftDown))
+        press(kVK_ANSI_Q, "Q", "Q", .leftShiftDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: []))
+        // A key with no scancode sends nothing.
+        press(kVK_ANSI_KeypadClear, "\u{F739}", "\u{F739}")
+
+        XCTAssertEqual(
+            harness.recorder.events,
+            [.keyboard(scancode: .rightAlt, isReleased: false)]
+                + scancodes(0x26)
+                + [.keyboard(scancode: .rightAlt, isReleased: true)]
+                + scancodes(0x0D, 0x12, 0x0D, 0x1C, 0x10)
+                + [.keyboard(scancode: .leftShift, isReleased: false)]
+                + scancodes(0x10)
+                + [.keyboard(scancode: .leftShift, isReleased: true)]
+        )
+    }
+
     // MARK: - Helpers
 
     /// The view starts as first responder, as it is while the user controls
     /// the desktop; the synchronize that focus sends is cleared.
-    private func makeHarness(isFirstResponder: Bool = true) -> Harness {
-        let recorder = InputEventRecorder()
+    private func makeHarness(isFirstResponder: Bool = true, supportsUnicodeInput: Bool = true) -> Harness {
+        let recorder = InputEventRecorder(supportsUnicodeInput: supportsUnicodeInput)
         let view = RemoteInputCaptureNSView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
         view.rdpFrame = makeFrameMetadata(width: 200, height: 100)
         // Option-E, as on US, is the dead key these tests type, whatever the Mac's layout is.
@@ -1450,7 +1513,12 @@ final class RemoteInputCaptureViewTests: XCTestCase {
 
 @MainActor
 private final class InputEventRecorder: RemoteInputEventSink {
+    nonisolated let supportsUnicodeInput: Bool
     var events: [RDPSlowPathInputEvent] = []
+
+    init(supportsUnicodeInput: Bool = true) {
+        self.supportsUnicodeInput = supportsUnicodeInput
+    }
 
     nonisolated func send(_ events: [RDPSlowPathInputEvent]) {
         MainActor.assumeIsolated {
