@@ -1249,7 +1249,7 @@ final class RemoteInputCaptureViewTests: XCTestCase {
             keyCode == UInt16(kVK_ANSI_E) && modifierFlags.contains(.option)
         }
         // What US types with the keys these tests press after a dead key.
-        view.keyOutput = { keyCode, _ in
+        view.uncomposedOutput = { keyCode, _ in
             [kVK_ANSI_A: "a", kVK_Return: "\r"][Int(keyCode)]
         }
         let window = TestWindow(isKey: true)

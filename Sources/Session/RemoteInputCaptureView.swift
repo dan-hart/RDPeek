@@ -17,12 +17,10 @@ final class RemoteInputCaptureNSView: NSView {
     var rdpFrame: RDPFrameMetadata?
     /// The layout the session announced; it decides which keys can go as scancodes.
     var keyboardLayout = RDPKeyboardLayout.unitedStates
-    /// Whether the Mac keyboard layout makes the key, with these modifiers, a dead key. Tests
-    /// substitute a fixed layout.
-    var isDeadKey: @MainActor (UInt16, NSEvent.ModifierFlags) -> Bool = MacRDPDeadKeys.isDeadKeyInCurrentLayout
-    /// What the Mac keyboard layout types with the key and these modifiers when no dead key is
-    /// pending, or nil where it cannot tell. Tests substitute a fixed layout.
-    var keyOutput: @MainActor (UInt16, NSEvent.ModifierFlags) -> String? = MacRDPDeadKeys.outputInCurrentLayout
+    /// Whether the Mac's layout makes a key a dead key with these modifiers; tests replace it.
+    var isDeadKey: @MainActor (UInt16, NSEvent.ModifierFlags) -> Bool = MacRDPDeadKeys.isDeadKey(keyCode:modifierFlags:)
+    /// What the Mac's layout types for a key with no dead key pending; tests replace it.
+    var uncomposedOutput: @MainActor (UInt16, NSEvent.ModifierFlags) -> String? = MacRDPDeadKeys.output(keyCode:modifierFlags:)
     var inputSession: (any RemoteInputEventSink)? {
         willSet {
             if inputSession != nil, inputSession !== newValue {
@@ -213,7 +211,7 @@ final class RemoteInputCaptureNSView: NSView {
         // characters macOS composed with it. A key with no scancode keeps AppKit's: the layout
         // gives some, such as keypad Clear, a control character.
         let characters = isAfterChordedDeadKey && event.isARepeat == false && scancode != nil
-            ? keyOutput(event.keyCode, event.modifierFlags) ?? event.characters
+            ? uncomposedOutput(event.keyCode, event.modifierFlags) ?? event.characters
             : event.characters
         isAfterChordedDeadKey = false
         if isHeldAsScancode == false, isTypedWithRightOption(characters, event: event) {

@@ -170,21 +170,36 @@ final class RemoteInputMappingTests: XCTestCase {
         XCTAssertFalse(optionTypes("@", ignoringModifiers: "l", [.option, .control]))
     }
 
+    /// Apple's US layout, loaded by its ID so the answer does not depend on the Mac's own layout.
+    @MainActor
     func testDeadKeysFollowTheMacLayoutsKeyTranslation() throws {
-        // The US layout, looked up by its ID rather than the Mac's current one.
         let filter = [kTISPropertyInputSourceID as String: "com.apple.keylayout.US"] as CFDictionary
         let sources = try XCTUnwrap(TISCreateInputSourceList(filter, true)?.takeRetainedValue() as? [TISInputSource])
-        let deadKeys = try XCTUnwrap(sources.first.flatMap(MacRDPDeadKeys.init))
-        let eKey = UInt16(kVK_ANSI_E)
+        let us = try XCTUnwrap(sources.first)
+        func isDeadKey(_ keyCode: Int, _ modifierFlags: NSEvent.ModifierFlags) -> Bool? {
+            MacRDPDeadKeys.isDeadKey(keyCode: UInt16(keyCode), modifierFlags: modifierFlags, in: us)
+        }
+        func output(_ keyCode: Int, _ modifierFlags: NSEvent.ModifierFlags) -> String? {
+            MacRDPDeadKeys.output(keyCode: UInt16(keyCode), modifierFlags: modifierFlags, in: us)
+        }
         // Option-E starts "´"; Option-L types "¬", Shift-Option-E "´" itself and E "e".
-        XCTAssertTrue(deadKeys.isDeadKey(keyCode: eKey, modifierFlags: .option))
-        XCTAssertFalse(deadKeys.isDeadKey(keyCode: UInt16(kVK_ANSI_L), modifierFlags: .option))
-        XCTAssertFalse(deadKeys.isDeadKey(keyCode: eKey, modifierFlags: [.option, .shift]))
-        XCTAssertFalse(deadKeys.isDeadKey(keyCode: eKey, modifierFlags: []))
-        // With no dead key pending, A types "a", Shift-A "A" and Option-E nothing.
-        XCTAssertEqual(deadKeys.output(keyCode: UInt16(kVK_ANSI_A), modifierFlags: []), "a")
-        XCTAssertEqual(deadKeys.output(keyCode: UInt16(kVK_ANSI_A), modifierFlags: .shift), "A")
-        XCTAssertEqual(deadKeys.output(keyCode: eKey, modifierFlags: .option), "")
+        XCTAssertEqual(isDeadKey(kVK_ANSI_E, .option), true)
+        XCTAssertEqual(isDeadKey(kVK_ANSI_L, .option), false)
+        XCTAssertEqual(isDeadKey(kVK_ANSI_E, [.option, .shift]), false)
+        XCTAssertEqual(isDeadKey(kVK_ANSI_E, []), false)
+        // With no dead key pending, A types "a", Shift-A "A", Option-L "¬", Option-E nothing.
+        XCTAssertEqual(output(kVK_ANSI_A, []), "a")
+        XCTAssertEqual(output(kVK_ANSI_A, .shift), "A")
+        XCTAssertEqual(output(kVK_ANSI_L, .option), "¬")
+        XCTAssertEqual(output(kVK_ANSI_E, .option), "")
+        XCTAssertEqual(output(kVK_Return, []), "\r")
+
+        // The remembered answer for the Mac's own layout, asked twice, is that layout's.
+        let current = try XCTUnwrap(TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue())
+        let eKey = UInt16(kVK_ANSI_E)
+        let currentAnswer = MacRDPDeadKeys.isDeadKey(keyCode: eKey, modifierFlags: .option, in: current) ?? true
+        XCTAssertEqual(MacRDPDeadKeys.isDeadKey(keyCode: eKey, modifierFlags: .option), currentAnswer)
+        XCTAssertEqual(MacRDPDeadKeys.isDeadKey(keyCode: eKey, modifierFlags: .option), currentAnswer)
     }
 
     // MARK: - A dead key's accent ahead of a key it does not compose with
