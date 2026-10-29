@@ -96,13 +96,13 @@ func compactViewerMetricsSummary(
     var parts: [String] = []
     if isIdle(since: metrics.lastFrameDecodedAt) {
         parts.append("idle")
-    } else if let framesPerSecond = metrics.rollingFramesPerSecond ?? metrics.averageFramesPerSecond {
+    } else if let framesPerSecond = metrics.rollingFramesPerSecond(at: now) ?? metrics.averageFramesPerSecond {
         parts.append(metricFramesPerSecond(framesPerSecond))
     }
     if let lastDecodeMilliseconds = metrics.lastDecodeMilliseconds {
         parts.append("decode \(metricMilliseconds(lastDecodeMilliseconds))")
     }
-    if let wireMegabitsPerSecond = metrics.rollingWireMegabitsPerSecond {
+    if let wireMegabitsPerSecond = metrics.rollingWireMegabitsPerSecond(at: now) {
         parts.append(isIdle(since: lastWireReceiveAt) ? "rx idle" : "rx \(metricMegabitsPerSecond(wireMegabitsPerSecond))")
     }
     if let displayLinkFramesPerSecond = framePacing.displayLinkFramesPerSecond {
@@ -145,11 +145,11 @@ private struct PerformanceMetricsView: View {
                 DiagnosticRow("Display Max", metricHertz(framePacing.maximumRefreshRate))
                 DiagnosticRow("Display Link", metricFramesPerSecond(framePacing.displayLinkFramesPerSecond))
                 DiagnosticRow("Refresh Range", refreshRange(framePacing))
-                DiagnosticRow("Wire RX", metricMegabitsPerSecond(metrics.rollingWireMegabitsPerSecond))
+                DiagnosticRow("Wire RX", metricMegabitsPerSecond(metrics.rollingWireMegabitsPerSecond(at: Date())))
                 DiagnosticRow("Wire RX Average", metricMegabitsPerSecond(metrics.averageWireMegabitsPerSecond))
                 DiagnosticRow("Wire RX Total", metricBytes(metrics.wireByteCount))
                 DiagnosticRow("First Frame Latency", metricMilliseconds(metrics.firstFrameLatencyMilliseconds))
-                DiagnosticRow("Rolling FPS", metricFramesPerSecond(metrics.rollingFramesPerSecond))
+                DiagnosticRow("Rolling FPS", metricFramesPerSecond(metrics.rollingFramesPerSecond(at: Date())))
                 DiagnosticRow("Average FPS", metricFramesPerSecond(metrics.averageFramesPerSecond))
                 DiagnosticRow("Decode Last", metricMilliseconds(metrics.lastDecodeMilliseconds))
                 DiagnosticRow("Decode Average", metricMilliseconds(metrics.averageDecodeMilliseconds))
@@ -481,8 +481,8 @@ struct RemoteSessionDiagnosticsWindowContent: View {
         [
             statusText(snapshot),
             snapshot.report?.stage,
-            metricFramesPerSecond(snapshot.renderMetrics.rollingFramesPerSecond),
-            metricMegabitsPerSecond(snapshot.renderMetrics.rollingWireMegabitsPerSecond),
+            metricFramesPerSecond(snapshot.renderMetrics.rollingFramesPerSecond(at: Date())),
+            metricMegabitsPerSecond(snapshot.renderMetrics.rollingWireMegabitsPerSecond(at: Date())),
         ]
         .compactMap { $0 }
         .joined(separator: " - ")

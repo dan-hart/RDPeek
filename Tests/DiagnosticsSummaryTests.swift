@@ -15,7 +15,7 @@ final class ViewerMetricsSummaryTests: XCTestCase {
             now: start.addingTimeInterval(1.5)
         ))
 
-        XCTAssertEqual(summary, "10.0 fps  ·  decode 2.0 ms  ·  rx \(megabits(metrics))  ·  120 Hz")
+        XCTAssertEqual(summary, "6.7 fps  ·  decode 2.0 ms  ·  rx 0.73 Mbps  ·  120 Hz")
     }
 
     func testStillDesktopIsIdleRatherThanItsLastRates() throws {
@@ -40,7 +40,7 @@ final class ViewerMetricsSummaryTests: XCTestCase {
             now: now
         ))
 
-        XCTAssertEqual(summary, "idle  ·  decode 2.0 ms  ·  rx \(megabits(metrics))  ·  120 Hz")
+        XCTAssertEqual(summary, "idle  ·  decode 2.0 ms  ·  rx 0.28 Mbps  ·  120 Hz")
     }
 
     func testNothingReceivedShowsOnlyTheDisplay() {
@@ -80,10 +80,6 @@ final class ViewerMetricsSummaryTests: XCTestCase {
             metrics.recordWireReceive(RDPWireReceiveSample(byteCount: 12500, receivedAt: decodedAt))
         }
         return metrics
-    }
-
-    private func megabits(_ metrics: RDPRenderMetrics) -> String {
-        String(format: "%.1f Mbps", metrics.rollingWireMegabitsPerSecond ?? 0)
     }
 
     private func frameSnapshot() -> RDPGraphicsFrameSnapshot {

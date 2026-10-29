@@ -281,9 +281,9 @@ enum SessionAttemptOutcome: Equatable {
         retriesSpent: Int,
         reachedServer: Bool = false
     ) -> Self {
-        let connectionError = error as? RDPConnectionError
+        let failure = (error as? RDPConnectionError)?.failure
         if reachedServer {
-            let failure = switch connectionError {
+            let failedStep = switch failure {
             case .addressResolution?:
                 "this Mac could not find"
             case .connect?:
@@ -293,10 +293,10 @@ enum SessionAttemptOutcome: Equatable {
             }
             return .end(RDPSessionEndReason(
                 kind: .failed,
-                message: "“\(host)” passed the session on to a server \(failure)."
+                message: "“\(host)” passed the session on to a server \(failedStep)."
             ))
         }
-        switch connectionError {
+        switch failure {
         case .connect?:
             guard retriesSpent >= maximumUnreachableRetries else {
                 return .retry

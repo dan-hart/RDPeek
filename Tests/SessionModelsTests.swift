@@ -212,7 +212,7 @@ final class SessionModelsTests: XCTestCase {
     // MARK: - Attempt outcomes
 
     func testUnreachableServerIsRetriedWithinBudget() {
-        let error = RDPConnectionError.connect("No route to host")
+        let error = RDPConnectionError(.connect(error: RDPSocketError(errno: EHOSTUNREACH)), description: "No route to host")
 
         XCTAssertEqual(SessionAttemptOutcome.afterConnectionError(error, host: "winbox", retriesSpent: 0), .retry)
         XCTAssertEqual(SessionAttemptOutcome.afterConnectionError(error, host: "winbox", retriesSpent: 1), .retry)
@@ -232,15 +232,15 @@ final class SessionModelsTests: XCTestCase {
             SessionAttemptOutcome.afterConnectionError(error, host: "broker", retriesSpent: 0, reachedServer: true)
         }
 
-        XCTAssertEqual(outcome(.connect("Connection refused")), .end(RDPSessionEndReason(
+        XCTAssertEqual(outcome(RDPConnectionError(.connect(error: RDPSocketError(errno: ECONNREFUSED)), description: "Connection refused")), .end(RDPSessionEndReason(
             kind: .failed,
             message: "“broker” passed the session on to a server this Mac could not reach."
         )))
-        XCTAssertEqual(outcome(.addressResolution("nodename nor servname provided")), .end(RDPSessionEndReason(
+        XCTAssertEqual(outcome(RDPConnectionError(.addressResolution, description: "nodename nor servname provided")), .end(RDPSessionEndReason(
             kind: .failed,
             message: "“broker” passed the session on to a server this Mac could not find."
         )))
-        XCTAssertEqual(outcome(.receive("connection closed before receiving X224 Connection Confirm")), .end(
+        XCTAssertEqual(outcome(RDPConnectionError(.connectionClosed, description: "connection closed before receiving X224 Connection Confirm")), .end(
             RDPSessionEndReason(
                 kind: .failed,
                 message: "“broker” passed the session on to a server that did not answer as a Remote Desktop server."
@@ -250,7 +250,7 @@ final class SessionModelsTests: XCTestCase {
 
     func testUnresolvableHostIsNeverRetried() {
         let outcome = SessionAttemptOutcome.afterConnectionError(
-            RDPConnectionError.addressResolution("nodename nor servname provided"),
+            RDPConnectionError(.addressResolution, description: "nodename nor servname provided"),
             host: "winbx",
             retriesSpent: 0
         )
@@ -263,7 +263,7 @@ final class SessionModelsTests: XCTestCase {
 
     func testFailedConnectionRequestIsNotRetried() {
         let outcome = SessionAttemptOutcome.afterConnectionError(
-            RDPConnectionError.receive("connection closed before receiving X224 Connection Confirm"),
+            RDPConnectionError(.connectionClosed, description: "connection closed before receiving X224 Connection Confirm"),
             host: "winbox",
             retriesSpent: 0
         )
@@ -365,7 +365,10 @@ final class SessionModelsTests: XCTestCase {
     func testFailureReportForThrownErrorKeepsTheError() {
         let configuration = RDPConnectionConfiguration(host: "winbox")
         let report = RDPConnectionReport(
-            connectionError: RDPConnectionError.addressResolution("nodename nor servname provided"),
+            connectionError: RDPConnectionError(
+                .addressResolution,
+                description: "address resolution failed: nodename nor servname provided"
+            ),
             configuration: configuration
         )
 
@@ -377,13 +380,13 @@ final class SessionModelsTests: XCTestCase {
 
     func testFailureReportAfterARedirectDoesNotNameTheServerTypedInAsTarget() {
         let report = RDPConnectionReport(
-            connectionError: RDPConnectionError.connect("Connection refused"),
+            connectionError: RDPConnectionError(.connect(error: RDPSocketError(errno: ECONNREFUSED)), description: "Connection refused"),
             configuration: RDPConnectionConfiguration(host: "broker"),
             redirected: true
         )
 
         XCTAssertEqual(report.target, "unknown (passed on by broker:3389)")
-        XCTAssertEqual(report.error, "connect failed: Connection refused")
+        XCTAssertEqual(report.error, "Connection refused")
     }
 
     // MARK: - Logon names
