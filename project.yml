@@ -64,6 +64,7 @@ targets:
       - path: Tests
       - path: Sources/ConnectionCenter/DeviceListModel.swift
       - path: Sources/Session/FramePacing.swift
+      - path: Sources/Session/FramePresentationClockView.swift
       - path: Sources/Session/KeyboardLayouts.swift
       - path: Sources/Session/RemoteDesktopRenderer.swift
       - path: Sources/Session/RemoteInputCaptureView.swift

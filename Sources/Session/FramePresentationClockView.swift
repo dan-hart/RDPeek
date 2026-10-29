@@ -9,6 +9,9 @@ final class FramePresentationClockNSView: NSView {
     private var displayLink: CADisplayLink?
     private weak var observedWindow: NSWindow?
     private var isFrameRequested = false
+    /// Whether the link fired since it was made or the display changed;
+    /// until it has, its duration is unset or the previous display's.
+    private var hasFiredOnCurrentDisplay = false
     private var lastPublishedState = RDPFramePacingState()
 
     /// Called on the first display refresh after `requestFrame()`.
@@ -54,6 +57,12 @@ final class FramePresentationClockNSView: NSView {
         publishTimingIfChanged(force: true)
     }
 
+    // Whether the display link waits for a refresh. Only tests read it.
+    // swiftlint:disable:next unused_declaration
+    var isDisplayLinkRunning: Bool {
+        displayLink.map { $0.isPaused == false } ?? false
+    }
+
     /// Runs the display link until its next refresh calls `onFrame`.
     func requestFrame() {
         guard isFrameRequested == false else {
@@ -75,6 +84,7 @@ final class FramePresentationClockNSView: NSView {
         stopDisplayLink()
         stopObservingWindow()
         observedWindow = nextWindow
+        hasFiredOnCurrentDisplay = false
 
         guard let nextWindow else {
             publishTimingIfChanged(force: true)
@@ -126,7 +136,9 @@ final class FramePresentationClockNSView: NSView {
         observedWindow = nil
     }
 
-    @objc private func displayLinkFired(_ displayLink: CADisplayLink) {
+    /// Not private, so tests can stand in for a refresh.
+    @objc func displayLinkFired(_ displayLink: CADisplayLink) {
+        hasFiredOnCurrentDisplay = true
         isFrameRequested = false
         onFrame?(displayLink)
         // Pauses again unless onFrame requested another refresh.
@@ -134,17 +146,27 @@ final class FramePresentationClockNSView: NSView {
     }
 
     @objc private func displayDidChange(_: Notification) {
+        hasFiredOnCurrentDisplay = false
         publishTimingIfChanged(force: true)
     }
 
     /// The display link idles between frames, so the published pause state
     /// is whether the clock is enabled, not whether the link is running.
+    /// Its duration is read only once it fired on this display; until then
+    /// the screen's refresh rate, which the link runs at, stands in.
     private func publishTimingIfChanged(force: Bool = false) {
-        let nextState = RDPFramePacingState.current(
+        var nextState = RDPFramePacingState.current(
             window: observedWindow,
             displayLink: displayLink,
             isPaused: !isEnabled
         )
+        if hasFiredOnCurrentDisplay == false,
+           nextState.hasDisplayLink,
+           let framesPerSecond = nextState.maximumFramesPerSecond,
+           framesPerSecond > 0
+        {
+            nextState.displayLinkDuration = 1 / Double(framesPerSecond)
+        }
         guard force || nextState != lastPublishedState else {
             return
         }
