@@ -181,7 +181,12 @@ final class SessionClipboard {
         guard isSharingEnabled else {
             return
         }
+        // The remote copy is newer than what the Mac pasteboard holds now,
+        // so a local copy the poll has not published yet must not replace
+        // it; only one made from here on is newer.
+        cancelLocalFileRead()
         discardFileTransfer()
+        pasteboardChangeCount = pasteboard.changeCount
         do {
             let files = try descriptorList.remoteFileTransferFiles(
                 maximumTotalByteCount: UInt64(sessionMaximumLocalClipboardFileBytes)
@@ -521,8 +526,8 @@ final class SessionClipboard {
     }
 
     private func finishFileTransfer(_ transfer: SessionRemoteClipboardFileTransfer) {
-        // A local copy made since the last poll is newer than the download,
-        // so it stays.
+        // A local copy made since the remote one, which the poll has not
+        // seen yet, is newer than the download, so it stays.
         guard pasteboard.changeCount == pasteboardChangeCount else {
             try? FileManager.default.removeItem(at: transfer.downloadDirectory)
             fileTransfer = nil

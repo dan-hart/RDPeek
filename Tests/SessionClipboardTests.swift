@@ -187,7 +187,7 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(session.publishedTexts.last, "newer")
     }
 
-    func testRemoteTextOrSharingOffDropsAFileReadInFlight() async throws {
+    func testRemoteCopyOrSharingOffDropsAFileReadInFlight() async throws {
         let fileURL = try makeLocalFile(named: "notes.txt", contents: Data("hello".utf8))
         let session = RecordedClipboard()
         let clipboard = makeClipboard()
@@ -201,6 +201,16 @@ final class SessionClipboardTests: XCTestCase {
         await staleRead.value
         XCTAssertTrue(session.publishedFiles.isEmpty)
         XCTAssertEqual(pasteboard.string(forType: .string), "remote")
+
+        pasteboard.clearContents()
+        pasteboard.writeObjects([fileURL as NSURL])
+        clipboard.syncNow()
+        staleRead = try XCTUnwrap(clipboard.localFileRead)
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        await staleRead.value
+        XCTAssertTrue(session.publishedFiles.isEmpty)
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        XCTAssertEqual(copiedFileURL()?.lastPathComponent, "big.bin")
 
         pasteboard.clearContents()
         pasteboard.writeObjects([fileURL as NSURL])
@@ -405,6 +415,30 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(pasteboard.string(forType: .string), "remote")
         XCTAssertFalse(toasts.contains { $0.hasPrefix("Remote file copied") })
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: downloadRoot.path), [])
+    }
+
+    /// A local copy the poll has not published yet is older than a remote
+    /// file copy that follows it.
+    func testRemoteFileCopyWinsOverALocalCopyJustBeforeIt() throws {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        clipboard.attach(session)
+        session.publishedTexts.removeAll()
+
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        clipboard.poll()
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        let firstFileURL = try XCTUnwrap(copiedFileURL())
+
+        // The download finishes before the next poll.
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        XCTAssertNotEqual(try XCTUnwrap(copiedFileURL()), firstFileURL)
+        XCTAssertTrue(session.publishedTexts.isEmpty)
     }
 
     // MARK: - Download cleanup
