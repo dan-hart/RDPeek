@@ -35,7 +35,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: DerivedData/SourcePackages
-          key: spm-${{ runner.os }}-${{ hashFiles('project.yml') }}
+          key: spm-${{ runner.os }}-${{ hashFiles('RDPeek.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: spm-${{ runner.os }}-
 
       - name: Generate project
@@ -50,6 +50,7 @@ jobs:
             -destination 'platform=macOS' \
             -derivedDataPath DerivedData \
             -clonedSourcePackagesDirPath DerivedData/SourcePackages \
+            -onlyUsePackageVersionsFromResolvedFile \
             CODE_SIGNING_ALLOWED=NO \
             build
 
@@ -62,5 +63,6 @@ jobs:
             -destination 'platform=macOS' \
             -derivedDataPath DerivedData \
             -clonedSourcePackagesDirPath DerivedData/SourcePackages \
+            -onlyUsePackageVersionsFromResolvedFile \
             CODE_SIGNING_ALLOWED=NO \
             test
