@@ -261,11 +261,12 @@ final class SessionClipboard {
         }
 
         let nextChangeCount = pasteboard.changeCount
-        guard force || nextChangeCount != pasteboardChangeCount else {
+        let isNewCopy = nextChangeCount != pasteboardChangeCount
+        guard force || isNewCopy else {
             return
         }
 
-        if nextChangeCount != pasteboardChangeCount {
+        if isNewCopy {
             // A newer local copy replaces a remote one still downloading,
             // and one already on the pasteboard.
             discardFileTransfer()
@@ -286,17 +287,22 @@ final class SessionClipboard {
                 guard Task.isCancelled == false else {
                     return
                 }
-                self?.publish(payload, announce: announce)
+                self?.publish(payload, announce: announce, isNewCopy: isNewCopy)
             }
             return
         }
-        publish(localTextPayload(), announce: announce)
+        publish(localTextPayload(), announce: announce, isNewCopy: isNewCopy)
     }
 
-    private func publish(_ payload: SessionLocalClipboardPayload, announce: Bool) {
+    /// Reports files shared, or a copy that could not be, for a new local
+    /// copy or a sync the user asked for; `announce` also reports synced
+    /// text and an empty pasteboard. A publish on connect or when sharing
+    /// turns on stays quiet about what the pasteboard already held.
+    private func publish(_ payload: SessionLocalClipboardPayload, announce: Bool, isNewCopy: Bool) {
         guard isSharingEnabled, let session else {
             return
         }
+        let reportsResult = announce || isNewCopy
         switch payload {
         case let .text(text):
             session.publishLocalUnicodeText(text)
@@ -305,8 +311,10 @@ final class SessionClipboard {
             }
         case let .files(files):
             session.publishLocalFiles(files)
-            let message = files.count == 1 ? "1 file shared to remote" : "\(files.count) files shared to remote"
-            onToast(message, "doc.on.clipboard.fill")
+            if reportsResult {
+                let message = files.count == 1 ? "1 file shared to remote" : "\(files.count) files shared to remote"
+                onToast(message, "doc.on.clipboard.fill")
+            }
         case .empty:
             session.publishLocalUnicodeText(nil)
             if announce {
@@ -314,9 +322,13 @@ final class SessionClipboard {
             }
         case let .unsupported(message):
             session.publishLocalUnicodeText(nil)
-            onToast(message, "exclamationmark.triangle")
+            if reportsResult {
+                onToast(message, "exclamationmark.triangle")
+            }
         case let .ignored(message):
-            onToast(message, "exclamationmark.triangle")
+            if reportsResult {
+                onToast(message, "exclamationmark.triangle")
+            }
         }
     }
 

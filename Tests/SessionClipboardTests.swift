@@ -187,6 +187,47 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(session.publishedTexts.last, "newer")
     }
 
+    /// Connecting or turning sharing on publishes what the pasteboard
+    /// already held without a word; a new copy or Sync Now reports it.
+    func testOnlyANewCopyOrSyncNowReportsSharedFiles() async throws {
+        let fileURL = try makeLocalFile(named: "notes.txt", contents: Data("hello".utf8))
+        pasteboard.clearContents()
+        pasteboard.writeObjects([fileURL as NSURL])
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard(isSharingEnabled: false)
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+
+        clipboard.attach(session)
+        clipboard.setSharingEnabled(true)
+        try await XCTUnwrap(clipboard.localFileRead).value
+        clipboard.detach()
+        clipboard.attach(session)
+        try await XCTUnwrap(clipboard.localFileRead).value
+        clipboard.setSharingEnabled(false)
+        clipboard.startTemporarySharing()
+        try await XCTUnwrap(clipboard.localFileRead).value
+        XCTAssertEqual(session.publishedFiles.count, 3)
+        XCTAssertEqual(toasts, ["Sharing clipboard for 30 seconds"])
+
+        clipboard.syncNow()
+        try await XCTUnwrap(clipboard.localFileRead).value
+        XCTAssertEqual(toasts.last, "1 file shared to remote")
+
+        // The same holds for a copy that cannot be shared.
+        toasts.removeAll()
+        pasteboard.clearContents()
+        pasteboard.writeObjects([fileURL.deletingLastPathComponent() as NSURL])
+        clipboard.poll()
+        try await XCTUnwrap(clipboard.localFileRead).value
+        XCTAssertEqual(toasts, ["Local clipboard has non-file items; remote clipboard cleared"])
+        clipboard.detach()
+        clipboard.attach(session)
+        try await XCTUnwrap(clipboard.localFileRead).value
+        XCTAssertEqual(toasts.count, 1)
+        XCTAssertEqual(session.publishedTexts.last, .some(nil))
+    }
+
     func testRemoteCopyOrSharingOffDropsAFileReadInFlight() async throws {
         let fileURL = try makeLocalFile(named: "notes.txt", contents: Data("hello".utf8))
         let session = RecordedClipboard()
