@@ -93,7 +93,14 @@ final class SessionClipboard {
     func setSharingEnabled(_ enabled: Bool) {
         isSharingEnabled = enabled
         temporarySharingExpiresAt = nil
-        applySharing(enabled)
+        guard enabled else {
+            discardFileTransfer()
+            cancelLocalFileRead()
+            session?.publishLocalUnicodeText(nil)
+            pasteboardChangeCount = pasteboard.changeCount
+            return
+        }
+        publishPasteboardIfChanged(force: true)
     }
 
     func syncNow() {
@@ -113,13 +120,10 @@ final class SessionClipboard {
     /// Called once a second: ends an expired temporary share and publishes
     /// local pasteboard changes.
     func poll(now: Date = Date()) {
+        // A temporary share is always one that turned sharing on.
         if let temporarySharingExpiresAt, now >= temporarySharingExpiresAt {
-            self.temporarySharingExpiresAt = nil
-            if isSharingEnabled {
-                isSharingEnabled = false
-                applySharing(false)
-                onToast("Clipboard sharing ended", "doc.on.clipboard")
-            }
+            setSharingEnabled(false)
+            onToast("Clipboard sharing ended", "doc.on.clipboard")
         }
         if canSync {
             publishPasteboardIfChanged()
@@ -205,18 +209,6 @@ final class SessionClipboard {
     }
 
     // MARK: - Local pasteboard
-
-    private func applySharing(_ enabled: Bool) {
-        guard enabled else {
-            temporarySharingExpiresAt = nil
-            discardFileTransfer()
-            cancelLocalFileRead()
-            session?.publishLocalUnicodeText(nil)
-            pasteboardChangeCount = pasteboard.changeCount
-            return
-        }
-        publishPasteboardIfChanged(force: true)
-    }
 
     private func publishPasteboardIfChanged(force: Bool = false) {
         guard isSharingEnabled, session != nil else {
@@ -466,13 +458,8 @@ final class SessionClipboard {
         }
     }
 
-    private func failFileTransfer(_ transfer: SessionRemoteClipboardFileTransfer?, message: String) {
-        if let directory = transfer?.downloadDirectory {
-            try? FileManager.default.removeItem(at: directory)
-            if downloadDirectory == directory {
-                downloadDirectory = nil
-            }
-        }
+    private func failFileTransfer(_ transfer: SessionRemoteClipboardFileTransfer, message: String) {
+        removeDownloadDirectory(transfer.downloadDirectory)
         fileTransfer = nil
         onToast(message, "exclamationmark.triangle")
     }
@@ -491,14 +478,18 @@ final class SessionClipboard {
     }
 
     private func discardFileTransfer() {
-        guard let transfer = fileTransfer else {
+        guard let fileTransfer else {
             return
         }
-        try? FileManager.default.removeItem(at: transfer.downloadDirectory)
-        if downloadDirectory == transfer.downloadDirectory {
+        removeDownloadDirectory(fileTransfer.downloadDirectory)
+        self.fileTransfer = nil
+    }
+
+    private func removeDownloadDirectory(_ directory: URL) {
+        try? FileManager.default.removeItem(at: directory)
+        if downloadDirectory == directory {
             downloadDirectory = nil
         }
-        fileTransfer = nil
     }
 
     /// Replaces the previous download directory; files from the last completed
@@ -531,7 +522,7 @@ final class SessionClipboard {
     }
 }
 
-private enum SessionLocalClipboardPayload: Equatable, Sendable {
+private enum SessionLocalClipboardPayload: Sendable {
     case text(String)
     case files([RDPClipboardLocalFile])
     case empty
@@ -539,7 +530,7 @@ private enum SessionLocalClipboardPayload: Equatable, Sendable {
     case ignored(String)
 }
 
-private struct SessionRemoteClipboardFileTransfer: Equatable {
+private struct SessionRemoteClipboardFileTransfer {
     var files: [RDPClipboardRemoteFileTransferFile]
     var currentFileOffset = 0
     var streamID: UInt32
