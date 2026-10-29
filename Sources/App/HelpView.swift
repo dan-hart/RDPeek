@@ -47,6 +47,13 @@ struct HelpView: View {
                             "Session menu in the menu bar instead."
                     )
                     HelpBody(
+                        "Clipboard sharing can be turned on, or shared for 30 seconds, " +
+                            "at any time in a session. To allow that, RDPeek always joins " +
+                            "the remote clipboard, so a Windows PC empties its clipboard " +
+                            "when you connect, even with sharing off. Nothing is copied " +
+                            "either way until you share."
+                    )
+                    HelpBody(
                         "A certificate this Mac does not trust stops the connection " +
                             "before any credential is sent. Trust and Connect pins that " +
                             "certificate for that host and port; a different certificate " +

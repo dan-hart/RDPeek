@@ -73,7 +73,9 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
 
 - Clipboard sharing can be turned on during a session for PCs that
   start with it off, and Share for 30 Seconds is offered while sharing
-  is off and no longer turns sharing off when it ends.
+  is off and no longer turns sharing off when it ends. To allow this,
+  RDPeek always joins the remote clipboard, which makes Windows empty
+  its clipboard at connect even with sharing off.
 - Copied files are read off the main thread, so a large or iCloud file
   no longer freezes the window.
 - Remote files download in 1 MiB ranges, so pasting large files from

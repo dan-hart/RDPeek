@@ -712,7 +712,10 @@ final class SessionViewController: NSViewController {
             desktopSize: desktopSize,
             // Always join the clipboard channel: SessionClipboard keeps both
             // directions shut while sharing is off, so turning it on (or a
-            // temporary share) works without reconnecting.
+            // temporary share) works without reconnecting. The cost: joining
+            // sends the mandatory empty Format List, and Windows empties its
+            // clipboard for it (checked on Windows 11; gnome-remote-desktop
+            // keeps its own).
             clipboardEnabled: true,
             audioPlaybackEnabled: audioPlaybackEnabled,
             // RDPeek never exposes a graphics-profile picker: automatic lets
