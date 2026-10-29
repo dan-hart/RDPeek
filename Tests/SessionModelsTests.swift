@@ -95,33 +95,25 @@ final class SessionModelsTests: XCTestCase {
 
     // MARK: - End reasons
 
-    func testUnclassifiedFailureKeepsReportedError() {
-        let reason = RDPSessionEndReason(
-            report: makeReport(stage: "mcs-channel-connection", error: "Negotiation failed"),
-            presentedFrames: false
-        )
+    func testUntypedFailureKeepsReportedError() {
+        let reason = endReason(makeReport(stage: "mcs-channel-connection", error: "Negotiation failed"))
 
-        XCTAssertEqual(reason.kind, .failed)
-        XCTAssertEqual(reason.message, "Negotiation failed")
+        XCTAssertEqual(reason, RDPSessionEndReason(kind: .failed, message: "Negotiation failed"))
     }
 
     func testCleanEndAfterFramesUsesTerminationSentence() {
         // A legacy fast-path session never opens RDPGFX, yet showed frames.
-        let reason = RDPSessionEndReason(
-            report: makeReport(nextStage: "rdp-session-ended", errorInfo: 0x0000_000C),
+        let reason = endReason(
+            makeReport(nextStage: "rdp-session-ended", errorInfo: 0x0000_000C),
             presentedFrames: true
         )
 
         XCTAssertEqual(reason, RDPSessionEndReason(kind: .ended, message: "You signed out of the remote computer."))
     }
 
-    func testTerminationAfterFramesEndsRatherThanFails() {
-        // RDPKit reports any termination but logoff and user disconnects as
-        // a failure, even after the desktop showed.
-        let reason = RDPSessionEndReason(
-            report: makeReport(errorInfo: 0x0000_0005, error: "server ended the session with ERRINFO_0x00000005"),
-            presentedFrames: true
-        )
+    func testNormalTerminationAfterFramesEnds() {
+        // RDPKit reports another connection taking over as a normal end.
+        let reason = endReason(makeReport(nextStage: "rdp-session-ended", errorInfo: 0x0000_0005), presentedFrames: true)
 
         XCTAssertEqual(reason, RDPSessionEndReason(
             kind: .ended,
@@ -129,23 +121,34 @@ final class SessionModelsTests: XCTestCase {
         ))
     }
 
-    func testLostConnectionAfterFramesEndsRatherThanFails() {
-        let reason = RDPSessionEndReason(
-            report: makeReport(error: "receive failed: connection lost: Connection reset by peer"),
+    func testFailedTerminationAfterFramesEndsRatherThanFails() {
+        let reason = endReason(
+            makeReport(failure: .serverTermination(termination: RDPRemoteTermination(errorInfo: 0x0000_0010))),
             presentedFrames: true
         )
 
         XCTAssertEqual(reason, RDPSessionEndReason(
             kind: .ended,
-            message: "The connection to the remote computer was lost."
+            message: "The session ended because of an error on the remote computer."
         ))
     }
 
+    func testLostConnectionAfterFramesEndsRatherThanFails() {
+        for failure in [RDPConnectionFailure.connectionLost, .connectionClosed, .timedOut] {
+            let reason = endReason(makeReport(failure: failure), presentedFrames: true)
+
+            XCTAssertEqual(reason, RDPSessionEndReason(
+                kind: .ended,
+                message: "The connection to the remote computer was lost."
+            ))
+        }
+    }
+
     func testTerminationBeforeFramesFailsWithPlainSentence() {
-        let reason = RDPSessionEndReason(
-            report: makeReport(errorInfo: 0x0000_0009, error: "server ended the session with ERRINFO_0x00000009"),
-            presentedFrames: false
-        )
+        let reason = endReason(makeReport(
+            stage: "rdp-licensing",
+            failure: .serverTermination(termination: RDPRemoteTermination(errorInfo: 0x0000_0009))
+        ))
 
         XCTAssertEqual(reason, RDPSessionEndReason(
             kind: .failed,
@@ -153,20 +156,32 @@ final class SessionModelsTests: XCTestCase {
         ))
     }
 
-    func testLicensingTerminationIsPlain() {
-        let reason = RDPSessionEndReason(
-            report: makeReport(errorInfo: 0x0000_010A, error: "server ended the session with ERRINFO_0x0000010a"),
-            presentedFrames: false
+    func testServerShutdownAndRestartAreNamed() {
+        XCTAssertEqual(
+            endReason(makeReport(errorInfo: 0x0000_0019), presentedFrames: true).message,
+            "The remote computer is shutting down."
         )
+        XCTAssertEqual(
+            endReason(makeReport(errorInfo: 0x0000_001A), presentedFrames: true).message,
+            "The remote computer is restarting."
+        )
+    }
 
-        XCTAssertEqual(reason.message, "The remote computer could not license this connection.")
+    func testLicensingFailuresArePlain() {
+        let licensingMessage = "The remote computer could not license this connection."
+
+        XCTAssertEqual(
+            endReason(makeReport(failure: .serverTermination(termination: RDPRemoteTermination(errorInfo: 0x0000_010A)))),
+            RDPSessionEndReason(kind: .failed, message: licensingMessage)
+        )
+        XCTAssertEqual(
+            endReason(makeReport(stage: "rdp-licensing", failure: .licensing(errorCode: 0x0000_0008))),
+            RDPSessionEndReason(kind: .failed, message: licensingMessage)
+        )
     }
 
     func testCleanEndBeforeFramesSaysSo() {
-        let reason = RDPSessionEndReason(
-            report: makeReport(nextStage: "rdp-session-ended"),
-            presentedFrames: false
-        )
+        let reason = endReason(makeReport(nextStage: "rdp-session-ended"))
 
         XCTAssertEqual(reason, RDPSessionEndReason(
             kind: .ended,
@@ -175,85 +190,152 @@ final class SessionModelsTests: XCTestCase {
     }
 
     func testNegotiationFailureCodesArePlain() {
-        func message(failureCode: UInt32) -> String {
-            RDPSessionEndReason(
-                report: makeReport(
-                    stage: "x224-rdp-negotiation",
-                    failureCode: failureCode,
-                    error: "RDP negotiation failed with code 0x\(String(failureCode, radix: 16))"
-                ),
-                presentedFrames: false
-            ).message
+        func message(_ code: RDPNegotiationFailureCode) -> String {
+            endReason(makeReport(stage: "x224-rdp-negotiation", failure: .negotiation(code: code))).message
         }
 
         XCTAssertEqual(
-            message(failureCode: 2),
+            message(.sslNotAllowedByServer),
             "The remote computer only allows Standard RDP Security, which RDPeek does not support."
         )
-        XCTAssertEqual(message(failureCode: 3), "The remote computer has no certificate for a secure connection.")
+        XCTAssertEqual(message(.sslCertificateNotOnServer), "The remote computer has no certificate for a secure connection.")
         XCTAssertEqual(
-            message(failureCode: 6),
-            "The remote computer requires Early User Authorization, which RDPeek does not support."
+            message(.sslWithUserAuthRequiredByServer),
+            "The remote computer requires a client certificate, which RDPeek does not support."
         )
+        XCTAssertEqual(message(.inconsistentFlags), "The remote computer refused the security RDPeek offered.")
     }
 
     func testAccountStateIsPlain() {
-        let reason = RDPSessionEndReason(
-            report: makeReport(
-                stage: "credssp",
-                error: "CredSSP server returned STATUS_ACCOUNT_LOCKED_OUT (0xc0000234)"
-            ),
-            presentedFrames: false
+        XCTAssertEqual(
+            endReason(makeReport(stage: "credssp", failure: .credSSP(status: .accountLockedOut))),
+            RDPSessionEndReason(kind: .failed, message: "This account is locked out.")
         )
+        XCTAssertEqual(
+            endReason(makeReport(stage: "credssp", failure: .credSSP(status: .passwordMustChange))).message,
+            "The password for this account has expired and must be changed."
+        )
+        XCTAssertEqual(
+            endReason(makeReport(stage: "credssp", failure: .credSSP(status: RDPLogonStatus(rawValue: 0xC000_0123)))).message,
+            "The remote computer rejected the sign-in (status 0xc0000123)."
+        )
+    }
 
-        XCTAssertEqual(reason, RDPSessionEndReason(kind: .failed, message: "This account is locked out."))
+    func testConnectFailuresSayWhyByTheirSocketError() {
+        func message(errno: Int32?) -> String {
+            endReason(makeReport(stage: "x224-rdp-negotiation", failure: .connect(error: RDPSocketError(errno: errno)))).message
+        }
+
+        XCTAssertEqual(
+            message(errno: ECONNREFUSED),
+            "“winbox” refused the connection. Check that Remote Desktop is on and the port is right."
+        )
+        XCTAssertEqual(
+            message(errno: EHOSTUNREACH),
+            "Could not reach “winbox”. Check that it is on. If it is on your local network, "
+                + "allow RDPeek in System Settings → Privacy & Security → Local Network."
+        )
+        XCTAssertEqual(
+            message(errno: ENETUNREACH),
+            "This Mac has no route to “winbox”. Check your network connection or VPN."
+        )
+        XCTAssertEqual(
+            message(errno: ETIMEDOUT),
+            "“winbox” did not answer. Check the host name and port, and that no firewall blocks the connection."
+        )
+        XCTAssertEqual(
+            message(errno: EPERM),
+            "macOS did not allow the connection to “winbox”. A firewall or network filter may block it."
+        )
+        XCTAssertEqual(
+            message(errno: nil),
+            "Could not reach “winbox”. Check that it is on and accepts Remote Desktop connections."
+        )
+    }
+
+    func testFailuresOnThisMacDoNotBlameTheServer() {
+        XCTAssertEqual(
+            endReason(makeReport(stage: "rdp-client-info", failure: .invalidConfiguration)).message,
+            "RDPeek cannot send these settings to the remote computer. "
+                + "Check that the user name, domain and password are not too long."
+        )
+        XCTAssertEqual(
+            endReason(makeReport(stage: "credssp", failure: .clientFailure)).message,
+            "RDPeek failed on this Mac; the remote computer was not at fault."
+        )
     }
 
     // MARK: - Attempt outcomes
 
     func testUnreachableServerIsRetriedWithinBudget() {
-        let error = RDPConnectionError(.connect(error: RDPSocketError(errno: EHOSTUNREACH)), description: "No route to host")
+        let report = makeReport(stage: "x224-rdp-negotiation", failure: .connect(error: RDPSocketError(errno: EHOSTUNREACH)))
 
-        XCTAssertEqual(SessionAttemptOutcome.afterConnectionError(error, host: "winbox", retriesSpent: 0), .retry)
-        XCTAssertEqual(SessionAttemptOutcome.afterConnectionError(error, host: "winbox", retriesSpent: 1), .retry)
+        XCTAssertEqual(outcome(after: report, unreachableRetriesSpent: 0), .retry(.networkHiccup))
+        XCTAssertEqual(outcome(after: report, unreachableRetriesSpent: 1), .retry(.networkHiccup))
         XCTAssertEqual(
-            SessionAttemptOutcome.afterConnectionError(error, host: "winbox", retriesSpent: 2),
+            outcome(after: report, unreachableRetriesSpent: 2),
             .end(RDPSessionEndReason(
                 kind: .failed,
-                message: "Could not reach “winbox”. Check that it is on and accepts Remote Desktop connections."
+                message: "Could not reach “winbox”. Check that it is on. If it is on your local network, "
+                    + "allow RDPeek in System Settings → Privacy & Security → Local Network."
             ))
         )
+    }
+
+    func testOnlyConnectFailuresThatCanPassAreRetried() {
+        func outcome(errno: Int32?) -> SessionAttemptOutcome {
+            self.outcome(after: makeReport(
+                stage: "x224-rdp-negotiation",
+                failure: .connect(error: RDPSocketError(errno: errno))
+            ))
+        }
+
+        for errno in [ENETUNREACH, ETIMEDOUT, nil] {
+            XCTAssertEqual(outcome(errno: errno), .retry(.networkHiccup), "\(String(describing: errno))")
+        }
+        // Nothing listens on the port, or macOS refused the connection:
+        // connecting again a moment later does not change that.
+        for errno in [ECONNREFUSED, EPERM, EACCES] {
+            guard case .end = outcome(errno: errno) else {
+                return XCTFail("errno \(errno) was retried")
+            }
+        }
     }
 
     func testRedirectTargetFailuresBlameThePassingServerAndAreNotRetried() {
         // After a Server Redirection the server typed in took the sign-in,
         // so it is neither blamed nor retried, whatever the target did.
-        func outcome(_ error: RDPConnectionError) -> SessionAttemptOutcome {
-            SessionAttemptOutcome.afterConnectionError(error, host: "broker", retriesSpent: 0, reachedServer: true)
+        func outcome(_ failure: RDPConnectionFailure, target: String = "host2:3389") -> SessionAttemptOutcome {
+            SessionAttemptOutcome.after(
+                makeReport(stage: "x224-rdp-negotiation", target: target, redirectionDepth: 1, failure: failure),
+                host: "broker",
+                presentedFrames: false
+            )
         }
 
-        XCTAssertEqual(outcome(RDPConnectionError(.connect(error: RDPSocketError(errno: ECONNREFUSED)), description: "Connection refused")), .end(RDPSessionEndReason(
+        XCTAssertEqual(outcome(.connect(error: RDPSocketError(errno: EHOSTUNREACH))), .end(RDPSessionEndReason(
             kind: .failed,
-            message: "“broker” passed the session on to a server this Mac could not reach."
+            message: "“broker” passed the session on to “host2”, which this Mac could not reach."
         )))
-        XCTAssertEqual(outcome(RDPConnectionError(.addressResolution, description: "nodename nor servname provided")), .end(RDPSessionEndReason(
+        XCTAssertEqual(outcome(.addressResolution), .end(RDPSessionEndReason(
             kind: .failed,
-            message: "“broker” passed the session on to a server this Mac could not find."
+            message: "“broker” passed the session on to “host2”, which this Mac could not find."
         )))
-        XCTAssertEqual(outcome(RDPConnectionError(.connectionClosed, description: "connection closed before receiving X224 Connection Confirm")), .end(
+        XCTAssertEqual(outcome(.connectionClosed, target: "host2:3390"), .end(RDPSessionEndReason(
+            kind: .failed,
+            message: "“broker” passed the session on to “host2:3390”, which did not answer as a Remote Desktop server."
+        )))
+        // A redirection by routing token alone keeps the address typed in.
+        XCTAssertEqual(outcome(.connect(error: RDPSocketError(errno: ECONNREFUSED)), target: "broker:3389"), .end(
             RDPSessionEndReason(
                 kind: .failed,
-                message: "“broker” passed the session on to a server that did not answer as a Remote Desktop server."
+                message: "“broker” passed the session on to a server that this Mac could not reach."
             )
         ))
     }
 
     func testUnresolvableHostIsNeverRetried() {
-        let outcome = SessionAttemptOutcome.afterConnectionError(
-            RDPConnectionError(.addressResolution, description: "nodename nor servname provided"),
-            host: "winbx",
-            retriesSpent: 0
-        )
+        let outcome = outcome(after: makeReport(stage: "x224-rdp-negotiation", failure: .addressResolution), host: "winbx")
 
         XCTAssertEqual(outcome, .end(RDPSessionEndReason(
             kind: .failed,
@@ -262,20 +344,18 @@ final class SessionModelsTests: XCTestCase {
     }
 
     func testFailedConnectionRequestIsNotRetried() {
-        let outcome = SessionAttemptOutcome.afterConnectionError(
-            RDPConnectionError(.connectionClosed, description: "connection closed before receiving X224 Connection Confirm"),
-            host: "winbox",
-            retriesSpent: 0
-        )
+        for failure in [RDPConnectionFailure.connectionClosed, .connectionLost, .timedOut, .protocolViolation] {
+            let outcome = outcome(after: makeReport(stage: "x224-rdp-negotiation", failure: failure))
 
-        XCTAssertEqual(outcome, .end(RDPSessionEndReason(
-            kind: .failed,
-            message: "“winbox” did not answer as a Remote Desktop server."
-        )))
+            XCTAssertEqual(outcome, .end(RDPSessionEndReason(
+                kind: .failed,
+                message: "“winbox” did not answer as a Remote Desktop server."
+            )))
+        }
     }
 
     func testKeyUsageFailureFallsBackToLegacyRSAOnce() {
-        let report = makeReport(stage: "tls-handshake", error: keyUsageError)
+        let report = makeReport(stage: "tls-handshake", failure: .tlsKeyUsageIncorrect)
 
         XCTAssertEqual(outcome(after: report), .retryWithLegacyRSAKeyExchange)
         XCTAssertEqual(
@@ -288,30 +368,30 @@ final class SessionModelsTests: XCTestCase {
     }
 
     func testKeyUsageFailureAfterARedirectIsNotRetriedWithLegacyRSA() {
-        // The certificate came from the server typed in, which took the
-        // sign-in and passed the session on: retrying it with RSA key
-        // exchange would send it the credentials without forward secrecy.
-        let report = makeReport(stage: "tls-handshake", error: keyUsageError)
+        // The server typed in took the sign-in and passed the session on:
+        // retrying it with RSA key exchange would send it the credentials
+        // without forward secrecy.
+        let report = makeReport(
+            stage: "tls-handshake",
+            target: "host2:3389",
+            redirectionDepth: 1,
+            failure: .tlsKeyUsageIncorrect
+        )
 
         XCTAssertEqual(
-            outcome(after: report, reachedServer: true),
+            outcome(after: report),
             .end(RDPSessionEndReason(
                 kind: .failed,
-                message: "“winbox” passed the session on to a server this Mac could not set up a secure connection with."
+                message: "“winbox” passed the session on to “host2”, which this Mac could not set up a secure connection with."
             ))
         )
     }
 
     func testWrongCredentialsAskToSignInAgain() {
-        for status in ["STATUS_LOGON_FAILURE (0xc000006d)", "STATUS_WRONG_PASSWORD (0xc000006a)",
-                       "STATUS_NO_SUCH_USER (0xc0000064)"]
-        {
+        for status in [RDPLogonStatus.logonFailure, .wrongPassword, .noSuchUser] {
             // A rejection the server sends after the credentials can
             // surface in the stage after CredSSP.
-            let report = makeReport(
-                stage: "mcs-channel-connection",
-                error: "CredSSP server returned \(status)"
-            )
+            let report = makeReport(stage: "mcs-channel-connection", failure: .credSSP(status: status))
 
             XCTAssertEqual(
                 outcome(after: report),
@@ -321,84 +401,68 @@ final class SessionModelsTests: XCTestCase {
     }
 
     func testConnectionClosedDuringSignInAsksToSignInAgain() {
-        let report = makeReport(
-            stage: "credssp",
-            error: "receive failed: connection closed before receiving CredSSP response"
-        )
+        for failure in [RDPConnectionFailure.connectionClosed, .connectionLost] {
+            let report = makeReport(stage: "credssp", failure: failure)
 
-        guard case .promptForCredentials = outcome(after: report) else {
-            return XCTFail("Expected the sign-in prompt")
+            XCTAssertEqual(outcome(after: report), .promptForCredentials(
+                message: "The remote computer did not accept the sign-in. Check the user name and password."
+            ))
         }
     }
 
     func testConnectingWithoutCredentialsToASignInServerAsksForThem() {
-        // RDPKit's error when the server picks CredSSP and the user left
+        // The server picked CredSSP, or asked for it, and the user left
         // every sign-in field empty; nothing was sent.
-        let report = makeReport(stage: "credssp", error: "CredSSP requires credentials")
-
-        XCTAssertEqual(
-            outcome(after: report),
-            .promptForCredentials(message: "The remote computer requires a user name and password.")
-        )
-    }
-
-    func testSignInTimeoutOrNTLMErrorEndsInsteadOfAskingToSignIn() {
-        for error in [
-            "receive failed: CredSSP response timed out after 10 seconds",
-            "CredSSP NTLM failed: challenge message was truncated",
+        for report in [
+            makeReport(stage: "credssp", failure: .credentialsRequired),
+            makeReport(stage: "x224-rdp-negotiation", failure: .negotiation(code: .hybridRequiredByServer)),
         ] {
-            let report = makeReport(stage: "credssp", error: error)
-
-            XCTAssertEqual(outcome(after: report), .end(RDPSessionEndReason(kind: .failed, message: error)))
+            XCTAssertEqual(
+                outcome(after: report),
+                .promptForCredentials(message: "The remote computer requires a user name and password.")
+            )
         }
     }
 
-    func testCredSSPProtocolFailureEndsInsteadOfAskingToSignIn() {
-        let report = makeReport(stage: "credssp", error: "CredSSP server public-key binding did not match")
+    func testSignInTimeoutOrProtocolErrorEndsInsteadOfAskingToSignIn() {
+        XCTAssertEqual(
+            outcome(after: makeReport(stage: "credssp", failure: .timedOut)),
+            .end(RDPSessionEndReason(kind: .failed, message: "The remote computer did not respond in time."))
+        )
+        XCTAssertEqual(
+            outcome(after: makeReport(stage: "credssp", failure: .protocolViolation)),
+            .end(RDPSessionEndReason(kind: .failed, message: "The remote computer sent something RDPeek cannot handle."))
+        )
+    }
+
+    func testMissingDesktopReconnectsOnceThenEnds() {
+        // RDPKit bounds the wait for the first frame once the server
+        // accepted the sign-in.
+        let report = makeReport(stage: "rdp-graphics-dynamic-channel", failure: .timedOut)
+
+        XCTAssertEqual(outcome(after: report), .retry(.firstFrameTimeout))
+        XCTAssertEqual(outcome(after: report, retriedFirstFrameTimeout: true), .end(.firstFrameTimeout))
+        // A timeout before activation is not one of a missing desktop.
+        XCTAssertEqual(
+            outcome(after: makeReport(stage: "rdp-connection-finalization", failure: .timedOut)),
+            .end(RDPSessionEndReason(kind: .failed, message: "The remote computer did not respond in time."))
+        )
+    }
+
+    func testNothingIsRetriedOnceTheDesktopShowed() {
+        let report = makeReport(stage: "rdp-graphics-dynamic-channel", failure: .timedOut)
 
         XCTAssertEqual(
-            outcome(after: report),
-            .end(RDPSessionEndReason(kind: .failed, message: "CredSSP server public-key binding did not match"))
+            SessionAttemptOutcome.after(report, host: "winbox", presentedFrames: true),
+            .end(RDPSessionEndReason(kind: .ended, message: "The connection to the remote computer was lost."))
         )
     }
 
-    func testFailureReportForThrownErrorKeepsTheError() {
-        let configuration = RDPConnectionConfiguration(host: "winbox")
-        let report = RDPConnectionReport(
-            connectionError: RDPConnectionError(
-                .addressResolution,
-                description: "address resolution failed: nodename nor servname provided"
-            ),
-            configuration: configuration
-        )
-
-        XCTAssertEqual(report.status, "failure")
-        XCTAssertEqual(report.target, "winbox:3389")
-        XCTAssertNil(report.nextStage)
-        XCTAssertEqual(report.error, "address resolution failed: nodename nor servname provided")
-    }
-
-    func testFailureReportAfterARedirectDoesNotNameTheServerTypedInAsTarget() {
-        let report = RDPConnectionReport(
-            connectionError: RDPConnectionError(.connect(error: RDPSocketError(errno: ECONNREFUSED)), description: "Connection refused"),
-            configuration: RDPConnectionConfiguration(host: "broker"),
-            redirected: true
-        )
-
-        XCTAssertEqual(report.target, "unknown (passed on by broker:3389)")
-        XCTAssertEqual(report.error, "Connection refused")
+    func testCancelledRunEndsAsCancelled() {
+        XCTAssertEqual(outcome(after: makeReport(stage: "credssp", failure: .cancelled)), .end(.cancelled))
     }
 
     // MARK: - Logon names
-
-    func testLogonStatusIsReadFromCredSSPError() {
-        XCTAssertEqual(
-            RDPLogonStatus.code(in: "CredSSP server returned STATUS_LOGON_FAILURE (0xc000006d)"),
-            0xC000_006D
-        )
-        XCTAssertEqual(RDPLogonStatus.code(in: "CredSSP server returned NTSTATUS (0xc0000123)"), 0xC000_0123)
-        XCTAssertNil(RDPLogonStatus.code(in: "receive failed: connection closed (0x1)"))
-    }
 
     func testDomainQualifiedUserNameSignsInSplitAndKeepsItsKeychainAccount() throws {
         // RDPeek hands RDPKit the user name as typed: RDPKit signs in with
@@ -482,42 +546,50 @@ final class SessionModelsTests: XCTestCase {
         ))
     }
 
-    private let keyUsageError =
-        "TLS failed: the server's certificate does not allow ECDHE key exchange (KEY_USAGE_BIT_INCORRECT)"
+    private func endReason(_ report: RDPConnectionReport, presentedFrames: Bool = false) -> RDPSessionEndReason {
+        RDPSessionEndReason(report: report, host: "winbox", presentedFrames: presentedFrames)
+    }
 
     private func outcome(
         after report: RDPConnectionReport,
+        host: String = "winbox",
         usedLegacyRSAKeyExchange: Bool = false,
-        reachedServer: Bool = false
+        unreachableRetriesSpent: Int = 0,
+        retriedFirstFrameTimeout: Bool = false
     ) -> SessionAttemptOutcome {
-        SessionAttemptOutcome.afterSession(
+        SessionAttemptOutcome.after(
             report,
-            host: "winbox",
+            host: host,
             presentedFrames: false,
             usedLegacyRSAKeyExchange: usedLegacyRSAKeyExchange,
-            reachedServer: reachedServer
+            unreachableRetriesSpent: unreachableRetriesSpent,
+            retriedFirstFrameTimeout: retriedFirstFrameTimeout
         )
     }
 
     private func makeReport(
         stage: String = "rdp-graphics-dynamic-channel",
-        failureCode: UInt32? = nil,
+        target: String = "winbox:3389",
+        redirectionDepth: Int = 0,
         nextStage: String? = nil,
         errorInfo: UInt32? = nil,
+        failure: RDPConnectionFailure? = nil,
         error: String? = nil
     ) -> RDPConnectionReport {
-        RDPConnectionReport(
-            status: error == nil ? "success" : "failure",
+        let failed = failure != nil || error != nil
+        return RDPConnectionReport(
+            status: failed ? "failure" : "success",
             stage: stage,
-            target: "winbox:3389",
+            target: target,
+            redirectionDepth: redirectionDepth,
             passwordConfigured: true,
             requestedProtocols: [],
             requestHex: "",
-            failureCode: failureCode,
             rdpRemoteTerminationErrorInfo: errorInfo,
             warnings: [],
             nextStage: nextStage,
-            error: error
+            error: error ?? failure.map { "RDPKit's words for \($0)" },
+            failure: failure
         )
     }
 }

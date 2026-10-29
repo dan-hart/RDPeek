@@ -106,26 +106,6 @@ struct RDPSessionEndReason: Equatable {
         message: "Connection cancelled by user."
     )
 
-    /// Why a session RDPKit set up ended, in plain words; the report keeps
-    /// the raw details for Diagnostics. Once the desktop was shown the
-    /// session ended rather than failed, however it ended.
-    init(report: RDPConnectionReport, presentedFrames: Bool) {
-        let showedDesktop = presentedFrames || report.rdpGraphicsFirstFrame != nil
-        let termination = Self.terminationMessage(errorInfo: report.rdpRemoteTerminationErrorInfo)
-        if report.error == nil {
-            kind = .ended
-            message = termination ?? (showedDesktop
-                ? "The remote session ended."
-                : "The remote session ended before showing the desktop.")
-        } else if showedDesktop {
-            kind = .ended
-            message = termination ?? "The connection to the remote computer was lost."
-        } else {
-            kind = .failed
-            message = termination ?? Self.failureMessage(report)
-        }
-    }
-
     /// The remote computer did not show the desktop in time after accepting
     /// the sign-in.
     static let firstFrameTimeout = RDPSessionEndReason(
@@ -133,80 +113,236 @@ struct RDPSessionEndReason: Equatable {
         message: "The remote computer did not show the desktop in time."
     )
 
-    /// Why the server ended the session: its last Set Error Info code
-    /// ([MS-RDPBCGR] 2.2.5.1.1), or nil for codes with nothing plainer to
-    /// say than "the session ended".
-    private static func terminationMessage(errorInfo: UInt32?) -> String? {
-        guard let errorInfo else {
-            return nil
+    /// Why a session RDPKit ran ended, in plain words, from the report's
+    /// typed failure and the server's termination; the report keeps RDPKit's
+    /// own text for Diagnostics. Once the desktop was shown the session
+    /// ended rather than failed, however it ended. `host` is the server
+    /// typed in.
+    init(report: RDPConnectionReport, host: String, presentedFrames: Bool) {
+        let showedDesktop = presentedFrames || report.rdpGraphicsFirstFrame != nil
+        let termination = report.remoteTermination.flatMap(Self.terminationMessage)
+        guard let failure = report.failure else {
+            if let error = report.error {
+                self = RDPSessionEndReason(kind: showedDesktop ? .ended : .failed, message: error)
+            } else {
+                self = RDPSessionEndReason(kind: .ended, message: termination ?? (showedDesktop
+                        ? "The remote session ended."
+                        : "The remote session ended before showing the desktop."))
+            }
+            return
         }
-        return switch errorInfo {
-        case 0x0000_0001:
-            "An administrator disconnected the session."
-        case 0x0000_0002:
-            "An administrator signed you out of the remote computer."
-        case 0x0000_0003:
-            "The session was disconnected after being idle too long."
-        case 0x0000_0004:
-            "The session reached its time limit."
-        case 0x0000_0005:
-            "Another connection to the remote computer took over the session."
-        case 0x0000_0006:
-            "The remote computer ran out of memory."
-        case 0x0000_0007:
-            "The remote computer refused the connection."
-        case 0x0000_0009:
-            "This account is not allowed to connect to the remote computer."
-        case 0x0000_000A:
-            "The remote computer requires you to sign in again."
-        case 0x0000_000B:
-            "The session was disconnected from the remote computer."
-        case 0x0000_000C:
-            "You signed out of the remote computer."
-        case 0x0000_0100 ... 0x0000_010A:
+        if failure == .cancelled {
+            self = .cancelled
+        } else if showedDesktop {
+            let isConnectionLoss = [.connectionLost, .connectionClosed, .timedOut].contains(failure)
+            self = RDPSessionEndReason(
+                kind: .ended,
+                message: isConnectionLoss
+                    ? "The connection to the remote computer was lost."
+                    : Self.failureMessage(failure, report: report, host: host)
+            )
+        } else {
+            self = RDPSessionEndReason(kind: .failed, message: Self.failureMessage(failure, report: report, host: host))
+        }
+    }
+
+    /// Why the server ended the session: its Set Error Info code
+    /// ([MS-RDPBCGR] 2.2.5.1.1), or nil for one with nothing plainer to say
+    /// than "the session ended".
+    private static func terminationMessage(_ termination: RDPRemoteTermination) -> String? {
+        if let errorInfo = termination.errorInfo, let sentence = terminationSentences[errorInfo] {
+            return sentence
+        }
+        return switch termination.category {
+        case .licensing:
             licensingMessage
-        default:
+        case .serverError:
+            "The session ended because of an error on the remote computer."
+        case .protocolError:
+            "The remote computer rejected something RDPeek sent."
+        case .user, .admin, .timeLimit, .replaced, .accessDenied, .freshCredentialsRequired, .unspecified, .unknown:
             nil
         }
     }
 
+    private static let terminationSentences: [UInt32: String] = [
+        0x0000_0001: "An administrator disconnected the session.",
+        0x0000_0002: "An administrator signed you out of the remote computer.",
+        0x0000_0003: "The session was disconnected after being idle too long.",
+        0x0000_0004: "The session reached its time limit.",
+        0x0000_0005: "Another connection to the remote computer took over the session.",
+        0x0000_0006: "The remote computer ran out of memory.",
+        0x0000_0007: "The remote computer refused the connection.",
+        0x0000_0009: "This account is not allowed to connect to the remote computer.",
+        0x0000_000A: "The remote computer requires you to sign in again.",
+        0x0000_000B: "The session was disconnected from the remote computer.",
+        0x0000_000C: "You signed out of the remote computer.",
+        0x0000_0019: "The remote computer is shutting down.",
+        0x0000_001A: "The remote computer is restarting.",
+    ]
+
     private static let licensingMessage = "The remote computer could not license this connection."
 
-    private static let standardSecurityMessage =
-        "The remote computer only allows Standard RDP Security, which RDPeek does not support."
-
-    /// Why a connection failed before the desktop showed, when the server
-    /// gave no termination code.
-    private static func failureMessage(_ report: RDPConnectionReport) -> String {
-        let error = report.error ?? ""
-        if let status = RDPLogonStatus.code(in: error) {
-            return RDPLogonStatus.message(for: status)
-        }
-        if let failureCode = report.failureCode {
-            // RDP_NEG_FAILURE codes ([MS-RDPBCGR] 2.2.1.2.2).
-            return switch failureCode {
-            case 0x0000_0002:
-                standardSecurityMessage
-            case 0x0000_0003:
-                "The remote computer has no certificate for a secure connection."
-            case 0x0000_0006:
-                "The remote computer requires Early User Authorization, which RDPeek does not support."
+    /// Why a connection failed, or a session that showed the desktop ended.
+    /// After a Server Redirection (`redirectionDepth` above 0) the server
+    /// typed in took the sign-in, so a target that cannot be found, reached
+    /// or secured is blamed by name, not `host`.
+    private static func failureMessage(
+        _ failure: RDPConnectionFailure,
+        report: RDPConnectionReport,
+        host: String
+    ) -> String {
+        // A connection that broke off during the X.224 exchange did not
+        // reach a Remote Desktop server.
+        let didNotAnswer = (report.connectionStage.map { $0 == .negotiation } ?? true)
+            && [.connectionLost, .connectionClosed, .timedOut, .protocolViolation].contains(failure)
+        if report.redirectionDepth > 0 {
+            let passedOn = { (clause: String) in
+                redirectionMessage(host: host, target: report.target, clause: clause)
+            }
+            switch failure {
+            case .addressResolution:
+                return passedOn("this Mac could not find")
+            case .connect:
+                return passedOn("this Mac could not reach")
+            case .tls, .tlsKeyUsageIncorrect:
+                return passedOn("this Mac could not set up a secure connection with")
             default:
-                "The remote computer refused the connection request (code \(failureCode))."
+                if didNotAnswer {
+                    return passedOn("did not answer as a Remote Desktop server")
+                }
             }
         }
-        if error == "standard RDP security is not supported" {
-            return standardSecurityMessage
+        if didNotAnswer {
+            return "“\(host)” did not answer as a Remote Desktop server."
         }
-        switch report.stage {
-        case "tls-handshake":
+        switch failure {
+        case .addressResolution:
+            return "Could not find “\(host)”. Check the host name."
+        case let .connect(socketError):
+            return connectMessage(socketError, host: host)
+        case let .negotiation(code):
+            return negotiationMessage(code)
+        case .unsupportedSecurityProtocol:
+            return "The remote computer chose a security protocol RDPeek does not support, "
+                + "such as Standard RDP Security."
+        case .tls, .tlsKeyUsageIncorrect:
             return "A secure connection to the remote computer could not be set up."
-        case "early-user-authorization" where report.earlyUserAuthorizationResult == 0x0000_0005:
+        case .credentialsRequired:
+            return credentialsRequiredMessage
+        case let .credSSP(status):
+            return logonMessage(status)
+        case .earlyUserAuthorizationDenied:
             return "The remote computer denied this account access."
-        case "rdp-licensing" where report.rdpLicensingErrorCode != nil:
+        case .licensing:
             return licensingMessage
+        case let .serverTermination(termination):
+            return terminationMessage(termination) ?? "The remote computer ended the session."
+        case .connectionLost:
+            return "The connection to the remote computer was lost."
+        case .connectionClosed:
+            return "The remote computer closed the connection."
+        case .timedOut:
+            return "The remote computer did not respond in time."
+        case .cancelled:
+            return cancelled.message
+        case .protocolViolation:
+            return "The remote computer sent something RDPeek cannot handle."
+        case .invalidConfiguration:
+            return "RDPeek cannot send these settings to the remote computer. "
+                + "Check that the user name, domain and password are not too long."
+        case .clientFailure:
+            return "RDPeek failed on this Mac; the remote computer was not at fault."
+        case .graphicsFrameHandler:
+            return "RDPeek could not show the remote desktop."
+        }
+    }
+
+    /// `target` is RDPKit's "host:port"; the port shows only when it is
+    /// not the default, and a target that is the server typed in, as with
+    /// a routing token alone, is not named.
+    private static func redirectionMessage(host: String, target: String, clause: String) -> String {
+        let defaultPortSuffix = ":3389"
+        let targetLabel = target.hasSuffix(defaultPortSuffix) ? String(target.dropLast(defaultPortSuffix.count)) : target
+        guard targetLabel.isEmpty == false, targetLabel.caseInsensitiveCompare(host) != .orderedSame else {
+            return "“\(host)” passed the session on to a server that \(clause)."
+        }
+        return "“\(host)” passed the session on to “\(targetLabel)”, which \(clause)."
+    }
+
+    /// The TCP connection failed: why, by the kind of socket error.
+    private static func connectMessage(_ error: RDPSocketError, host: String) -> String {
+        switch error.category {
+        case .refused:
+            "“\(host)” refused the connection. Check that Remote Desktop is on and the port is right."
+        case .hostUnreachable:
+            // macOS fails a connection into the local network this way too
+            // while RDPeek may not use the local network.
+            "Could not reach “\(host)”. Check that it is on. If it is on your local network, "
+                + "allow RDPeek in System Settings → Privacy & Security → Local Network."
+        case .networkUnreachable:
+            "This Mac has no route to “\(host)”. Check your network connection or VPN."
+        case .timedOut:
+            "“\(host)” did not answer. Check the host name and port, and that no firewall blocks the connection."
+        case .notPermitted:
+            "macOS did not allow the connection to “\(host)”. A firewall or network filter may block it."
+        case .other:
+            "Could not reach “\(host)”. Check that it is on and accepts Remote Desktop connections."
+        }
+    }
+
+    /// RDP_NEG_FAILURE codes ([MS-RDPBCGR] 2.2.1.2.2).
+    private static func negotiationMessage(_ code: RDPNegotiationFailureCode) -> String {
+        switch code {
+        case .sslNotAllowedByServer:
+            "The remote computer only allows Standard RDP Security, which RDPeek does not support."
+        case .sslCertificateNotOnServer:
+            "The remote computer has no certificate for a secure connection."
+        case .hybridRequiredByServer:
+            credentialsRequiredMessage
+        case .sslWithUserAuthRequiredByServer:
+            "The remote computer requires a client certificate, which RDPeek does not support."
         default:
-            return report.error ?? "The connection failed at \(report.stage)."
+            "The remote computer refused the security RDPeek offered."
+        }
+    }
+
+    static let credentialsRequiredMessage = "The remote computer requires a user name and password."
+
+    static let wrongCredentialsMessage = "The user name or password is incorrect."
+
+    /// STATUS_LOGON_FAILURE, STATUS_WRONG_PASSWORD, and STATUS_NO_SUCH_USER:
+    /// signing in again can fix these.
+    static func isWrongCredentials(_ status: RDPLogonStatus) -> Bool {
+        [.logonFailure, .wrongPassword, .noSuchUser].contains(status)
+    }
+
+    /// The NTSTATUS a CredSSP server rejected the sign-in with ([MS-ERREF] 2.3.1).
+    private static func logonMessage(_ status: RDPLogonStatus) -> String {
+        if isWrongCredentials(status) {
+            return wrongCredentialsMessage
+        }
+        return switch status {
+        case .accessDenied:
+            "The remote computer denied this account access."
+        case .accountRestriction:
+            "An account restriction, such as a blank password, prevents this sign-in."
+        case .invalidLogonHours:
+            "This account is not allowed to sign in at this time."
+        case .invalidWorkstation:
+            "This account is not allowed to sign in from this Mac."
+        case .passwordExpired, .passwordMustChange:
+            "The password for this account has expired and must be changed."
+        case .accountDisabled:
+            "This account is disabled."
+        case .logonTypeNotGranted:
+            "This account is not allowed to sign in with Remote Desktop."
+        case .accountExpired:
+            "This account has expired."
+        case .accountLockedOut:
+            "This account is locked out."
+        default:
+            "The remote computer rejected the sign-in (status 0x\(String(status.rawValue, radix: 16)))."
         }
     }
 
@@ -248,6 +384,23 @@ struct RDPSessionEndReason: Equatable {
     }
 }
 
+/// Why a session connects again on its own.
+enum SessionAutoRetryReason: Equatable {
+    /// The server could not be reached.
+    case networkHiccup
+    /// The server accepted the sign-in but sent no desktop in time.
+    case firstFrameTimeout
+
+    var statusDetail: String {
+        switch self {
+        case .networkHiccup:
+            "Network hiccup — retrying…"
+        case .firstFrameTimeout:
+            "The desktop is taking too long — reconnecting…"
+        }
+    }
+}
+
 /// What a session does next when a connection attempt ends without the
 /// user ending it.
 enum SessionAttemptOutcome: Equatable {
@@ -255,7 +408,7 @@ enum SessionAttemptOutcome: Equatable {
     /// certificate does not allow the ECDHE key exchange offered first.
     case retryWithLegacyRSAKeyExchange
     /// Connect again after a short pause.
-    case retry
+    case retry(SessionAutoRetryReason)
     /// Ask for the user name and password again, saying why.
     case promptForCredentials(message: String)
     /// Show why the session ended.
@@ -266,175 +419,69 @@ enum SessionAttemptOutcome: Equatable {
     /// local network access.
     static let maximumUnreachableRetries = 2
 
-    static let wrongCredentialsMessage = "The user name or password is incorrect."
-
-    /// After `RDPSessionClient.connect` threw. Only an unreachable server is
-    /// retried — a host name that does not resolve stays wrong. `connect`
-    /// also throws when a server passes the session on (Server Redirection)
-    /// to one that fails, after the sign-in; `reachedServer` (a certificate
-    /// arrived) tells that apart. The server typed in was fine then, and it
-    /// is not retried, so the sign-in is not repeated. RDPKit does not name
-    /// the server the session was passed on to.
-    static func afterConnectionError(
-        _ error: any Error,
-        host: String,
-        retriesSpent: Int,
-        reachedServer: Bool = false
-    ) -> Self {
-        let failure = (error as? RDPConnectionError)?.failure
-        if reachedServer {
-            let failedStep = switch failure {
-            case .addressResolution?:
-                "this Mac could not find"
-            case .connect?:
-                "this Mac could not reach"
-            default:
-                "that did not answer as a Remote Desktop server"
-            }
-            return .end(RDPSessionEndReason(
-                kind: .failed,
-                message: "“\(host)” passed the session on to a server \(failedStep)."
-            ))
-        }
-        switch failure {
-        case .connect?:
-            guard retriesSpent >= maximumUnreachableRetries else {
-                return .retry
-            }
-            return .end(RDPSessionEndReason(
-                kind: .failed,
-                message: "Could not reach “\(host)”. Check that it is on and accepts Remote Desktop connections."
-            ))
-        case .addressResolution?:
-            return .end(RDPSessionEndReason(
-                kind: .failed,
-                message: "Could not find “\(host)”. Check the host name."
-            ))
-        default:
-            return .end(RDPSessionEndReason(
-                kind: .failed,
-                message: "“\(host)” did not answer as a Remote Desktop server."
-            ))
-        }
-    }
-
-    /// After a session RDPKit set up ended. Credentials may have been sent,
-    /// so no attempt that sent them is repeated: a rejected sign-in asks
-    /// again. The one retry, with RSA key exchange, follows a TLS failure
-    /// before any credential was sent, and only on the server typed in:
-    /// `reachedServer` (a certificate arrived, which RDPKit reports only
-    /// after a completed handshake) means the server typed in took the
-    /// sign-in and passed the session on to the server that failed.
-    static func afterSession(
+    /// After a session RDPKit ran ended, with its report. No attempt that
+    /// may have been refused for its credentials is repeated: a rejected
+    /// sign-in asks again. The automatic attempts are each bounded:
+    ///
+    /// - A server that could not be reached is tried again, up to
+    ///   `maximumUnreachableRetries` times. A host name that does not
+    ///   resolve stays wrong, and a server that refused the connection or a
+    ///   connection macOS did not allow is not tried again.
+    /// - A certificate that refuses ECDHE gets one attempt with RSA key
+    ///   exchange; the handshake failed before any credential was sent.
+    /// - A server that accepted the sign-in but did not show the desktop in
+    ///   time (RDPKit bounds the wait for the first frame) gets one more
+    ///   attempt, with the credentials it accepted.
+    ///
+    /// After a Server Redirection (`redirectionDepth` above 0) the server
+    /// typed in took the sign-in and passed the session on, so a target
+    /// that fails to connect or to set up TLS is neither retried nor sent
+    /// the credentials again without forward secrecy.
+    static func after(
         _ report: RDPConnectionReport,
         host: String,
         presentedFrames: Bool,
-        usedLegacyRSAKeyExchange: Bool,
-        reachedServer: Bool = false
+        usedLegacyRSAKeyExchange: Bool = false,
+        unreachableRetriesSpent: Int = 0,
+        retriedFirstFrameTimeout: Bool = false
     ) -> Self {
-        if presentedFrames == false, let error = report.error {
-            if report.stage == "tls-handshake", reachedServer {
-                return .end(RDPSessionEndReason(
-                    kind: .failed,
-                    message: "“\(host)” passed the session on to a server this Mac could not set up "
-                        + "a secure connection with."
-                ))
-            }
-            // RDPKit names the certificate's missing key usage in the TLS
-            // failure, which ends the attempt before any credential is sent.
-            if report.stage == "tls-handshake",
-               usedLegacyRSAKeyExchange == false,
-               error.contains("KEY_USAGE_BIT_INCORRECT")
-            {
-                return .retryWithLegacyRSAKeyExchange
-            }
-            if let status = RDPLogonStatus.code(in: error) {
-                if RDPLogonStatus.isWrongCredentials(status) {
-                    return .promptForCredentials(message: wrongCredentialsMessage)
+        let endReason = RDPSessionEndReason(report: report, host: host, presentedFrames: presentedFrames)
+        guard presentedFrames == false, let failure = report.failure else {
+            return .end(endReason)
+        }
+        let isRedirected = report.redirectionDepth > 0
+        switch failure {
+        case let .connect(socketError) where isRedirected == false:
+            switch socketError.category {
+            case .hostUnreachable, .networkUnreachable, .timedOut, .other:
+                if unreachableRetriesSpent < maximumUnreachableRetries {
+                    return .retry(.networkHiccup)
                 }
-            } else if report.stage == "credssp", error == "CredSSP requires credentials" {
-                // Connecting with every sign-in field empty sends nothing,
-                // so asking again is safe.
-                return .promptForCredentials(message: "The remote computer requires a user name and password.")
-            } else if report.stage == "credssp",
-                      error.contains("connection closed before receiving CredSSP")
-                      || error.contains("connection lost before receiving CredSSP")
-            {
-                // Some servers close the connection on a rejected sign-in
-                // instead of naming the reason. A timeout or a CredSSP
-                // protocol error is not a sign-in problem.
-                return .promptForCredentials(
-                    message: "The remote computer did not accept the sign-in. Check the user name and password."
-                )
+            case .refused, .notPermitted:
+                break
             }
-        }
-        return .end(RDPSessionEndReason(report: report, presentedFrames: presentedFrames))
-    }
-}
-
-extension RDPConnectionReport {
-    /// The report for an attempt `RDPSessionClient.connect` threw on, shaped
-    /// as `run` reports it, so Diagnostics keeps the raw error. When the
-    /// server typed in passed the session on, the server that failed is
-    /// the target, which RDPKit does not name.
-    init(connectionError: any Error, configuration: RDPConnectionConfiguration, redirected: Bool = false) {
-        self = RDPSessionClient().dryRun(configuration: configuration)
-        if redirected {
-            target = "unknown (passed on by \(configuration.host):\(configuration.port))"
-        }
-        status = "failure"
-        stage = "x224-rdp-negotiation"
-        nextStage = nil
-        error = String(describing: connectionError)
-    }
-}
-
-/// The NTSTATUS a CredSSP server rejected a sign-in with ([MS-ERREF]
-/// 2.3.1). RDPKit reports it only in its error text, as
-/// "CredSSP server returned STATUS_LOGON_FAILURE (0xc000006d)".
-enum RDPLogonStatus {
-    static func code(in error: String) -> UInt32? {
-        guard let returned = error.range(of: "CredSSP server returned "),
-              let open = error.range(of: "(0x", range: returned.upperBound ..< error.endIndex),
-              let close = error[open.upperBound...].firstIndex(of: ")")
-        else {
-            return nil
-        }
-        return UInt32(error[open.upperBound ..< close], radix: 16)
-    }
-
-    /// STATUS_LOGON_FAILURE, STATUS_WRONG_PASSWORD, and STATUS_NO_SUCH_USER:
-    /// signing in again can fix these.
-    static func isWrongCredentials(_ status: UInt32) -> Bool {
-        [0xC000_006D, 0xC000_006A, 0xC000_0064].contains(status)
-    }
-
-    static func message(for status: UInt32) -> String {
-        if isWrongCredentials(status) {
-            return SessionAttemptOutcome.wrongCredentialsMessage
-        }
-        return switch status {
-        case 0xC000_0022:
-            "The remote computer denied this account access."
-        case 0xC000_006E:
-            "An account restriction, such as a blank password, prevents this sign-in."
-        case 0xC000_006F:
-            "This account is not allowed to sign in at this time."
-        case 0xC000_0070:
-            "This account is not allowed to sign in from this Mac."
-        case 0xC000_0071, 0xC000_0224:
-            "The password for this account has expired and must be changed."
-        case 0xC000_0072:
-            "This account is disabled."
-        case 0xC000_015B:
-            "This account is not allowed to sign in with Remote Desktop."
-        case 0xC000_0193:
-            "This account has expired."
-        case 0xC000_0234:
-            "This account is locked out."
+        case .tlsKeyUsageIncorrect where isRedirected == false && usedLegacyRSAKeyExchange == false:
+            return .retryWithLegacyRSAKeyExchange
+        case let .credSSP(status) where RDPSessionEndReason.isWrongCredentials(status):
+            return .promptForCredentials(message: RDPSessionEndReason.wrongCredentialsMessage)
+        case .credentialsRequired, .negotiation(code: .hybridRequiredByServer):
+            // Connecting with every sign-in field empty sends nothing, so
+            // asking again is safe.
+            return .promptForCredentials(message: RDPSessionEndReason.credentialsRequiredMessage)
+        case .connectionClosed where report.connectionStage == .credSSP,
+             .connectionLost where report.connectionStage == .credSSP:
+            // Some servers close the connection on a rejected sign-in
+            // instead of naming the reason. A timeout or a CredSSP protocol
+            // error is not a sign-in problem.
+            return .promptForCredentials(
+                message: "The remote computer did not accept the sign-in. Check the user name and password."
+            )
+        case .timedOut where report.connectionStage == .graphics && report.rdpGraphicsFirstFrame == nil:
+            return retriedFirstFrameTimeout ? .end(.firstFrameTimeout) : .retry(.firstFrameTimeout)
         default:
-            "The remote computer rejected the sign-in (status 0x\(String(status, radix: 16)))."
+            break
         }
+        return .end(endReason)
     }
 }
 

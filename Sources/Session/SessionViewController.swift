@@ -52,7 +52,6 @@ final class SessionViewController: NSViewController {
     /// overlay; nil for a connection the user started.
     private var autoRetryReason: SessionAutoRetryReason?
     private var autoRetryTask: Task<Void, Never>?
-    private var firstFrameWatchdogTask: Task<Void, Never>?
     /// This connection offers only RSA key exchange, after the server's
     /// certificate turned down ECDHE. Not saved: every connection tries
     /// ECDHE first.
@@ -728,35 +727,6 @@ final class SessionViewController: NSViewController {
         }
     }
 
-    /// Bounds the wait for the first frame once the server accepted the
-    /// sign-in. RDPKit bounds each connection step up to then, but a live
-    /// session that keeps getting traffic and no frame would show
-    /// "Connecting" forever. The credentials were accepted, so connecting
-    /// again once is safe.
-    private func startFirstFrameWatchdog() {
-        firstFrameWatchdogTask?.cancel()
-        let timeoutSeconds = UInt64(max(1, draft.timeoutSeconds))
-        firstFrameWatchdogTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
-            guard Task.isCancelled == false,
-                  let self,
-                  didClose == false,
-                  isConnecting,
-                  hasPresentedFrame == false
-            else {
-                return
-            }
-            cancelConnection(shouldRecordCancellation: false)
-            if didRetryFirstFrameTimeout {
-                sessionEndReason = .firstFrameTimeout
-                render()
-            } else {
-                didRetryFirstFrameTimeout = true
-                scheduleAutoRetry(.firstFrameTimeout)
-            }
-        }
-    }
-
     /// One attempt with the draft as it is. Automatic retries call this
     /// directly; everything else goes through `startConnection()`.
     private func startConnectionAttempt() {
@@ -882,7 +852,7 @@ final class SessionViewController: NSViewController {
         let trustedCertificateStore = trustedCertificateStore
         let acceptsUntrustedCertificates = draft.hideCertificateWarnings
         let port = baseConfiguration.port
-        // RDPSessionClient.connect blocks for the whole session and waits on
+        // RDPSessionClient.run blocks for the whole session and waits on
         // the decode queue, so it gets its own thread rather than pinning a
         // Swift concurrency worker per session, which could starve the
         // decode drain.
@@ -945,113 +915,113 @@ final class SessionViewController: NSViewController {
                 wireReceiveCoalescer.cancel()
                 decodeQueue.cancel()
             }
-            let result = Result<RDPConnectionReport, any Error> {
-                try RDPSessionClient().connect(
-                    configuration: configuration,
-                    onGraphicsFrame: { frame in
-                        let completion = decodeQueue.submitAndWait(
-                            frame,
-                            receivedAt: Date(),
-                            shouldContinue: {
-                                cancellation.isCancelled == false
+            // `run` reports a failure to connect in the report, as it does
+            // every other failure.
+            let report = RDPSessionClient().run(
+                configuration: configuration,
+                onGraphicsFrame: { frame in
+                    let completion = decodeQueue.submitAndWait(
+                        frame,
+                        receivedAt: Date(),
+                        shouldContinue: {
+                            cancellation.isCancelled == false
+                        }
+                    )
+                    if frame.contentKind == .video, completion == .decoded {
+                        keyframeRequests.recordDecodedVideo()
+                    }
+                    // An update that fails to decode leaves stale pixels,
+                    // not a broken session. Failed video waits for a
+                    // keyframe, which the server is asked for.
+                    if case .failed = completion {
+                        if frame.contentKind == .video, keyframeRequests.shouldRequest(at: Date()) {
+                            sink.apply { controller in
+                                controller.requestKeyframe(desktopSize: requestedDesktopSize)
                             }
-                        )
-                        if frame.contentKind == .video, completion == .decoded {
-                            keyframeRequests.recordDecodedVideo()
                         }
-                        // An update that fails to decode leaves stale pixels,
-                        // not a broken session. Failed video waits for a
-                        // keyframe, which the server is asked for.
-                        if case .failed = completion {
-                            if frame.contentKind == .video, keyframeRequests.shouldRequest(at: Date()) {
-                                sink.apply { controller in
-                                    controller.requestKeyframe(desktopSize: requestedDesktopSize)
-                                }
-                            }
-                            return
-                        }
-                        try completion.requireDecoded()
-                    },
-                    onInputReady: { session in
-                        sink.apply { controller in
-                            controller.sessionActivated(session)
-                        }
-                    },
-                    onDisplayControlReady: { session in
-                        sink.apply { controller in
-                            controller.displayControlSession = session
-                            // A server redirection's target has not been sent
-                            // the layout the first server got.
-                            controller.lastRequestedDisplayRequest = nil
-                            controller.scheduleAutoDisplaySizeUpdate()
-                            controller.render()
-                        }
-                    },
-                    onClipboardReady: { session in
-                        // The server's first copy can come before the
-                        // bridge attaches on the main thread, so nothing is
-                        // fetched until it applies the sharing choice; on,
-                        // fetching then gets a copy that came in between.
-                        session.fetchesRemoteCopies = false
-                        sink.apply { controller in
-                            controller.clipboard.attach(session)
-                            controller.render()
-                        }
-                    },
-                    onClipboardText: { text in
-                        sink.apply { controller in
-                            controller.clipboard.receiveText(text)
-                            controller.render()
-                        }
-                    },
-                    onClipboardFileGroupDescriptor: { descriptorList in
-                        sink.apply { controller in
-                            controller.clipboard.receiveFileList(descriptorList)
-                            controller.render()
-                        }
-                    },
-                    onClipboardFileContents: { response in
-                        sink.apply { controller in
-                            controller.clipboard.receiveFileContents(response)
-                            controller.render()
-                        }
-                    },
-                    onClipboardRemoteCopyUnavailable: { isEmpty in
-                        sink.apply { controller in
-                            controller.clipboard.receiveRemoteCopyUnavailable(isEmpty: isEmpty)
-                            controller.render()
-                        }
-                    },
-                    onAudioSample: { sample in
-                        sink.apply { controller in
-                            controller.playAudioSample(sample)
-                        }
-                    },
-                    onCertificate: { info in
-                        // Runs before any credential is sent, so cancelling
-                        // here refuses the server without signing in to it.
-                        let refusal = trustedCertificateStore.refusal(
-                            of: info,
-                            port: port,
-                            acceptsUntrusted: acceptsUntrustedCertificates
-                        )
-                        if refusal != nil {
-                            cancellation.cancel()
-                        }
-                        sink.apply { controller in
-                            controller.receiveCertificate(info, port: port, refusal: refusal)
-                        }
-                    },
-                    onWireReceive: { sample in
-                        wireReceiveCoalescer.record(sample)
-                    },
-                    liveReport: liveReport,
-                    cancellation: cancellation
-                )
-            }
+                        return
+                    }
+                    try completion.requireDecoded()
+                },
+                onInputReady: { session in
+                    sink.apply { controller in
+                        controller.sessionActivated(session)
+                    }
+                },
+                onDisplayControlReady: { session in
+                    sink.apply { controller in
+                        controller.displayControlSession = session
+                        // A server redirection's target has not been sent
+                        // the layout the first server got.
+                        controller.lastRequestedDisplayRequest = nil
+                        controller.scheduleAutoDisplaySizeUpdate()
+                        controller.render()
+                    }
+                },
+                onClipboardReady: { session in
+                    // The server's first copy can come before the
+                    // bridge attaches on the main thread, so nothing is
+                    // fetched until it applies the sharing choice; on,
+                    // fetching then gets a copy that came in between.
+                    session.fetchesRemoteCopies = false
+                    sink.apply { controller in
+                        controller.clipboard.attach(session)
+                        controller.render()
+                    }
+                },
+                onClipboardText: { text in
+                    sink.apply { controller in
+                        controller.clipboard.receiveText(text)
+                        controller.render()
+                    }
+                },
+                onClipboardFileGroupDescriptor: { descriptorList in
+                    sink.apply { controller in
+                        controller.clipboard.receiveFileList(descriptorList)
+                        controller.render()
+                    }
+                },
+                onClipboardFileContents: { response in
+                    sink.apply { controller in
+                        controller.clipboard.receiveFileContents(response)
+                        controller.render()
+                    }
+                },
+                onClipboardRemoteCopyUnavailable: { isEmpty in
+                    sink.apply { controller in
+                        controller.clipboard.receiveRemoteCopyUnavailable(isEmpty: isEmpty)
+                        controller.render()
+                    }
+                },
+                onAudioSample: { sample in
+                    sink.apply { controller in
+                        controller.playAudioSample(sample)
+                    }
+                },
+                onCertificate: { info in
+                    // Runs before any credential is sent, so cancelling
+                    // here refuses the server without signing in to it.
+                    let refusal = trustedCertificateStore.refusal(
+                        of: info,
+                        port: port,
+                        acceptsUntrusted: acceptsUntrustedCertificates
+                    )
+                    if refusal != nil {
+                        cancellation.cancel()
+                    }
+                    sink.apply { controller in
+                        controller.receiveCertificate(info, port: port, refusal: refusal)
+                    }
+                },
+                onWireReceive: { sample in
+                    wireReceiveCoalescer.record(sample)
+                },
+                liveReport: liveReport,
+                cancellation: cancellation
+            )
             // A license the server issued stays valid even when closing the
             // window cancelled the session; the next connection presents it.
-            if case let .success(report) = result, let license = report.rdpIssuedClientLicense {
+            if let license = report.rdpIssuedClientLicense {
                 try? clientLicenseStore.saveLicense(license, for: clientLicenseKey)
             }
             guard cancellation.isCancelled == false else {
@@ -1062,7 +1032,7 @@ final class SessionViewController: NSViewController {
                 if let finalWireReceiveSample {
                     controller.renderMetricsStore.recordWireReceive(finalWireReceiveSample)
                 }
-                controller.finishConnection(result, configuration: configuration)
+                controller.finishConnection(report, configuration: configuration)
             }
         }
         sessionThread.name = "RDPeek session"
@@ -1083,9 +1053,6 @@ final class SessionViewController: NSViewController {
                 hasKeptCredentials = true
                 keepAcceptedCredentials()
             }
-        }
-        if hasPresentedFrame == false {
-            startFirstFrameWatchdog()
         }
         render()
     }
@@ -1112,41 +1079,19 @@ final class SessionViewController: NSViewController {
     /// The session ended without the user ending it: record why, then
     /// connect again, ask to sign in, or show the end.
     private func finishConnection(
-        _ result: Result<RDPConnectionReport, any Error>,
+        _ finishedReport: RDPConnectionReport,
         configuration: RDPConnectionConfiguration
     ) {
         flushPendingFramePresentation()
         publishRenderMetricsSnapshotIfNeeded(force: true)
-        let finishedReport: RDPConnectionReport
-        let outcome: SessionAttemptOutcome
-        // RDPKit follows a Server Redirection within one attempt and reports
-        // a certificate only after a completed TLS handshake, so a failure
-        // to connect or to set up TLS after one is the failure of a server
-        // the session was passed on to.
-        let reachedServer = liveCertificate != nil
-        switch result {
-        case let .success(sessionReport):
-            finishedReport = sessionReport
-            outcome = .afterSession(
-                sessionReport,
-                host: configuration.host,
-                presentedFrames: hasPresentedFrame,
-                usedLegacyRSAKeyExchange: configuration.legacyRSAKeyExchange,
-                reachedServer: reachedServer
-            )
-        case let .failure(error):
-            finishedReport = RDPConnectionReport(
-                connectionError: error,
-                configuration: configuration,
-                redirected: reachedServer
-            )
-            outcome = .afterConnectionError(
-                error,
-                host: configuration.host,
-                retriesSpent: autoRetryCount,
-                reachedServer: reachedServer
-            )
-        }
+        let outcome = SessionAttemptOutcome.after(
+            finishedReport,
+            host: configuration.host,
+            presentedFrames: hasPresentedFrame,
+            usedLegacyRSAKeyExchange: configuration.legacyRSAKeyExchange,
+            unreachableRetriesSpent: autoRetryCount,
+            retriedFirstFrameTimeout: didRetryFirstFrameTimeout
+        )
         report = finishedReport
         certificateTrustedByApp = trustedCertificateStore.isTrusted(
             host: liveCertificate?.host ?? configuration.host,
@@ -1160,7 +1105,6 @@ final class SessionViewController: NSViewController {
         // objects so clipboard sync/polling and the input wiring can't keep
         // talking to a dead channel.
         detachSessionChannels()
-        firstFrameWatchdogTask?.cancel()
         // As after Disconnect, what comes next shows over black: the hidden
         // desktop gives up the keyboard and its last frame is released.
         resetFramePresentationState()
@@ -1169,9 +1113,14 @@ final class SessionViewController: NSViewController {
         case .retryWithLegacyRSAKeyExchange:
             usesLegacyRSAKeyExchange = true
             startConnectionAttempt()
-        case .retry:
-            autoRetryCount += 1
-            scheduleAutoRetry(.networkHiccup)
+        case let .retry(reason):
+            switch reason {
+            case .networkHiccup:
+                autoRetryCount += 1
+            case .firstFrameTimeout:
+                didRetryFirstFrameTimeout = true
+            }
+            scheduleAutoRetry(reason)
         case let .promptForCredentials(message):
             forgetRejectedPassword()
             promptForCredentials(errorMessage: message)
@@ -1187,7 +1136,6 @@ final class SessionViewController: NSViewController {
                 || isResolvingStoredCredentials || isAutoRetryPending)
         autoRetryTask?.cancel()
         autoRetryTask = nil
-        firstFrameWatchdogTask?.cancel()
         credentialResolutionTask?.cancel()
         credentialResolutionTask = nil
         isAutoRetryPending = false
@@ -1317,7 +1265,6 @@ final class SessionViewController: NSViewController {
             hasPresentedFrame = true
             hasEverPresentedFrame = true
             autoRetryCount = 0
-            firstFrameWatchdogTask?.cancel()
         }
         return wasFirstPresentedFrame || sizeChanged
     }
@@ -1686,23 +1633,6 @@ private final class SessionMainActorSink: @unchecked Sendable {
                 }
                 operation(controller)
             }
-        }
-    }
-}
-
-/// Why a session connects again on its own.
-private enum SessionAutoRetryReason {
-    /// The server could not be reached.
-    case networkHiccup
-    /// The server accepted the sign-in but sent no desktop in time.
-    case firstFrameTimeout
-
-    var statusDetail: String {
-        switch self {
-        case .networkHiccup:
-            "Network hiccup — retrying…"
-        case .firstFrameTimeout:
-            "The desktop is taking too long — reconnecting…"
         }
     }
 }
