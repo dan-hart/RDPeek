@@ -99,3 +99,15 @@ final class ViewerMetricsSummaryTests: XCTestCase {
         )
     }
 }
+
+final class FrameAcknowledgeSummaryTests: XCTestCase {
+    func testFewerAcknowledgementsThanRDPKitRecordsAreTheTotal() {
+        XCTAssertEqual(frameAcknowledgeSummary(nil), "none")
+        XCTAssertEqual(frameAcknowledgeSummary([]), "none")
+        XCTAssertEqual(frameAcknowledgeSummary(Array(repeating: "00", count: 3)), "3")
+    }
+
+    func testAFullRecordIsOnlyASample() {
+        XCTAssertEqual(frameAcknowledgeSummary(Array(repeating: "00", count: 8)), "8+ (first 8 recorded)")
+    }
+}

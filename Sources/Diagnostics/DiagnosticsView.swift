@@ -114,6 +114,22 @@ func compactViewerMetricsSummary(
     return parts.joined(separator: "  ·  ")
 }
 
+/// RDPKit 0.4.0 records only the first 8 frame acknowledgements of a
+/// session (`recordedGraphicsAcknowledgeLimit`), so a full record says only
+/// that at least that many were sent.
+private let recordedFrameAcknowledgeLimit = 8
+
+func frameAcknowledgeSummary(_ acknowledgements: [String]?) -> String {
+    let count = acknowledgements?.count ?? 0
+    if count == 0 {
+        return "none"
+    }
+    if count < recordedFrameAcknowledgeLimit {
+        return "\(count)"
+    }
+    return "\(count)+ (first \(count) recorded)"
+}
+
 private struct PerformanceMetricsView: View {
     var metrics: RDPRenderMetrics
     var framePacing: RDPFramePacingState
@@ -233,62 +249,21 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 24, verticalSpacing: 10) {
                     DiagnosticRow("Target", snapshot.report?.target ?? snapshot.title)
                     DiagnosticRow("Status", statusText(snapshot))
-                    DiagnosticRow("Stage", snapshot.report?.stage ?? "not started")
                     DiagnosticRow("Disconnect Reason", disconnectReason(snapshot))
                     DiagnosticRow("Warnings", warnings(snapshot))
                     DiagnosticRow("Requested Desktop", snapshot.requestedDesktopSize)
                     DiagnosticRow("Viewer Size", snapshot.viewerPixelSize?.label ?? "unknown")
-                    DiagnosticRow("Requested Protocols", snapshot.report?.requestedProtocols.joined(separator: ", ") ?? "none")
-                    DiagnosticRow("Selected Protocols", snapshot.report?.selectedProtocols?.joined(separator: ", ") ?? "none")
-                    DiagnosticRow("TLS", snapshot.report?.tlsProtocol ?? "not negotiated")
                     DiagnosticRow(
-                        "RSA Key Exchange",
+                        "Key Exchange",
                         snapshot.usesLegacyRSAKeyExchange
-                            ? "fallback in use: the certificate does not allow ECDHE"
-                            : "not used"
+                            ? "RSA only, no forward secrecy: the server's certificate refused ECDHE"
+                            : "default"
                     )
                     DiagnosticRow("Certificate", certificateState(snapshot))
-                    DiagnosticRow("MCS", snapshot.report?.mcsConnectResult ?? "not exchanged")
-                    DiagnosticRow("I/O Channel", optionalValue(snapshot.report?.mcsIOChannelID))
-                    DiagnosticRow("Message Channel", optionalValue(snapshot.report?.mcsMessageChannelID))
-                    DiagnosticRow("Static Channels", staticChannels(snapshot.report?.mcsStaticChannels))
-                    DiagnosticRow("Attach User", snapshot.report?.mcsAttachUserResult ?? "not requested")
-                    DiagnosticRow("User Channel", optionalValue(snapshot.report?.mcsUserChannelID))
-                    DiagnosticRow("Joined", joinedChannels(snapshot.report?.mcsJoinedChannels))
-                    DiagnosticRow("Client Info", clientInfoState(snapshot.report))
-                    DiagnosticRow("Credentials Sent", metricBool(snapshot.report?.rdpClientInfoCredentialsIncluded))
-                    DiagnosticRow("Client Info Bytes", byteCount(snapshot.report?.rdpClientInfoRequestBytes))
-                    DiagnosticRow("Auto-Detect", snapshot.report?.rdpAutoDetectRequestType ?? "not requested")
-                    DiagnosticRow("Auto-Detect Seq", optionalValue(snapshot.report?.rdpAutoDetectSequenceNumber))
-                    DiagnosticRow("Post Auto-Detect", snapshot.report?.rdpPostAutoDetectResponseType ?? "none")
-                    DiagnosticRow("Licensing", snapshot.report?.rdpLicensingResponseType ?? "not observed")
-                    DiagnosticRow("License Code", hexValue(snapshot.report?.rdpLicensingErrorCode))
-                    DiagnosticRow("Post Licensing", snapshot.report?.rdpPostLicensingResponseType ?? "none")
-                    DiagnosticRow("Demand Share", hexValue(snapshot.report?.rdpDemandActiveShareID))
-                    DiagnosticRow("Demand Caps", capabilitySummary(snapshot.report?.rdpDemandActiveCapabilitySets))
-                    DiagnosticRow("Confirm Caps", capabilitySummary(snapshot.report?.rdpConfirmActiveCapabilitySets))
-                    DiagnosticRow("Post Confirm", snapshot.report?.rdpPostConfirmActiveResponseType ?? "none")
-                    DiagnosticRow("Finalization", attemptedList(snapshot.report?.rdpFinalizationResponseTypes))
-                    DiagnosticRow("Dynamic Channel", attemptedList(snapshot.report?.rdpDynamicChannelRequestTypes))
-                    DiagnosticRow("Graphics Channel", snapshot.report?.rdpGraphicsChannelName ?? "not opened")
-                    DiagnosticRow("Graphics Channel ID", optionalValue(snapshot.report?.rdpGraphicsChannelID))
-                    DiagnosticRow("Graphics Response", snapshot.report?.rdpGraphicsResponseType ?? "none")
-                    DiagnosticRow("Graphics Profile", snapshot.report?.rdpGraphicsCapabilityProfile.rawValue ?? "not requested")
-                    DiagnosticRow("Graphics", graphicsCapability(snapshot.report))
-                    DiagnosticRow("Graphics Path", RDPGraphicsPathDescription.describe(report: snapshot.report))
-                    DiagnosticRow("Graphics Updates", graphicsUpdateSummary(snapshot.report?.rdpGraphicsUpdateMessages))
-                    DiagnosticRow("Graphics Failure", graphicsFailureSummary(snapshot.report))
-                    DiagnosticRow("Update Packets", optionalValue(snapshot.report?.rdpGraphicsUpdateResponseCount))
                     DiagnosticRow("Input", snapshot.inputReady ? "ready" : "not ready")
                     DiagnosticRow("Display Control", snapshot.displayControlReady ? "ready" : "not ready")
-                    DiagnosticRow("Display Channel ID", optionalValue(snapshot.report?.rdpDisplayControlChannelID))
-                    DiagnosticRow("Display Caps", displayControlCapability(snapshot.report))
                     DiagnosticRow("Audio Requested", metricBool(snapshot.connectionRequestsAudio))
-                    DiagnosticRow("Audio Channel ID", optionalValue(snapshot.report?.rdpAudioChannelID))
-                    DiagnosticRow("Audio Messages", messageTypes(snapshot.report?.rdpAudioMessages, \.typeName))
                     DiagnosticRow("Clipboard", clipboardState(snapshot))
-                    DiagnosticRow("Clipboard Channel ID", optionalValue(snapshot.report?.rdpClipboardChannelID))
-                    DiagnosticRow("Clipboard Messages", messageTypes(snapshot.report?.rdpClipboardMessages, \.typeName))
                     // The frame presented last, or the server's first
                     // frame if none was.
                     DiagnosticRow(
@@ -298,8 +273,54 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                                 ?? snapshot.report?.rdpGraphicsFirstFrame.map(RDPFrameMetadata.init)
                         )
                     )
-                    DiagnosticRow("Frame Acks", countSummary(snapshot.report?.rdpGraphicsFrameAcknowledgeHexes))
-                    DiagnosticRow("Next", snapshot.report?.nextStage ?? "none")
+                    // RDPKit reports the rest when the session ends.
+                    if let report = snapshot.report {
+                        DiagnosticRow("Stage", report.stage)
+                        DiagnosticRow("Requested Protocols", report.requestedProtocols.joined(separator: ", "))
+                        DiagnosticRow("Selected Protocols", report.selectedProtocols?.joined(separator: ", ") ?? "none")
+                        DiagnosticRow("TLS", report.tlsProtocol ?? "not negotiated")
+                        DiagnosticRow("MCS", report.mcsConnectResult ?? "not exchanged")
+                        DiagnosticRow("I/O Channel", optionalValue(report.mcsIOChannelID))
+                        DiagnosticRow("Message Channel", optionalValue(report.mcsMessageChannelID))
+                        DiagnosticRow("Static Channels", staticChannels(report.mcsStaticChannels))
+                        DiagnosticRow("Attach User", report.mcsAttachUserResult ?? "not requested")
+                        DiagnosticRow("User Channel", optionalValue(report.mcsUserChannelID))
+                        DiagnosticRow("Joined", joinedChannels(report.mcsJoinedChannels))
+                        DiagnosticRow("Client Info", clientInfoState(report))
+                        DiagnosticRow("Credentials Sent", metricBool(report.rdpClientInfoCredentialsIncluded))
+                        DiagnosticRow("Client Info Bytes", byteCount(report.rdpClientInfoRequestBytes))
+                        DiagnosticRow("Auto-Detect", report.rdpAutoDetectRequestType ?? "not requested")
+                        DiagnosticRow("Auto-Detect Seq", optionalValue(report.rdpAutoDetectSequenceNumber))
+                        DiagnosticRow("Post Auto-Detect", report.rdpPostAutoDetectResponseType ?? "none")
+                        DiagnosticRow("Licensing", report.rdpLicensingResponseType ?? "not observed")
+                        DiagnosticRow("License Code", hexValue(report.rdpLicensingErrorCode))
+                        DiagnosticRow("Post Licensing", report.rdpPostLicensingResponseType ?? "none")
+                        DiagnosticRow("Demand Share", hexValue(report.rdpDemandActiveShareID))
+                        DiagnosticRow("Demand Caps", capabilitySummary(report.rdpDemandActiveCapabilitySets))
+                        DiagnosticRow("Confirm Caps", capabilitySummary(report.rdpConfirmActiveCapabilitySets))
+                        DiagnosticRow("Post Confirm", report.rdpPostConfirmActiveResponseType ?? "none")
+                        DiagnosticRow("Finalization", attemptedList(report.rdpFinalizationResponseTypes))
+                        DiagnosticRow("Dynamic Channel", attemptedList(report.rdpDynamicChannelRequestTypes))
+                        DiagnosticRow("Graphics Channel", report.rdpGraphicsChannelName ?? "not opened")
+                        DiagnosticRow("Graphics Channel ID", optionalValue(report.rdpGraphicsChannelID))
+                        DiagnosticRow("Graphics Response", report.rdpGraphicsResponseType ?? "none")
+                        DiagnosticRow("Graphics Profile", report.rdpGraphicsCapabilityProfile.rawValue)
+                        DiagnosticRow("Graphics", graphicsCapability(report))
+                        DiagnosticRow("Graphics Path", RDPGraphicsPathDescription.describe(report: report))
+                        DiagnosticRow("Graphics Updates", graphicsUpdateSummary(report.rdpGraphicsUpdateMessages))
+                        DiagnosticRow("Graphics Failure", graphicsFailureSummary(report))
+                        DiagnosticRow("Update Packets", optionalValue(report.rdpGraphicsUpdateResponseCount))
+                        DiagnosticRow("Display Channel ID", optionalValue(report.rdpDisplayControlChannelID))
+                        DiagnosticRow("Display Caps", displayControlCapability(report))
+                        DiagnosticRow("Audio Channel ID", optionalValue(report.rdpAudioChannelID))
+                        DiagnosticRow("Audio Messages", messageTypes(report.rdpAudioMessages, \.typeName))
+                        DiagnosticRow("Clipboard Channel ID", optionalValue(report.rdpClipboardChannelID))
+                        DiagnosticRow("Clipboard Messages", messageTypes(report.rdpClipboardMessages, \.typeName))
+                        DiagnosticRow("Frame Acks", frameAcknowledgeSummary(report.rdpGraphicsFrameAcknowledgeHexes))
+                        DiagnosticRow("Next", report.nextStage ?? "none")
+                    } else {
+                        DiagnosticRow("Connection Details", snapshot.isConnecting ? "shown when the session ends" : "none")
+                    }
                 }
 
                 if let report = snapshot.report {
@@ -459,10 +480,12 @@ struct RemoteSessionDiagnosticsWindowContent: View {
     private func statusLine(_ snapshot: RemoteSessionDiagnosticsSnapshot) -> String {
         [
             statusText(snapshot),
-            snapshot.report?.stage ?? "not started",
+            snapshot.report?.stage,
             metricFramesPerSecond(snapshot.renderMetrics.rollingFramesPerSecond),
             metricMegabitsPerSecond(snapshot.renderMetrics.rollingWireMegabitsPerSecond),
-        ].joined(separator: " - ")
+        ]
+        .compactMap { $0 }
+        .joined(separator: " - ")
     }
 
     private func statusText(_ snapshot: RemoteSessionDiagnosticsSnapshot) -> String {
@@ -683,13 +706,6 @@ struct RemoteSessionDiagnosticsWindowContent: View {
             parts.append("nal \(frame.videoNalUnitTypes.map(String.init).joined(separator: "/"))")
         }
         return parts.joined(separator: ", ")
-    }
-
-    private func countSummary(_ values: [String]?) -> String {
-        guard let values, !values.isEmpty else {
-            return "none"
-        }
-        return "\(values.count)"
     }
 
 }
