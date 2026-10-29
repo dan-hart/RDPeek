@@ -55,6 +55,10 @@ client and from a full review of RDPeek, on RDPKit's next release.
   that do not no longer show a tiny desktop.
 - A session that signs in but never shows the desktop reconnects once,
   then says so, instead of showing Connecting forever.
+- A session whose desktop RDPeek cannot decode, such as video in a
+  format this Mac cannot play, ends at the connection timeout and says
+  RDPeek could not show it, instead of showing Connecting until
+  cancelled.
 - Servers list RDPeek's sessions under the Mac's name, and when
   licensing fails with a stored client license, RDPeek connects once
   more without it, so the server can issue a new one.
@@ -87,7 +91,8 @@ client and from a full review of RDPeek, on RDPKit's next release.
 - Keys pressed with ⌘ are released on the remote as soon as they go up,
   so pressing ⌘W twice quickly works.
 - Modifiers whose release the window never saw, for example with a
-  menu open or Spotlight up, are released on the next event, and
+  menu open or Spotlight up, are released on the next event, also while
+  connecting, so the remote does not start with one held down, and
   keyboards that report no left/right modifier bits work.
 - Caps Lock and Num Lock follow the Mac when the window regains focus,
   so keypad digits type digits; keypad Clear no longer toggles Num
