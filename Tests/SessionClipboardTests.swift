@@ -182,6 +182,26 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertTrue(session.publishedFiles.isEmpty)
     }
 
+    func testLocalFileNamesAreMadeValidOnWindows() async throws {
+        var usedFileNames = Set<String>()
+        let names = ["a*b?.txt", "q\"<>|\\.txt", "draft. .", "...", "Notes.txt", "notes.txt", "notes.TXT"].map {
+            SessionClipboard.windowsFileName($0, usedFileNames: &usedFileNames)
+        }
+        XCTAssertEqual(names, ["a_b_.txt", "q_____.txt", "draft", "file", "Notes.txt", "notes-2.txt", "notes-3.TXT"])
+
+        // A "/" Finder shows in a name is a ":" on disk. Files from two
+        // folders can share a name.
+        let first = try makeLocalFile(named: "a:b.txt", contents: Data())
+        let second = try makeLocalFile(named: "a:b.txt", contents: Data())
+        pasteboard.clearContents()
+        pasteboard.writeObjects([first as NSURL, second as NSURL])
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        clipboard.attach(session)
+        try await XCTUnwrap(clipboard.localFileRead).value
+        XCTAssertEqual(session.publishedFiles.last?.map(\.descriptor.fileName), ["a_b.txt", "a_b-2.txt"])
+    }
+
     // MARK: - Remote files
 
     func testRemoteFileArrivesOverRangesTheServerAnswersShort() throws {

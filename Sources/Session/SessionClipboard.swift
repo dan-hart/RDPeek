@@ -8,6 +8,10 @@ private let sessionMaximumFileRangeByteCount: UInt64 = 1024 * 1024
 /// How long a FILECONTENTS request may go unanswered before the download
 /// fails.
 private let sessionFileContentsRequestTimeout: TimeInterval = 30
+/// Characters Windows does not allow in a file name; a pasted file whose
+/// name has one fails to paste there.
+private let windowsInvalidFileNameCharacters = CharacterSet(charactersIn: "/\\:*?\"<>|")
+    .union(.controlCharacters)
 
 /// Where the clipboard bridge sends: the session's `RDPClipboardSession`, or
 /// a test's recorder.
@@ -349,6 +353,7 @@ final class SessionClipboard {
     private nonisolated static func localFiles(from urls: [URL]) -> SessionLocalClipboardPayload {
         var files: [RDPClipboardLocalFile] = []
         var totalByteCount = 0
+        var usedFileNames = Set<String>()
 
         for url in urls {
             let fileURL = url.standardizedFileURL
@@ -381,13 +386,45 @@ final class SessionClipboard {
                     return .unsupported("Local clipboard files exceed 32 MiB; remote clipboard cleared")
                 }
                 totalByteCount += contents.count
-                files.append(RDPClipboardLocalFile(fileName: fileName, contents: contents))
+                files.append(RDPClipboardLocalFile(
+                    fileName: windowsFileName(fileName, usedFileNames: &usedFileNames),
+                    contents: contents
+                ))
             } catch {
                 return .unsupported("Local file clipboard could not be read; remote clipboard cleared")
             }
         }
 
         return files.isEmpty ? .empty : .files(files)
+    }
+
+    /// `fileName` as Windows accepts it, and unlike the names in
+    /// `usedFileNames`, which it joins. Windows compares names ignoring
+    /// case, and copied files from different folders can share one.
+    nonisolated static func windowsFileName(_ fileName: String, usedFileNames: inout Set<String>) -> String {
+        var scalars = String.UnicodeScalarView()
+        for scalar in fileName.unicodeScalars {
+            scalars.append(windowsInvalidFileNameCharacters.contains(scalar) ? "_" : scalar)
+        }
+        var name = String(scalars)
+        // Windows drops these from the end of a name.
+        while name.hasSuffix(".") || name.hasSuffix(" ") {
+            name.removeLast()
+        }
+        if name.isEmpty {
+            name = "file"
+        }
+
+        let baseName = (name as NSString).deletingPathExtension
+        let pathExtension = (name as NSString).pathExtension
+        var candidate = name
+        var suffix = 2
+        while usedFileNames.contains(candidate.lowercased()) {
+            candidate = pathExtension.isEmpty ? "\(baseName)-\(suffix)" : "\(baseName)-\(suffix).\(pathExtension)"
+            suffix += 1
+        }
+        usedFileNames.insert(candidate.lowercased())
+        return candidate
     }
 
     // MARK: - Remote file downloads
