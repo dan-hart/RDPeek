@@ -460,8 +460,6 @@ final class SessionViewController: NSViewController {
             clipboardSharingEnabled: clipboard.isSharingEnabled,
             audioPlaybackEnabled: audioPlaybackEnabled,
             certificateTrustedByApp: certificateTrustedByApp,
-            certificateTrustMessage: certificateTrustMessage,
-            formError: nil,
             isConnecting: isConnecting
         )
         diagnosticsModel.updateSnapshot(nextSnapshot)
@@ -1515,28 +1513,4 @@ private final class SessionMainActorSink: @unchecked Sendable {
             }
         }
     }
-}
-
-func compactViewerMetricsSummary(
-    metrics: RDPRenderMetrics,
-    framePacing: RDPFramePacingState
-) -> String? {
-    var parts: [String] = []
-    let framesPerSecond = metrics.rollingFramesPerSecond ?? metrics.averageFramesPerSecond
-    if let framesPerSecond {
-        parts.append(String(format: "%.1f fps", framesPerSecond))
-    }
-    if let lastDecodeMilliseconds = metrics.lastDecodeMilliseconds {
-        parts.append(String(format: "decode %.1f ms", lastDecodeMilliseconds))
-    }
-    if let wireMegabitsPerSecond = metrics.rollingWireMegabitsPerSecond {
-        parts.append(String(format: "rx %.1f Mbps", wireMegabitsPerSecond))
-    }
-    if let displayLinkFramesPerSecond = framePacing.displayLinkFramesPerSecond {
-        parts.append(String(format: "%.0f Hz", displayLinkFramesPerSecond))
-    }
-    guard parts.isEmpty == false else {
-        return nil
-    }
-    return parts.joined(separator: "  ·  ")
 }

@@ -77,6 +77,31 @@ private func metricBytes(_ value: Int) -> String {
     ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file)
 }
 
+/// The one-line summary the session's performance overlay shows.
+func compactViewerMetricsSummary(
+    metrics: RDPRenderMetrics,
+    framePacing: RDPFramePacingState
+) -> String? {
+    var parts: [String] = []
+    let framesPerSecond = metrics.rollingFramesPerSecond ?? metrics.averageFramesPerSecond
+    if let framesPerSecond {
+        parts.append(metricFramesPerSecond(framesPerSecond))
+    }
+    if let lastDecodeMilliseconds = metrics.lastDecodeMilliseconds {
+        parts.append("decode \(metricMilliseconds(lastDecodeMilliseconds))")
+    }
+    if let wireMegabitsPerSecond = metrics.rollingWireMegabitsPerSecond {
+        parts.append("rx \(metricMegabitsPerSecond(wireMegabitsPerSecond))")
+    }
+    if let displayLinkFramesPerSecond = framePacing.displayLinkFramesPerSecond {
+        parts.append(metricHertz(displayLinkFramesPerSecond))
+    }
+    guard parts.isEmpty == false else {
+        return nil
+    }
+    return parts.joined(separator: "  ·  ")
+}
+
 private struct PerformanceMetricsView: View {
     var metrics: RDPRenderMetrics
     var framePacing: RDPFramePacingState
@@ -155,8 +180,6 @@ struct RemoteSessionDiagnosticsSnapshot: Equatable {
     var clipboardSharingEnabled = false
     var audioPlaybackEnabled = false
     var certificateTrustedByApp = false
-    var certificateTrustMessage: String?
-    var formError: String?
     var isConnecting = false
 }
 
@@ -188,10 +211,6 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                         .textSelection(.enabled)
                 }
 
-                if let formError = snapshot.formError {
-                    InlineNotice(title: "Input", message: formError, systemImage: "exclamationmark.triangle.fill")
-                }
-
                 if let decodeError = snapshot.renderMetrics.lastDecodeError {
                     InlineNotice(
                         title: "Decode Error",
@@ -209,6 +228,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                     DiagnosticRow("Status", statusText(snapshot))
                     DiagnosticRow("Stage", snapshot.report?.stage ?? "not started")
                     DiagnosticRow("Disconnect Reason", disconnectReason(snapshot))
+                    DiagnosticRow("Warnings", warnings(snapshot))
                     DiagnosticRow("Requested Desktop", snapshot.requestedDesktopSize)
                     DiagnosticRow("Viewer Size", snapshot.viewerPixelSize?.label ?? "unknown")
                     DiagnosticRow("Requested Protocols", snapshot.report?.requestedProtocols.joined(separator: ", ") ?? "none")
@@ -216,46 +236,46 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                     DiagnosticRow("TLS", snapshot.report?.tlsProtocol ?? "not negotiated")
                     DiagnosticRow("Certificate", certificateState(snapshot))
                     DiagnosticRow("MCS", snapshot.report?.mcsConnectResult ?? "not exchanged")
-                    DiagnosticRow("I/O Channel", channelID(snapshot.report?.mcsIOChannelID))
-                    DiagnosticRow("Message Channel", channelID(snapshot.report?.mcsMessageChannelID))
+                    DiagnosticRow("I/O Channel", optionalValue(snapshot.report?.mcsIOChannelID))
+                    DiagnosticRow("Message Channel", optionalValue(snapshot.report?.mcsMessageChannelID))
                     DiagnosticRow("Static Channels", staticChannels(snapshot.report?.mcsStaticChannels))
                     DiagnosticRow("Attach User", snapshot.report?.mcsAttachUserResult ?? "not requested")
-                    DiagnosticRow("User Channel", channelID(snapshot.report?.mcsUserChannelID))
+                    DiagnosticRow("User Channel", optionalValue(snapshot.report?.mcsUserChannelID))
                     DiagnosticRow("Joined", joinedChannels(snapshot.report?.mcsJoinedChannels))
                     DiagnosticRow("Client Info", clientInfoState(snapshot.report))
-                    DiagnosticRow("Credentials Sent", boolState(snapshot.report?.rdpClientInfoCredentialsIncluded))
+                    DiagnosticRow("Credentials Sent", metricBool(snapshot.report?.rdpClientInfoCredentialsIncluded))
                     DiagnosticRow("Client Info Bytes", byteCount(snapshot.report?.rdpClientInfoRequestBytes))
                     DiagnosticRow("Auto-Detect", snapshot.report?.rdpAutoDetectRequestType ?? "not requested")
-                    DiagnosticRow("Auto-Detect Seq", sequenceNumber(snapshot.report?.rdpAutoDetectSequenceNumber))
+                    DiagnosticRow("Auto-Detect Seq", optionalValue(snapshot.report?.rdpAutoDetectSequenceNumber))
                     DiagnosticRow("Post Auto-Detect", snapshot.report?.rdpPostAutoDetectResponseType ?? "none")
                     DiagnosticRow("Licensing", snapshot.report?.rdpLicensingResponseType ?? "not observed")
-                    DiagnosticRow("License Code", errorCode(snapshot.report?.rdpLicensingErrorCode))
+                    DiagnosticRow("License Code", hexValue(snapshot.report?.rdpLicensingErrorCode))
                     DiagnosticRow("Post Licensing", snapshot.report?.rdpPostLicensingResponseType ?? "none")
-                    DiagnosticRow("Demand Share", shareID(snapshot.report?.rdpDemandActiveShareID))
+                    DiagnosticRow("Demand Share", hexValue(snapshot.report?.rdpDemandActiveShareID))
                     DiagnosticRow("Demand Caps", capabilitySummary(snapshot.report?.rdpDemandActiveCapabilitySets))
                     DiagnosticRow("Confirm Caps", capabilitySummary(snapshot.report?.rdpConfirmActiveCapabilitySets))
                     DiagnosticRow("Post Confirm", snapshot.report?.rdpPostConfirmActiveResponseType ?? "none")
-                    DiagnosticRow("Finalization", finalizationSummary(snapshot.report?.rdpFinalizationResponseTypes))
-                    DiagnosticRow("Dynamic Channel", dynamicChannelSummary(snapshot.report?.rdpDynamicChannelRequestTypes))
+                    DiagnosticRow("Finalization", attemptedList(snapshot.report?.rdpFinalizationResponseTypes))
+                    DiagnosticRow("Dynamic Channel", attemptedList(snapshot.report?.rdpDynamicChannelRequestTypes))
                     DiagnosticRow("Graphics Channel", snapshot.report?.rdpGraphicsChannelName ?? "not opened")
-                    DiagnosticRow("Graphics Channel ID", dynamicChannelID(snapshot.report?.rdpGraphicsChannelID))
+                    DiagnosticRow("Graphics Channel ID", optionalValue(snapshot.report?.rdpGraphicsChannelID))
                     DiagnosticRow("Graphics Response", snapshot.report?.rdpGraphicsResponseType ?? "none")
                     DiagnosticRow("Graphics Profile", snapshot.report?.rdpGraphicsCapabilityProfile.rawValue ?? "not requested")
                     DiagnosticRow("Graphics", graphicsCapability(snapshot.report))
                     DiagnosticRow("Graphics Path", RDPGraphicsPathDescription.describe(report: snapshot.report))
                     DiagnosticRow("Graphics Updates", graphicsUpdateSummary(snapshot.report?.rdpGraphicsUpdateMessages))
                     DiagnosticRow("Graphics Failure", graphicsFailureSummary(snapshot.report))
-                    DiagnosticRow("Update Packets", countSummary(snapshot.report?.rdpGraphicsUpdateResponseCount))
+                    DiagnosticRow("Update Packets", optionalValue(snapshot.report?.rdpGraphicsUpdateResponseCount))
                     DiagnosticRow("Input", snapshot.inputReady ? "ready" : "not ready")
                     DiagnosticRow("Display Control", snapshot.displayControlReady ? "ready" : "not ready")
-                    DiagnosticRow("Display Channel ID", dynamicChannelID(snapshot.report?.rdpDisplayControlChannelID))
+                    DiagnosticRow("Display Channel ID", optionalValue(snapshot.report?.rdpDisplayControlChannelID))
                     DiagnosticRow("Display Caps", displayControlCapability(snapshot.report))
                     DiagnosticRow("Audio", snapshot.audioPlaybackEnabled ? "requested" : "off")
-                    DiagnosticRow("Audio Channel ID", channelID(snapshot.report?.rdpAudioChannelID))
-                    DiagnosticRow("Audio Messages", audioSummary(snapshot.report?.rdpAudioMessages))
+                    DiagnosticRow("Audio Channel ID", optionalValue(snapshot.report?.rdpAudioChannelID))
+                    DiagnosticRow("Audio Messages", messageTypes(snapshot.report?.rdpAudioMessages, \.typeName))
                     DiagnosticRow("Clipboard", clipboardState(snapshot))
-                    DiagnosticRow("Clipboard Channel ID", channelID(snapshot.report?.rdpClipboardChannelID))
-                    DiagnosticRow("Clipboard Messages", clipboardSummary(snapshot.report?.rdpClipboardMessages))
+                    DiagnosticRow("Clipboard Channel ID", optionalValue(snapshot.report?.rdpClipboardChannelID))
+                    DiagnosticRow("Clipboard Messages", messageTypes(snapshot.report?.rdpClipboardMessages, \.typeName))
                     DiagnosticRow(
                         "First Frame",
                         firstFrameSummary(
@@ -450,12 +470,21 @@ struct RemoteSessionDiagnosticsWindowContent: View {
         return "none"
     }
 
+    /// The report's warnings arrive when the session ends; until then the
+    /// live certificate's warnings stand in.
+    private func warnings(_ snapshot: RemoteSessionDiagnosticsSnapshot) -> String {
+        let warnings = snapshot.report?.warnings ?? snapshot.serverCertificateInfo?.warnings ?? []
+        guard warnings.isEmpty == false else {
+            return "none"
+        }
+        return warnings
+            .map { "\($0.code): \($0.message)" }
+            .joined(separator: "\n")
+    }
+
     private func certificateState(_ snapshot: RemoteSessionDiagnosticsSnapshot) -> String {
         if snapshot.certificateTrustedByApp {
             return "trusted for this host"
-        }
-        if let message = snapshot.certificateTrustMessage {
-            return message
         }
         guard let trusted = snapshot.report?.certificateTrusted ?? snapshot.serverCertificateInfo?.trusted else {
             return "not available"
@@ -473,18 +502,18 @@ struct RemoteSessionDiagnosticsWindowContent: View {
         return "0x\(String(format: "%08x", version))\(flags)"
     }
 
-    private func channelID(_ value: UInt16?) -> String {
+    private func optionalValue(_ value: (some CustomStringConvertible)?) -> String {
         guard let value else {
             return "none"
         }
-        return String(value)
+        return value.description
     }
 
-    private func dynamicChannelID(_ value: UInt32?) -> String {
+    private func hexValue(_ value: UInt32?) -> String {
         guard let value else {
             return "none"
         }
-        return String(value)
+        return "0x\(String(format: "%08x", value))"
     }
 
     private func staticChannels(_ channels: [RDPStaticVirtualChannelAssignment]?) -> String {
@@ -512,39 +541,11 @@ struct RemoteSessionDiagnosticsWindowContent: View {
         return sent ? "sent" : "not sent"
     }
 
-    private func boolState(_ value: Bool?) -> String {
-        guard let value else {
-            return "none"
-        }
-        return value ? "yes" : "no"
-    }
-
     private func byteCount(_ value: Int?) -> String {
         guard let value else {
             return "none"
         }
         return "\(value) bytes"
-    }
-
-    private func sequenceNumber(_ value: UInt16?) -> String {
-        guard let value else {
-            return "none"
-        }
-        return String(value)
-    }
-
-    private func errorCode(_ value: UInt32?) -> String {
-        guard let value else {
-            return "none"
-        }
-        return "0x\(String(format: "%08x", value))"
-    }
-
-    private func shareID(_ value: UInt32?) -> String {
-        guard let value else {
-            return "none"
-        }
-        return "0x\(String(format: "%08x", value))"
     }
 
     private func capabilitySummary(_ capabilities: [RDPCapabilitySetSummary]?) -> String {
@@ -556,14 +557,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
             .joined(separator: ", ")
     }
 
-    private func finalizationSummary(_ types: [String]?) -> String {
-        guard let types, !types.isEmpty else {
-            return "not attempted"
-        }
-        return types.joined(separator: ", ")
-    }
-
-    private func dynamicChannelSummary(_ types: [String]?) -> String {
+    private func attemptedList(_ types: [String]?) -> String {
         guard let types, !types.isEmpty else {
             return "not attempted"
         }
@@ -580,23 +574,13 @@ struct RemoteSessionDiagnosticsWindowContent: View {
         ].joined(separator: ", ")
     }
 
-    private func clipboardSummary(_ messages: [RDPClipboardMessageSummary]?) -> String {
+    private func messageTypes<Message>(_ messages: [Message]?, _ typeName: KeyPath<Message, String>) -> String {
         guard let messages, !messages.isEmpty else {
             return "not observed"
         }
         return messages
             .prefix(4)
-            .map { $0.typeName }
-            .joined(separator: ", ")
-    }
-
-    private func audioSummary(_ messages: [RDPAudioMessageSummary]?) -> String {
-        guard let messages, !messages.isEmpty else {
-            return "not observed"
-        }
-        return messages
-            .prefix(4)
-            .map { $0.typeName }
+            .map { $0[keyPath: typeName] }
             .joined(separator: ", ")
     }
 
@@ -693,12 +677,6 @@ struct RemoteSessionDiagnosticsWindowContent: View {
         return "\(values.count)"
     }
 
-    private func countSummary(_ value: Int?) -> String {
-        guard let value else {
-            return "none"
-        }
-        return "\(value)"
-    }
 }
 
 private extension Array {
@@ -726,7 +704,7 @@ private struct DiagnosticRow: View {
     }
 }
 
-struct InlineNotice: View {
+private struct InlineNotice: View {
     var title: String
     var message: String
     var systemImage: String
