@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
 
 Security, input, clipboard, and session fixes, on RDPKit 0.5.0.
 
