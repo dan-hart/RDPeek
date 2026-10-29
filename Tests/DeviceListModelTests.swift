@@ -112,6 +112,8 @@ final class DeviceListModelTests: XCTestCase {
 
         XCTAssertEqual(harness.model.devices.map(\.id), [twin.id])
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
+        XCTAssertEqual(harness.credentials.movedLegacyAccounts, [account])
+        XCTAssertEqual(harness.credentials.legacyPasswordKeepers, [[twin.identity]])
         XCTAssertEqual(harness.cache.password(for: account), "cached")
         XCTAssertNil(harness.model.errorMessage)
         XCTAssertNil(harness.model.devicePendingDeletion)
@@ -127,6 +129,7 @@ final class DeviceListModelTests: XCTestCase {
         harness.model.confirmDeletion(of: device)
 
         XCTAssertEqual(harness.credentials.deletedAccounts, [account])
+        XCTAssertEqual(harness.credentials.movedLegacyAccounts, [])
         XCTAssertEqual(harness.cache.password(for: account), "cached")
         XCTAssertNil(harness.model.errorMessage)
     }
@@ -834,6 +837,8 @@ private final class CredentialStoreRecorder: CredentialStoring, @unchecked Senda
     private(set) var readAccounts: [String] = []
     private(set) var savedAccounts: [String] = []
     private(set) var deletedAccounts: [String] = []
+    private(set) var movedLegacyAccounts: [String] = []
+    private(set) var legacyPasswordKeepers: [[RDPConnectionIdentity]] = []
 
     func password(for key: KeychainCredentialKey) throws -> String? {
         readAccounts.append(key.account)
@@ -857,6 +862,11 @@ private final class CredentialStoreRecorder: CredentialStoring, @unchecked Senda
             throw deleteError
         }
         passwords.removeValue(forKey: key.account)
+    }
+
+    func moveLegacyPasswords(for key: KeychainCredentialKey, keptBy others: [RDPConnectionIdentity]) {
+        movedLegacyAccounts.append(key.account)
+        legacyPasswordKeepers.append(others)
     }
 }
 

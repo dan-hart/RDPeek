@@ -84,6 +84,30 @@ final class KeychainCredentialStoreTests: XCTestCase {
         try store.deletePassword(for: key)
         XCTAssertEqual(keychain.passwords, [:])
     }
+
+    /// Deleting a PC for "WinBox" while one for "winbox" remembers the
+    /// account: that one never tries the deleted one's legacy name, so a
+    /// password under it moves to the account's name, or goes when that
+    /// name has one already. One spelled alike tries it itself.
+    func testDeletedPCsLegacyPasswordMovesToTheAccountName() throws {
+        let key = try typedKey()
+        let spelledOtherwise = RDPConnectionIdentity(host: "winbox", username: "anees")
+        let spelledAlike = RDPConnectionIdentity(host: "WinBox", username: "anees")
+        let cases: [(saved: [String: String], keptBy: RDPConnectionIdentity, left: [String: String])] = [
+            ([legacyAccount: "secret"], spelledOtherwise, [currentAccount: "secret"]),
+            ([legacyAccount: "older", currentAccount: "newer"], spelledOtherwise, [currentAccount: "newer"]),
+            ([currentAccount: "secret"], spelledOtherwise, [currentAccount: "secret"]),
+            ([legacyAccount: "secret"], spelledAlike, [legacyAccount: "secret"]),
+        ]
+        for (saved, keptBy, left) in cases {
+            let keychain = KeychainItemsFake(saved)
+
+            try KeychainCredentialStore(keychain: keychain).moveLegacyPasswords(for: key, keptBy: [keptBy])
+
+            XCTAssertEqual(keychain.passwords, left, "Saved: \(saved.keys.sorted())")
+            XCTAssertEqual(keychain.readAccounts, [])
+        }
+    }
 }
 
 /// Stands in for the Keychain. `interruption` runs once, after the call it

@@ -295,8 +295,14 @@ final class DeviceListModel: ObservableObject {
                 }
                 // The confirmation dialog promises the saved password is
                 // removed too, so a failure must surface, not be swallowed.
-                if twins.contains(where: \.rememberPassword) == false {
+                let keepers = twins.filter(\.rememberPassword)
+                if keepers.isEmpty {
                     try credentialStore.deletePassword(for: key)
+                } else {
+                    // One saved under this PC's earlier account name, which
+                    // the others may spell otherwise and never read, moves
+                    // to the account's name.
+                    try credentialStore.moveLegacyPasswords(for: key, keptBy: keepers.map(\.identity))
                 }
             }
         } catch {

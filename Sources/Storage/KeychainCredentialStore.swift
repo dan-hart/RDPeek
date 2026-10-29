@@ -29,6 +29,10 @@ protocol CredentialStoring: Sendable {
     func password(for key: KeychainCredentialKey) throws -> String?
     func savePassword(_ password: String, for key: KeychainCredentialKey) throws
     func deletePassword(for key: KeychainCredentialKey) throws
+    /// For a PC deleted while `others` still remember its account's
+    /// password: moves one saved under the PC's earlier account names,
+    /// which their reads may not try, to the account's current name.
+    func moveLegacyPasswords(for key: KeychainCredentialKey, keptBy others: [RDPConnectionIdentity]) throws
 }
 
 struct KeychainCredentialStore: CredentialStoring {
@@ -80,6 +84,19 @@ struct KeychainCredentialStore: CredentialStoring {
         try keychain.delete(account: key.account)
         for legacyAccount in key.identity.legacyCredentialAccountNames {
             try keychain.delete(account: legacyAccount)
+        }
+    }
+
+    /// A password under one of `key`'s earlier names moves to the current
+    /// name in one step, as a read moves it, or goes when that name has a
+    /// password already. An earlier name one of `others` spells alike stays
+    /// for that PC's own read. Nothing is read.
+    func moveLegacyPasswords(for key: KeychainCredentialKey, keptBy others: [RDPConnectionIdentity]) throws {
+        let namesInUse = Set(others.flatMap(\.legacyCredentialAccountNames))
+        for legacyAccount in key.identity.legacyCredentialAccountNames where namesInUse.contains(legacyAccount) == false {
+            if try keychain.rename(account: legacyAccount, to: key.account) == .newNameTaken {
+                try keychain.delete(account: legacyAccount)
+            }
         }
     }
 

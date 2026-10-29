@@ -220,4 +220,6 @@ private final class CredentialStoreFake: CredentialStoring, @unchecked Sendable 
         }
         passwords.removeValue(forKey: key.account)
     }
+
+    func moveLegacyPasswords(for _: KeychainCredentialKey, keptBy _: [RDPConnectionIdentity]) {}
 }
