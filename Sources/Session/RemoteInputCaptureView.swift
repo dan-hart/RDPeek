@@ -596,9 +596,14 @@ struct MacRDPDeferredWindowsKey {
     }
 
     mutating func press(_ scancode: RDPKeyboardScancode) {
-        if heldScancodes.contains(scancode) == false {
-            heldScancodes.append(scancode)
+        guard heldScancodes.contains(scancode) == false else {
+            return
         }
+        // Both Command keys held together are one chord, not two taps.
+        if isHoldingKeys {
+            isChordedElsewhere = true
+        }
+        heldScancodes.append(scancode)
     }
 
     /// Sends the held keys down, ahead of another key, a button or, for right Alt, a scroll.

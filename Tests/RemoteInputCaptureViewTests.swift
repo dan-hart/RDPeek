@@ -907,6 +907,17 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .rightWindows, isReleased: true)])
     }
 
+    func testBothCommandsPressedAndReleasedTogetherTapNothing() {
+        let harness = makeHarness()
+        let bothCommands = NSEvent.ModifierFlags.leftCommandDown.union(.rightCommandDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightCommand, flags: bothCommands))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .rightCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightCommand, flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [])
+    }
+
     func testChordWithOneCommandOnTheServerSendsTheOther() {
         // With left Win already down from a click, a key pressed while right
         // Command is held too still sends right Win down ahead of it.
