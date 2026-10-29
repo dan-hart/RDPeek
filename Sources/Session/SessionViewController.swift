@@ -776,7 +776,10 @@ final class SessionViewController: NSViewController {
                 onDisplayControlReady: { session in
                     sink.apply { controller in
                         controller.displayControlSession = session
-                        controller.scheduleAutoDisplaySizeUpdate(force: true)
+                        // A server redirection's target has not been sent
+                        // the layout the first server got.
+                        controller.lastRequestedDisplayRequest = nil
+                        controller.scheduleAutoDisplaySizeUpdate()
                         controller.render()
                     }
                 },
@@ -1121,7 +1124,7 @@ final class SessionViewController: NSViewController {
         }
     }
 
-    private func scheduleAutoDisplaySizeUpdate(force: Bool = false) {
+    private func scheduleAutoDisplaySizeUpdate() {
         guard autoApplyViewerSize,
               isConnecting,
               displayControlSession != nil,
@@ -1131,7 +1134,7 @@ final class SessionViewController: NSViewController {
         }
 
         let displayRequest = viewerPixelSize.displayRequest
-        guard force || lastRequestedDisplayRequest != displayRequest else {
+        guard lastRequestedDisplayRequest != displayRequest else {
             return
         }
 
@@ -1180,7 +1183,7 @@ final class SessionViewController: NSViewController {
     private func setFollowWindowSize(_ enabled: Bool) {
         autoApplyViewerSize = enabled
         if enabled {
-            scheduleAutoDisplaySizeUpdate(force: true)
+            scheduleAutoDisplaySizeUpdate()
         } else {
             cancelPendingDisplayResize()
         }
