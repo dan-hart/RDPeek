@@ -578,16 +578,10 @@ final class SessionViewController: NSViewController {
         isAwaitingCredentials = false
         isAutoRetryPending = false
         activeCancellation?.cancel()
-        cancelPendingDisplayResize(resetLastRequestedSize: true)
+        detachSessionChannels()
         activeConnectionID = nil
         activeCancellation = nil
         sessionEndReason = nil
-        inputSession = nil
-        displayControlSession = nil
-        clipboardSession = nil
-        discardRemoteClipboardFileTransfer()
-        pasteboardChangeCount = NSPasteboard.general.changeCount
-        remoteAudioPlayer.reset()
         isConnecting = false
 
         report = nil
@@ -912,11 +906,7 @@ final class SessionViewController: NSViewController {
                 // The channel is closed once the run loop returns; drop the
                 // session objects so clipboard sync/polling and the input
                 // wiring can't keep talking to a dead channel.
-                controller.inputSession = nil
-                controller.displayControlSession = nil
-                controller.clipboardSession = nil
-                controller.discardRemoteClipboardFileTransfer()
-                controller.remoteAudioPlayer.reset()
+                controller.detachSessionChannels()
                 controller.firstFrameWatchdogTask?.cancel()
                 // Retry transport failures (no negotiation response ever
                 // arrived) and pre-frame stalls. Some servers give no
@@ -950,16 +940,10 @@ final class SessionViewController: NSViewController {
         isResolvingStoredCredentials = false
         hudModel.connectingStatusDetail = nil
         activeCancellation?.cancel()
-        cancelPendingDisplayResize(resetLastRequestedSize: true)
+        detachSessionChannels()
         resetFramePresentationState()
         activeCancellation = nil
         activeConnectionID = nil
-        inputSession = nil
-        displayControlSession = nil
-        clipboardSession = nil
-        discardRemoteClipboardFileTransfer()
-        pasteboardChangeCount = NSPasteboard.general.changeCount
-        remoteAudioPlayer.reset()
         isConnecting = false
         if shouldRecordCancellation {
             // Cancelling a connect that never showed a frame, when the
@@ -973,6 +957,19 @@ final class SessionViewController: NSViewController {
             sessionEndReason = .cancelled
         }
         render()
+    }
+
+    /// Drops what a session handed out, so nothing more is sent to it once
+    /// it has ended — however it ended.
+    private func detachSessionChannels() {
+        cancelPendingDisplayResize(resetLastRequestedSize: true)
+        inputSession = nil
+        displayControlSession = nil
+        clipboardSession = nil
+        discardRemoteClipboardFileTransfer()
+        pasteboardChangeCount = NSPasteboard.general.changeCount
+        remoteAudioPlayer.reset()
+        audioMessage = nil
     }
 
     // MARK: - Frame presentation
