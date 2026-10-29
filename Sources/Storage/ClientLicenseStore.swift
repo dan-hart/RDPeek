@@ -33,25 +33,3 @@ struct ClientLicenseStore: Sendable {
         try keychain.save(JSONEncoder().encode(license), account: key.account)
     }
 }
-
-enum ClientLicensePersistenceResult: Sendable {
-    case saved
-}
-
-@discardableResult
-func persistClientLicenseIfNeeded(
-    _ license: RDPStoredClientLicense?,
-    key: ClientLicenseStoreKey,
-    store: ClientLicenseStore
-) -> Result<ClientLicensePersistenceResult, Error>? {
-    guard let license else {
-        return nil
-    }
-
-    do {
-        try store.saveLicense(license, for: key)
-        return .success(.saved)
-    } catch {
-        return .failure(error)
-    }
-}

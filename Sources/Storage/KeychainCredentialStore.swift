@@ -11,20 +11,6 @@ struct KeychainCredentialKey: Equatable, Sendable {
         self.identity = identity
     }
 
-    /// The key for a host and port as typed, or nil when the target or
-    /// username is incomplete.
-    init?(host: String, portText: String, username: String, domain: String) {
-        guard let target = try? RDPConnectionTarget(host: host, portText: portText) else {
-            return nil
-        }
-        self.init(identity: RDPConnectionIdentity(
-            host: target.host,
-            port: target.port,
-            username: username,
-            domain: domain
-        ))
-    }
-
     /// Account name with the host lowercased. Connection identities compare
     /// hosts case-insensitively, so the keychain must address them the same
     /// way — otherwise a case-only host edit strands the stored password.
@@ -115,14 +101,10 @@ enum CredentialPersistenceResult: Sendable {
     case deleted
 }
 
-func persistCredentialsIfNeeded(
-    _ request: CredentialPersistenceRequest?,
+func persistCredentials(
+    _ request: CredentialPersistenceRequest,
     store: KeychainCredentialStore
-) -> Result<CredentialPersistenceResult, Error>? {
-    guard let request else {
-        return nil
-    }
-
+) -> Result<CredentialPersistenceResult, Error> {
     do {
         switch request {
         case let .save(key, password):

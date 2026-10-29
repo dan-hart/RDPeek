@@ -51,9 +51,7 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
     /// this device already has one.
     @discardableResult
     func openRemoteSession(_ draft: RDPConnectionDraft) -> UUID {
-        if let deviceID = draft.deviceID,
-           let existing = sessionWindowControllers.values.first(where: { $0.deviceID == deviceID })
-        {
+        if let existing = sessionWindowControllers.values.first(where: { $0.deviceID == draft.deviceID }) {
             existing.showWindow(nil)
             return existing.sessionID
         }

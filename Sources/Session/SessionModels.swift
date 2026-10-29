@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import RDPKit
 
 /// The session-opening surface the device list needs, as a seam so tests
@@ -11,7 +11,7 @@ protocol RemoteSessionOpening: AnyObject {
 
 /// Everything a session window needs to open and drive a connection.
 struct RDPConnectionDraft: Equatable, Sendable {
-    var deviceID: UUID?
+    var deviceID: UUID
     var name: String
     var host: String
     var port: UInt16

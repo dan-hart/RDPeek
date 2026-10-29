@@ -782,25 +782,22 @@ final class SessionViewController: NSViewController {
                     // are not held up behind them.
                     if let credentialPersistenceRequest {
                         Task.detached(priority: .utility) {
-                            let persistenceResult = persistCredentialsIfNeeded(
+                            let persistenceResult = persistCredentials(
                                 credentialPersistenceRequest,
                                 store: credentialStore
                             )
-                            if let persistenceResult {
-                                // The write may finish after the connection
-                                // ended (keychain approval dialog); its
-                                // outcome is not connection-scoped, so do
-                                // not drop it with the stale-event gate.
-                                // Carry the identity the entry was stored
-                                // under — the draft can be re-signed-in
-                                // with different credentials by then.
-                                let identity = credentialPersistenceRequest.key.identity
-                                sink.applyIgnoringConnectionState { controller in
-                                    controller.applyCredentialPersistenceResult(
-                                        persistenceResult,
-                                        identity: identity
-                                    )
-                                }
+                            // The write may finish after the connection
+                            // ended (keychain approval dialog); its outcome
+                            // is not connection-scoped, so do not drop it
+                            // with the stale-event gate. Carry the identity
+                            // the entry was stored under — the draft can be
+                            // re-signed-in with different credentials by then.
+                            let identity = credentialPersistenceRequest.key.identity
+                            sink.applyIgnoringConnectionState { controller in
+                                controller.applyCredentialPersistenceResult(
+                                    persistenceResult,
+                                    identity: identity
+                                )
                             }
                         }
                     }
@@ -891,15 +888,12 @@ final class SessionViewController: NSViewController {
             // License persistence is not connection-scoped. Save an issued
             // license even when closing the window cancelled the session, so
             // the next connection can present it to the server.
-            persistClientLicenseIfNeeded(
-                nextReport.rdpIssuedClientLicense,
-                key: clientLicenseKey,
-                store: clientLicenseStore
-            )
+            if let license = nextReport.rdpIssuedClientLicense {
+                try? clientLicenseStore.saveLicense(license, for: clientLicenseKey)
+            }
             guard cancellation.isCancelled == false else {
                 return
             }
-            let firstFrameDecodeResult = nextReport.rdpGraphicsFirstFrame.map(decodeReportFirstFrame)
             sink.apply { controller in
                 if let finalWireReceiveSample {
                     controller.renderMetricsStore.recordWireReceive(finalWireReceiveSample)
@@ -915,28 +909,6 @@ final class SessionViewController: NSViewController {
                 )
                 if controller.previewFrame == nil {
                     controller.previewFrame = nextReport.rdpGraphicsFirstFrame.map(RDPFrameMetadata.init)
-                }
-                if controller.hasPresentedFrame == false,
-                   let firstFrameDecodeResult
-                {
-                    switch firstFrameDecodeResult {
-                    case let .decoded(presentation, receivedAt, decodedAt, timing):
-                        controller.renderMetricsStore.recordDecodedFrame(
-                            presentation.frame,
-                            receivedAt: receivedAt,
-                            decodedAt: decodedAt,
-                            timing: timing
-                        )
-                        controller.publishRenderMetricsSnapshotIfNeeded(force: true, at: decodedAt)
-                        controller.applyFramePresentation(presentation)
-                    case let .failed(receivedAt, errorDescription):
-                        controller.previewDecodeError = errorDescription
-                        controller.renderMetricsStore.recordDecodeFailure(
-                            receivedAt: receivedAt,
-                            errorDescription: errorDescription
-                        )
-                        controller.publishRenderMetricsSnapshotIfNeeded(force: true, at: receivedAt)
-                    }
                 }
                 controller.isConnecting = false
                 controller.activeConnectionID = nil
@@ -1341,12 +1313,7 @@ final class SessionViewController: NSViewController {
             return
         }
 
-        guard let key = KeychainCredentialKey(
-            host: draft.host,
-            portText: String(draft.port),
-            username: draft.username.trimmingCharacters(in: .whitespacesAndNewlines),
-            domain: draft.domain.trimmingCharacters(in: .whitespacesAndNewlines)
-        ) else {
+        guard let key = KeychainCredentialKey(identity: draft.identity) else {
             promptForCredentials()
             return
         }
