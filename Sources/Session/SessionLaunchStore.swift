@@ -93,6 +93,10 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
         controller.showWindow(nil)
     }
 
+    func isShowingDiagnostics(for id: UUID) -> Bool {
+        diagnosticsWindowControllers[id] != nil
+    }
+
     func unregisterDiagnostics(for id: UUID) {
         diagnosticsModels.removeValue(forKey: id)
         diagnosticsWindowControllers.removeValue(forKey: id)?.close()

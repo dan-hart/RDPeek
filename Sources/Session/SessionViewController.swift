@@ -418,7 +418,10 @@ final class SessionViewController: NSViewController {
         diagnosticsTask?.cancel()
         diagnosticsTask = Task { @MainActor [weak self] in
             while Task.isCancelled == false {
-                self?.syncDiagnosticsSnapshot()
+                // Only the Stats for Nerds window shows the snapshot.
+                if let self, launchStore?.isShowingDiagnostics(for: sessionID) == true {
+                    syncDiagnosticsSnapshot()
+                }
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
         }
@@ -1231,7 +1234,6 @@ final class SessionViewController: NSViewController {
         displayControlSession.send(request)
         lastRequestedDisplayRequest = request
         requestedDesktopSizeLabel = request.label
-        render()
     }
 
     /// Windows and gnome-remote-desktop send no keyframe by themselves, but
