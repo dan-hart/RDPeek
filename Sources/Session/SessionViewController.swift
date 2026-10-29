@@ -993,6 +993,9 @@ final class SessionViewController: NSViewController {
         // talking to a dead channel.
         detachSessionChannels()
         firstFrameWatchdogTask?.cancel()
+        // As after Disconnect, what comes next shows over black: the hidden
+        // desktop gives up the keyboard and its last frame is released.
+        resetFramePresentationState()
 
         switch outcome {
         case .retryWithLegacyRSAKeyExchange:
