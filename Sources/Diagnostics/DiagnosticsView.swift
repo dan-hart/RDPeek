@@ -104,22 +104,6 @@ func compactViewerMetricsSummary(
     return parts.joined(separator: "  ·  ")
 }
 
-/// RDPKit 0.4.0 records only the first 8 frame acknowledgements of a
-/// session (`recordedGraphicsAcknowledgeLimit`), so a full record says only
-/// that at least that many were sent.
-private let recordedFrameAcknowledgeLimit = 8
-
-func frameAcknowledgeSummary(_ acknowledgements: [String]?) -> String {
-    let count = acknowledgements?.count ?? 0
-    if count == 0 {
-        return "none"
-    }
-    if count < recordedFrameAcknowledgeLimit {
-        return "\(count)"
-    }
-    return "\(count)+ (first \(count) recorded)"
-}
-
 private struct PerformanceMetricsView: View {
     var metrics: RDPRenderMetrics
     var rollingFramesPerSecond: Double?
@@ -317,7 +301,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                         DiagnosticRow("Audio Messages", messageTypes(report.rdpAudioMessages, \.typeName))
                         DiagnosticRow("Clipboard Channel ID", optionalValue(report.rdpClipboardChannelID))
                         DiagnosticRow("Clipboard Messages", messageTypes(report.rdpClipboardMessages, \.typeName))
-                        DiagnosticRow("Frame Acks", frameAcknowledgeSummary(report.rdpGraphicsFrameAcknowledgeHexes))
+                        DiagnosticRow("Frame Acks", optionalValue(report.rdpGraphicsFrameAcknowledgeCount))
                         DiagnosticRow("Next", report.nextStage ?? "none")
                     }
                 }
