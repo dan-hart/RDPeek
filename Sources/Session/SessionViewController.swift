@@ -2,6 +2,7 @@ import AppKit
 import QuartzCore
 import RDPKit
 import SwiftUI
+import SystemConfiguration
 
 /// Owns one remote desktop connection and the views that present it.
 ///
@@ -862,7 +863,10 @@ final class SessionViewController: NSViewController {
             // RDPKit negotiate the best path per host (Windows included).
             graphicsCapabilityProfile: .automatic,
             keyboardLayout: keyboardLayout,
-            legacyRSAKeyExchange: usesLegacyRSAKeyExchange
+            legacyRSAKeyExchange: usesLegacyRSAKeyExchange,
+            // Servers list the session, and count per-device licenses, under
+            // the Mac's name; RDPKit cuts it to 15 characters.
+            clientName: SCDynamicStoreCopyComputerName(nil, nil) as String? ?? "RDPeek"
         )
     }
 
