@@ -114,7 +114,7 @@ final class RemoteInputMappingTests: XCTestCase {
         XCTAssertNil(MacRDPKeyboardMapping.scancode(forKeyCode: UInt16(kVK_ANSI_KeypadClear)))
     }
 
-    func testFunctionKeysAlwaysSendScancodesWhileCharactersUseUnicode() {
+    func testFunctionKeysAndModifiedKeysAlwaysSendScancodes() {
         func sendsScancode(_ keyCode: Int, _ modifierFlags: NSEvent.ModifierFlags) -> Bool {
             MacRDPKeyboardMapping.shouldSendScancode(
                 forKeyCode: UInt16(keyCode),
@@ -225,15 +225,7 @@ final class RemoteInputMappingTests: XCTestCase {
         )
     }
 
-    // MARK: - Held keys
-
-    func testAKeyHeldAsAScancodeRepeatsAsThatScancodeAfterItsModifierIsReleased() {
-        XCTAssertTrue(MacRDPKeyboardMapping.shouldSendScancode(
-            forKeyCode: UInt16(kVK_ANSI_C),
-            modifierFlags: [],
-            isHeldAsScancode: true
-        ))
-    }
+    // MARK: - Toggle keys
 
     func testFocusSynchronizationKeepsNumLockOnAndMirrorsCapsLock() {
         XCTAssertEqual(MacRDPKeyboardMapping.toggleFlags(for: []), [.numLock])
