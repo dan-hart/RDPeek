@@ -3,7 +3,7 @@
 ## Unreleased
 
 Security, input, clipboard, and session fixes from the RDPKit example
-client and from a full review of RDPeek, on RDPKit's next release.
+client and from a full review of RDPeek, on RDPKit 0.5.0.
 
 ### Security
 
@@ -208,7 +208,7 @@ client and from a full review of RDPeek, on RDPKit's next release.
 
 ### Under the hood
 
-- Updated to RDPKit's next release: timeouts bound every step before
+- Updated to RDPKit 0.5.0: timeouts bound every step before
   the first frame, failures are typed, and Windows, KRdp and
   gnome-remote-desktop video and bitmap codecs are faster and more
   correct. RDPeek's own workarounds for what RDPKit now does (error
