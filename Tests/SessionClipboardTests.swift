@@ -97,15 +97,49 @@ final class SessionClipboardTests: XCTestCase {
     }
 
     func testTurningSharingOffClearsTheServerClipboard() {
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
         let session = RecordedClipboard()
         let clipboard = makeClipboard(isSharingEnabled: false)
         clipboard.attach(session)
         XCTAssertEqual(session.publishedTexts, [nil])
 
         clipboard.startTemporarySharing()
-        session.publishedTexts.removeAll()
+        XCTAssertEqual(session.publishedTexts, [nil, "local"])
         clipboard.poll(now: Date().addingTimeInterval(31))
-        XCTAssertEqual(session.publishedTexts, [nil])
+        XCTAssertEqual(session.publishedTexts, [nil, "local", nil])
+
+        // An empty pasteboard left nothing there to clear.
+        pasteboard.clearContents()
+        clipboard.setSharingEnabled(true)
+        clipboard.setSharingEnabled(false)
+        XCTAssertEqual(session.publishedTexts, [nil, "local", nil, nil])
+    }
+
+    /// Windows empties its clipboard for an empty Format List, so a copy
+    /// made on the server during a share is kept when the share ends.
+    func testSharingEndingKeepsARemoteCopy() {
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard(isSharingEnabled: false)
+        clipboard.attach(session)
+        clipboard.startTemporarySharing()
+        XCTAssertEqual(session.publishedTexts, [nil, "local"])
+
+        clipboard.receiveText("remote paragraph")
+        clipboard.poll(now: Date().addingTimeInterval(31))
+        XCTAssertFalse(clipboard.isSharingEnabled)
+        XCTAssertEqual(session.publishedTexts, [nil, "local"])
+
+        // Remote files too.
+        clipboard.setSharingEnabled(true)
+        XCTAssertEqual(session.publishedTexts.last, "remote paragraph")
+        clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 1, fileName: "remote.txt"),
+        ]))
+        clipboard.setSharingEnabled(false)
+        XCTAssertEqual(session.publishedTexts, [nil, "local", "remote paragraph"])
     }
 
     /// The session always joins the clipboard channel, so this alone keeps

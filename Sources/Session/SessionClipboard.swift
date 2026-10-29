@@ -53,6 +53,9 @@ final class SessionClipboard {
     /// could not be read or sent, or its read was cut short. A remote copy
     /// since is newer, which clears it.
     private var localCopyIsUnsent = false
+    /// Whether the server's clipboard holds the last local copy sent. A
+    /// remote copy replaces it there.
+    private var serverHoldsLocalCopy = false
     /// Reads copied local files off the main thread; nil once the read has
     /// finished. Tests await it.
     private(set) var localFileRead: Task<Void, Never>?
@@ -111,6 +114,8 @@ final class SessionClipboard {
 
     func attach(_ session: any SessionClipboardSending) {
         self.session = session
+        // Joining the channel sent an empty Format List.
+        serverHoldsLocalCopy = false
         guard isSharingEnabled else {
             session.publishLocalUnicodeText(nil)
             return
@@ -137,7 +142,12 @@ final class SessionClipboard {
         guard enabled else {
             discardFileTransfer()
             cancelLocalFileRead()
-            session?.publishLocalUnicodeText(nil)
+            // Takes back the local copy. Windows empties its clipboard for
+            // the empty Format List, so a copy made there since is left be.
+            if serverHoldsLocalCopy {
+                session?.publishLocalUnicodeText(nil)
+                serverHoldsLocalCopy = false
+            }
             pasteboardChangeCount = pasteboard.changeCount
             return
         }
@@ -199,6 +209,7 @@ final class SessionClipboard {
     }
 
     func receiveText(_ text: String) {
+        serverHoldsLocalCopy = false
         guard isSharingEnabled else {
             return
         }
@@ -213,6 +224,7 @@ final class SessionClipboard {
     }
 
     func receiveFileList(_ descriptorList: RDPClipboardFileGroupDescriptorW) {
+        serverHoldsLocalCopy = false
         guard isSharingEnabled else {
             return
         }
@@ -358,12 +370,14 @@ final class SessionClipboard {
         case let .text(text):
             session.publishLocalUnicodeText(text)
             localCopyIsUnsent = false
+            serverHoldsLocalCopy = true
             if announce {
                 onToast("Clipboard synced", "doc.on.clipboard.fill")
             }
         case let .files(files):
             session.publishLocalFiles(files)
             localCopyIsUnsent = false
+            serverHoldsLocalCopy = true
             if reportsResult {
                 let message = files.count == 1 ? "1 file shared to remote" : "\(files.count) files shared to remote"
                 onToast(message, "doc.on.clipboard.fill")
@@ -371,11 +385,13 @@ final class SessionClipboard {
         case .empty:
             session.publishLocalUnicodeText(nil)
             localCopyIsUnsent = false
+            serverHoldsLocalCopy = false
             if announce {
                 onToast("Clipboard has no text or files; remote clipboard cleared", "doc.on.clipboard")
             }
         case let .unsupported(message):
             session.publishLocalUnicodeText(nil)
+            serverHoldsLocalCopy = false
             if reportsResult {
                 onToast(message, "exclamationmark.triangle")
             }
