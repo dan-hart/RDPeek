@@ -282,6 +282,20 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(session.publishedFiles.last?.map(\.descriptor.fileName), ["a_b.txt", "a_b-2.txt"])
     }
 
+    func testWindowsDeviceNamesAreNotUsedAsFileNames() {
+        var usedFileNames = Set<String>()
+        let names = [
+            "con.txt", "NUL", "Aux.tar.gz", "prn.", "com1.log", "LPT9", "CON.TXT",
+            "console.txt", "com10.txt", "lpt0", "nul_.txt", "notes.con",
+        ].map {
+            SessionClipboard.windowsFileName($0, usedFileNames: &usedFileNames)
+        }
+        XCTAssertEqual(names, [
+            "con_.txt", "NUL_", "Aux_.tar.gz", "prn_", "com1_.log", "LPT9_", "CON_-2.TXT",
+            "console.txt", "com10.txt", "lpt0", "nul_.txt", "notes.con",
+        ])
+    }
+
     // MARK: - Remote files
 
     func testRemoteFileArrivesOverRangesTheServerAnswersShort() throws {

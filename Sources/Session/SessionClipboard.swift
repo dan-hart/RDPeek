@@ -13,6 +13,9 @@ private let sessionFileContentsRequestTimeout: TimeInterval = 120
 /// name has one fails to paste there.
 private let windowsInvalidFileNameCharacters = CharacterSet(charactersIn: "/\\:*?\"<>|")
     .union(.controlCharacters)
+/// Device names Windows reserves, with any extension and in any case.
+private let windowsReservedFileNames: Set<String> = Set(["CON", "PRN", "AUX", "NUL"])
+    .union((1 ... 9).flatMap { ["COM\($0)", "LPT\($0)"] })
 
 /// Where the clipboard bridge sends: the session's `RDPClipboardSession`, or
 /// a test's recorder.
@@ -434,6 +437,10 @@ final class SessionClipboard {
         }
         if name.isEmpty {
             name = "file"
+        }
+        let stem = name.prefix { $0 != "." }
+        if windowsReservedFileNames.contains(stem.uppercased()) {
+            name.insert("_", at: stem.endIndex)
         }
 
         let baseName = (name as NSString).deletingPathExtension
