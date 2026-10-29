@@ -839,8 +839,10 @@ final class SessionViewController: NSViewController {
                 onCertificate: { info in
                     sink.apply { controller in
                         controller.liveCertificate = info
+                        // After a server redirection, the certificate belongs
+                        // to the redirection target.
                         controller.certificateTrustedByApp = controller.trustedCertificateStore.isTrusted(
-                            host: target.host,
+                            host: info.host,
                             port: target.port,
                             sha256: info.sha256
                         )
@@ -874,7 +876,7 @@ final class SessionViewController: NSViewController {
                 controller.report = nextReport
                 controller.sessionEndReason = RDPSessionEndReason(report: nextReport)
                 controller.certificateTrustedByApp = controller.trustedCertificateStore.isTrusted(
-                    host: target.host,
+                    host: controller.liveCertificate?.host ?? target.host,
                     port: target.port,
                     sha256: nextReport.certificateSHA256
                 )
@@ -1645,7 +1647,11 @@ final class SessionViewController: NSViewController {
         else {
             return nil
         }
-        return RDPServerCertificateTrustKey(host: target.host, port: target.port, sha256: certificateSHA256)
+        return RDPServerCertificateTrustKey(
+            host: liveCertificate?.host ?? target.host,
+            port: target.port,
+            sha256: certificateSHA256
+        )
     }
 
     // MARK: - Credentials
