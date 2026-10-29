@@ -45,7 +45,7 @@ struct TrustedCertificateStore: @unchecked Sendable {
     }
 
     /// Why `certificate` must be refused before credentials are sent, or nil to go ahead.
-    /// `acceptsUntrusted` (Hide certificate warnings) lets through a certificate nobody trusts,
+    /// `acceptsUntrusted` (Accept untrusted certificates) lets through a certificate nobody trusts,
     /// but never one that replaced a certificate the user trusted.
     func refusal(of certificate: RDPServerCertificateInfo, port: UInt16, acceptsUntrusted: Bool) -> CertificateRefusal? {
         if isChanged(certificate, port: port) {
