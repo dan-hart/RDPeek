@@ -6,8 +6,8 @@ const appShortcuts: { keys: string[]; action: string }[] = [
   { keys: ["⌘", "N"], action: "Add PC" },
   { keys: ["Return"], action: "Connect to the selected PC" },
   { keys: ["Delete"], action: "Delete the selected PC" },
-  { keys: ["⌘", "."], action: "Disconnect / cancel connecting" },
-  { keys: ["⇧", "⌘", "D"], action: "Stats for Nerds" },
+  { keys: ["⌘", "R"], action: "Reconnect a session that ended" },
+  { keys: ["⌘", "."], action: "Cancel connecting" },
   { keys: ["⌘", ","], action: "Settings" },
 ];
 
