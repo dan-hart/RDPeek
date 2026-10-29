@@ -617,6 +617,83 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    // MARK: - Command with right Option
+
+    func testCommandAndRightOptionReleasedWithNothingBetweenTapNeither() {
+        // Held together they are a chord the server never saw, in either
+        // order, so neither the Start menu nor the menu bar opens there.
+        let harness = makeHarness()
+        let both = NSEvent.ModifierFlags.leftCommandDown.union(.rightOptionDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: both))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: both))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [])
+    }
+
+    func testCommandShortcutTheSystemTakesTapsNoAlt() {
+        // ⌘⌥D goes to the Dock, and only its key-up reaches the app. The
+        // Windows key is already on the server from a ⌘-click, so right
+        // Option is the only key held back.
+        let harness = makeHarness()
+        let location = NSPoint(x: 100, y: 50)
+        let both = NSEvent.ModifierFlags.leftCommandDown.union(.rightOptionDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: location, flags: .leftCommandDown))
+        harness.view.mouseUp(with: mouseEvent(.leftMouseUp, location: location, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: both))
+        harness.recorder.events.removeAll()
+
+        NSApplication.shared.sendEvent(keyEvent(
+            .keyUp,
+            keyCode: UInt16(kVK_ANSI_D),
+            characters: "∂",
+            charactersIgnoringModifiers: "d",
+            flags: both,
+            window: harness.window
+        ))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftWindows, isReleased: true)])
+    }
+
+    func testCommandRightOptionChordSendsWindowsAltAndTheKey() {
+        let harness = makeHarness()
+        let rKey = RDPKeyboardScancode(code: 0x13)
+        let both = NSEvent.ModifierFlags.leftCommandDown.union(.rightOptionDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: both))
+        XCTAssertTrue(harness.view.performKeyEquivalent(
+            with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_R), characters: "®", charactersIgnoringModifiers: "r", flags: both)
+        ))
+        NSApplication.shared.sendEvent(keyEvent(
+            .keyUp,
+            keyCode: UInt16(kVK_ANSI_R),
+            characters: "®",
+            charactersIgnoringModifiers: "r",
+            flags: both,
+            window: harness.window
+        ))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .leftWindows, isReleased: false),
+            .keyboard(scancode: .rightAlt, isReleased: false),
+            .keyboard(scancode: rKey, isReleased: false),
+            .keyboard(scancode: rKey, isReleased: true),
+            .keyboard(scancode: .leftWindows, isReleased: true),
+            .keyboard(scancode: .rightAlt, isReleased: true),
+        ])
+    }
+
     // MARK: - Key equivalents while controlling the desktop
 
     func testPerformKeyEquivalentClaimsCommandChordForRemote() {

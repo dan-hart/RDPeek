@@ -328,7 +328,9 @@ final class RemoteInputCaptureNSView: NSView {
         else {
             return
         }
-        deferredWindowsKey.noteChordedElsewhere()
+        // The key went to the server, or a shortcut the system took, such as ⌘⌥D, used it;
+        // either way releasing Command or right Option is no tap.
+        noteDeferredKeysChordedElsewhere()
         keyUp(with: event)
     }
 
@@ -400,6 +402,7 @@ final class RemoteInputCaptureNSView: NSView {
         if MacRDPDeferredWindowsKey.isWindowsKey(scancode), inputState.isScancodePressed(scancode) == false {
             if isDown {
                 deferredWindowsKey.press(scancode)
+                noteDeferredKeysChordedTogether()
                 return []
             }
             return deferredWindowsKey.release(scancode)
@@ -407,6 +410,7 @@ final class RemoteInputCaptureNSView: NSView {
         if scancode == Self.rightAlt, inputState.isScancodePressed(scancode) == false {
             if isDown {
                 deferredRightAlt.press(scancode)
+                noteDeferredKeysChordedTogether()
                 return []
             }
             return deferredRightAlt.release(scancode)
@@ -489,6 +493,15 @@ final class RemoteInputCaptureNSView: NSView {
         deferredRightAlt.noteChordedElsewhere()
     }
 
+    /// Command and right Option held back together make a chord of their own, so releasing
+    /// them taps neither the Windows key nor Alt. A key or button pressed with them still
+    /// sends both down first.
+    private func noteDeferredKeysChordedTogether() {
+        if deferredWindowsKey.isHoldingKeys, deferredRightAlt.isHoldingKeys {
+            noteDeferredKeysChordedElsewhere()
+        }
+    }
+
     /// A Windows key or right Alt still held back never reached the server, so nothing is sent
     /// for it.
     private func releasePressedInputs() {
@@ -546,6 +559,10 @@ struct MacRDPDeferredWindowsKey {
         scancode.isExtended && (scancode.code == 0x5B || scancode.code == 0x5C)
     }
 
+    var isHoldingKeys: Bool {
+        heldScancodes.isEmpty == false
+    }
+
     func isHeld(_ scancode: RDPKeyboardScancode) -> Bool {
         heldScancodes.contains(scancode)
     }
@@ -564,10 +581,10 @@ struct MacRDPDeferredWindowsKey {
         return heldScancodes.map { inputState.keyboard(scancode: $0, isReleased: false) }
     }
 
-    /// Command was used for something that never reached the server, for example a menu
-    /// shortcut, so releasing it sends nothing.
+    /// The held key was used in a chord the server never sees with it, for example a menu
+    /// shortcut, a Command-scroll or Command with right Option, so releasing it sends nothing.
     mutating func noteChordedElsewhere() {
-        isChordedElsewhere = heldScancodes.isEmpty == false
+        isChordedElsewhere = isHoldingKeys
     }
 
     mutating func release(_ scancode: RDPKeyboardScancode) -> [RDPSlowPathInputEvent] {
