@@ -61,6 +61,25 @@ final class DeviceProfileStoreTests: XCTestCase {
         )
     }
 
+    func testMakeNewStartsFromNewDeviceSettings() {
+        let fallback = DeviceProfile.makeNew(defaults: defaults)
+        XCTAssertEqual(fallback.clipboardSharingEnabled, NewDeviceDefaults.clipboardSharingEnabled)
+        XCTAssertEqual(fallback.audioPlaybackEnabled, NewDeviceDefaults.audioPlaybackEnabled)
+        XCTAssertEqual(fallback.hideCertificateWarnings, NewDeviceDefaults.hideCertificateWarnings)
+        XCTAssertEqual(fallback.timeoutSeconds, NewDeviceDefaults.timeoutSeconds)
+
+        defaults.set(false, forKey: NewDeviceDefaults.clipboardSharingKey)
+        defaults.set(true, forKey: NewDeviceDefaults.audioPlaybackKey)
+        defaults.set(true, forKey: NewDeviceDefaults.hideCertificateWarningsKey)
+        defaults.set(30, forKey: NewDeviceDefaults.timeoutSecondsKey)
+        let configured = DeviceProfile.makeNew(defaults: defaults)
+
+        XCTAssertFalse(configured.clipboardSharingEnabled)
+        XCTAssertTrue(configured.audioPlaybackEnabled)
+        XCTAssertTrue(configured.hideCertificateWarnings)
+        XCTAssertEqual(configured.timeoutSeconds, 30)
+    }
+
     func testTouchLastConnectedWithUnknownIDDoesNotThrow() throws {
         let store = DeviceProfileStore(defaults: defaults)
         XCTAssertNoThrow(try store.touchLastConnected(id: UUID()))

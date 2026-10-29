@@ -1,6 +1,20 @@
 import Foundation
 import RDPKit
 
+/// The Settings options new PCs start with: their user-defaults keys, and
+/// the values used until the user changes them.
+enum NewDeviceDefaults {
+    static let clipboardSharingKey = "new-device-clipboard"
+    static let audioPlaybackKey = "new-device-audio"
+    static let hideCertificateWarningsKey = "new-device-hide-cert-warnings"
+    static let timeoutSecondsKey = "new-device-timeout"
+
+    static let clipboardSharingEnabled = true
+    static let audioPlaybackEnabled = false
+    static let hideCertificateWarnings = false
+    static let timeoutSeconds = 10
+}
+
 /// A saved remote PC, as shown in the Connection Center grid.
 struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
@@ -27,10 +41,14 @@ struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
             port: 3389,
             username: "",
             domain: "",
-            hideCertificateWarnings: defaults.object(forKey: "new-device-hide-cert-warnings") as? Bool ?? false,
-            timeoutSeconds: defaults.object(forKey: "new-device-timeout") as? Int ?? 10,
-            clipboardSharingEnabled: defaults.object(forKey: "new-device-clipboard") as? Bool ?? true,
-            audioPlaybackEnabled: defaults.object(forKey: "new-device-audio") as? Bool ?? false,
+            hideCertificateWarnings: defaults.object(forKey: NewDeviceDefaults.hideCertificateWarningsKey) as? Bool
+                ?? NewDeviceDefaults.hideCertificateWarnings,
+            timeoutSeconds: defaults.object(forKey: NewDeviceDefaults.timeoutSecondsKey) as? Int
+                ?? NewDeviceDefaults.timeoutSeconds,
+            clipboardSharingEnabled: defaults.object(forKey: NewDeviceDefaults.clipboardSharingKey) as? Bool
+                ?? NewDeviceDefaults.clipboardSharingEnabled,
+            audioPlaybackEnabled: defaults.object(forKey: NewDeviceDefaults.audioPlaybackKey) as? Bool
+                ?? NewDeviceDefaults.audioPlaybackEnabled,
             rememberPassword: false,
             accentHue: Double.random(in: 0 ..< 1),
             createdAt: Date(),
