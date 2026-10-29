@@ -41,101 +41,61 @@ final class RemoteDesktopRendererTests: XCTestCase {
             .flushAndEnqueue
         )
     }
+
+    func testAFailedRendererShowsTheLastFrameAgainOnce() {
+        XCTAssertTrue(rdpShouldResendLastPresentation(
+            hasLastPresentation: true,
+            didResendLastPresentation: false,
+            rendererFailed: true,
+            requiresFlushToResume: false
+        ))
+        XCTAssertTrue(rdpShouldResendLastPresentation(
+            hasLastPresentation: true,
+            didResendLastPresentation: false,
+            rendererFailed: false,
+            requiresFlushToResume: true
+        ))
+        XCTAssertFalse(rdpShouldResendLastPresentation(
+            hasLastPresentation: true,
+            didResendLastPresentation: true,
+            rendererFailed: true,
+            requiresFlushToResume: false
+        ), "A renderer that fails again on the same frame waits for the next one")
+        XCTAssertFalse(rdpShouldResendLastPresentation(
+            hasLastPresentation: false,
+            didResendLastPresentation: false,
+            rendererFailed: true,
+            requiresFlushToResume: true
+        ), "A cleared view shows nothing again")
+        XCTAssertFalse(rdpShouldResendLastPresentation(
+            hasLastPresentation: true,
+            didResendLastPresentation: false,
+            rendererFailed: false,
+            requiresFlushToResume: false
+        ), "A notice for a healthy renderer changes nothing")
+    }
 }
 
 @MainActor
 final class RemoteDesktopSampleBufferViewTests: XCTestCase {
-    func testFailedLayerShowsTheLastFrameAgain() throws {
-        let layer = RecordingDisplayLayer()
-        let view = RemoteDesktopSampleBufferNSView(frame: .zero, displayLayer: layer)
-        view.present(try makePresentation(), id: 1)
-        let shownSample = try XCTUnwrap(layer.enqueuedSamples.last)
-        let flushCount = layer.flushCount
-
-        layer.reportsFailure = true
-        postDecodeFailure(of: layer)
-
-        XCTAssertEqual(layer.enqueuedSamples.count, 2)
-        XCTAssertTrue(layer.enqueuedSamples.last === shownSample)
-        XCTAssertEqual(layer.flushCount, flushCount + 1, "The failed queue is flushed before the frame goes in again")
-    }
-
-    func testLayerThatNeedsAFlushShowsTheLastFrameAgain() throws {
-        let layer = RecordingDisplayLayer()
-        let view = RemoteDesktopSampleBufferNSView(frame: .zero, displayLayer: layer)
-        view.present(try makePresentation(), id: 1)
-        let shownSample = try XCTUnwrap(layer.enqueuedSamples.last)
-        let flushCount = layer.flushCount
-
-        layer.requiresFlush = true
-        post(.AVSampleBufferDisplayLayerRequiresFlushToResumeDecodingDidChange, of: layer)
-
-        XCTAssertEqual(layer.enqueuedSamples.count, 2)
-        XCTAssertTrue(layer.enqueuedSamples.last === shownSample)
-        XCTAssertEqual(layer.flushCount, flushCount + 1)
-    }
-
-    func testLayerThatKeepsFailingGetsEachFrameAgainOnlyOnce() throws {
-        let layer = RecordingDisplayLayer()
-        let view = RemoteDesktopSampleBufferNSView(frame: .zero, displayLayer: layer)
-        view.present(try makePresentation(), id: 1)
-        layer.reportsFailure = true
-
-        postDecodeFailure(of: layer)
-        postDecodeFailure(of: layer)
-        XCTAssertEqual(layer.enqueuedSamples.count, 2)
-
-        view.present(try makePresentation(), id: 2)
-        XCTAssertEqual(layer.enqueuedSamples.count, 3)
-        postDecodeFailure(of: layer)
-        XCTAssertEqual(layer.enqueuedSamples.count, 4)
-        XCTAssertTrue(layer.enqueuedSamples[3] === layer.enqueuedSamples[2])
-    }
-
-    func testFailureNoticeForAHealthyLayerChangesNothing() throws {
-        let layer = RecordingDisplayLayer()
-        let view = RemoteDesktopSampleBufferNSView(frame: .zero, displayLayer: layer)
-        view.present(try makePresentation(), id: 1)
-
-        postDecodeFailure(of: layer)
-        post(.AVSampleBufferDisplayLayerRequiresFlushToResumeDecodingDidChange, of: layer)
-
-        XCTAssertEqual(layer.enqueuedSamples.count, 1)
-    }
-
-    func testClearedViewShowsNothingAgain() throws {
-        let layer = RecordingDisplayLayer()
-        let view = RemoteDesktopSampleBufferNSView(frame: .zero, displayLayer: layer)
-        view.present(try makePresentation(), id: 1)
-        view.clear()
-
-        layer.reportsFailure = true
-        postDecodeFailure(of: layer)
-
-        XCTAssertEqual(layer.enqueuedSamples.count, 1)
-    }
-
-    // MARK: - Helpers
-
-    private func postDecodeFailure(of layer: AVSampleBufferDisplayLayer) {
-        post(.AVSampleBufferDisplayLayerFailedToDecode, of: layer)
-    }
-
-    /// Posts as AVFoundation would, then lets the main-queue recovery the
-    /// view schedules run.
-    private func post(_ name: Notification.Name, of layer: AVSampleBufferDisplayLayer) {
-        NotificationCenter.default.post(name: name, object: layer)
-        drainMainQueue()
-    }
-
-    /// Runs what is queued on the main queue so far: the main queue is
-    /// serial, so it has run once a block queued after it does.
-    private func drainMainQueue() {
-        let drained = expectation(description: "main queue drained")
-        DispatchQueue.main.async {
-            drained.fulfill()
+    /// On macOS 15 and later frames go to the display layer's
+    /// `sampleBufferRenderer`, before and after the display is cleared.
+    func testFramesRenderThroughTheDisplayLayersSampleBufferRenderer() throws {
+        guard #available(macOS 15, *) else {
+            throw XCTSkip("macOS 14 renders through the display layer itself")
         }
-        wait(for: [drained], timeout: 5)
+        let view = RemoteDesktopSampleBufferNSView(frame: CGRect(x: 0, y: 0, width: 64, height: 64))
+        let displayLayer = try XCTUnwrap(view.layer?.sublayers?.first as? AVSampleBufferDisplayLayer)
+        let renderer = displayLayer.sampleBufferRenderer
+        let presentation = try makePresentation()
+        XCTAssertEqual(renderer.status, .unknown)
+
+        view.present(presentation, id: 1)
+        XCTAssertEqual(renderer.status, .rendering)
+        view.clear()
+        view.present(presentation, id: 2)
+        XCTAssertEqual(renderer.status, .rendering)
+        XCTAssertNil(renderer.error)
     }
 
     /// A composed BGRA frame, as RDPKit hands one over once decoded.
@@ -157,30 +117,5 @@ final class RemoteDesktopSampleBufferViewTests: XCTestCase {
             contentKind: .bitmap
         )
         return try RDPDecodedFramePresentation(frame: frame, imageBuffer: XCTUnwrap(pixelBuffer))
-    }
-}
-
-/// Records what the view enqueues instead of decoding it, and reports a
-/// failure or a needed flush on demand.
-private final class RecordingDisplayLayer: AVSampleBufferDisplayLayer {
-    var reportsFailure = false
-    var requiresFlush = false
-    private(set) var enqueuedSamples: [CMSampleBuffer] = []
-    private(set) var flushCount = 0
-
-    override var status: AVQueuedSampleBufferRenderingStatus {
-        reportsFailure ? .failed : .rendering
-    }
-
-    override var requiresFlushToResumeDecoding: Bool {
-        requiresFlush
-    }
-
-    override func enqueue(_ sampleBuffer: CMSampleBuffer) {
-        enqueuedSamples.append(sampleBuffer)
-    }
-
-    override func flush() {
-        flushCount += 1
     }
 }
