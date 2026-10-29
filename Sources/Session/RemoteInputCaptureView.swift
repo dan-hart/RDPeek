@@ -201,9 +201,13 @@ final class RemoteInputCaptureNSView: NSView {
         let scancode = MacRDPKeyboardMapping.scancode(forKeyCode: event.keyCode)
         let isHeldAsScancode = scancode.map { inputState.isScancodePressed($0) } ?? false
         if isHeldAsScancode == false, isTypedWithRightOption(event) {
-            // Right Option was used to type, so releasing it is no Alt tap.
+            // Right Option was used to type, or to start a dead key whose accent the next key
+            // types as text, so releasing it is no Alt tap. A dead key itself sends nothing.
             deferredRightAlt.noteChordedElsewhere()
-            inputSession?.send(MacRDPKeyboardMapping.unicodeEvents(for: event.characters ?? ""))
+            let events = MacRDPKeyboardMapping.unicodeEvents(for: event.characters ?? "")
+            if events.isEmpty == false {
+                inputSession?.send(events)
+            }
             return
         }
         if let scancode,
@@ -310,11 +314,11 @@ final class RemoteInputCaptureNSView: NSView {
     }
 
     /// Whether right Option typed the event's characters: its Alt is held back, left Option's
-    /// Alt is not on the server, and Option made the key type a character.
+    /// Alt is not on the server, and Option made the key type a character or a dead key.
     private func isTypedWithRightOption(_ event: NSEvent) -> Bool {
         deferredRightAlt.isHeld(Self.rightAlt)
             && inputState.isScancodePressed(Self.leftAlt) == false
-            && MacRDPKeyboardMapping.optionTypesCharacter(
+            && MacRDPKeyboardMapping.optionTypes(
                 event.characters,
                 charactersIgnoringModifiers: event.charactersIgnoringModifiers,
                 modifierFlags: event.modifierFlags
@@ -677,11 +681,12 @@ enum MacRDPKeyboardMapping {
 
     private static let spaceScancode = RDPKeyboardScancode(code: 0x39)
 
-    /// Whether Option, with no ⌘ or ⌃ to make the key a shortcut, made it type a character it
-    /// does not type without Option, such as "@" with Option-L on German. AppKit keeps Shift in
-    /// `charactersIgnoringModifiers`, so Shift-Option characters count. A dead key, which types
-    /// nothing yet, and control and function-key characters do not.
-    static func optionTypesCharacter(
+    /// Whether Option, with no ⌘ or ⌃ to make the key a shortcut, made it type what the Mac
+    /// layout puts on Option: a character the key does not type without Option, such as "@"
+    /// with Option-L on German, or nothing, for a dead key such as Option-E on US, whose accent
+    /// the next key types. AppKit keeps Shift in `charactersIgnoringModifiers`, so Shift-Option
+    /// characters count. Control and function-key characters do not.
+    static func optionTypes(
         _ characters: String?,
         charactersIgnoringModifiers: String?,
         modifierFlags: NSEvent.ModifierFlags
@@ -689,7 +694,6 @@ enum MacRDPKeyboardMapping {
         guard modifierFlags.contains(.option),
               modifierFlags.isDisjoint(with: [.command, .control]),
               let characters,
-              characters.isEmpty == false,
               characters != charactersIgnoringModifiers
         else {
             return false

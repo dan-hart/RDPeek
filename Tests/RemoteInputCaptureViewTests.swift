@@ -525,6 +525,61 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    func testRightOptionDeadKeySendsNothingAndTheNextKeyTypesTheAccent() {
+        // US Option-E is a dead key: it types nothing, and E after it "é".
+        // Alt-E would open the Edit menu in Windows apps. Neither the dead
+        // key, its repeat, its release nor Option's release sends anything.
+        let harness = makeHarness()
+        let eKey = UInt16(kVK_ANSI_E)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        for isARepeat in [false, true] {
+            harness.view.keyDown(with: keyEvent(
+                .keyDown,
+                keyCode: eKey,
+                charactersIgnoringModifiers: "e",
+                flags: .rightOptionDown,
+                isARepeat: isARepeat
+            ))
+        }
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: eKey, charactersIgnoringModifiers: "e", flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+        XCTAssertEqual(harness.recorder.events, [])
+
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: eKey, characters: "é", charactersIgnoringModifiers: "e"))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: eKey, characters: "e"))
+        XCTAssertEqual(harness.recorder.events, [
+            .unicode(codeUnit: 0xE9, isReleased: false),
+            .unicode(codeUnit: 0xE9, isReleased: true),
+        ])
+    }
+
+    func testKeyAfterARightOptionDeadKeyWithOptionStillHeldTypesText() {
+        // US Option-E, then Option-A with Option still held, types "´å".
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_ANSI_E),
+            charactersIgnoringModifiers: "e",
+            flags: .rightOptionDown
+        ))
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_ANSI_A),
+            characters: "´å",
+            charactersIgnoringModifiers: "a",
+            flags: .rightOptionDown
+        ))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .unicode(codeUnit: 0xB4, isReleased: false),
+            .unicode(codeUnit: 0xB4, isReleased: true),
+            .unicode(codeUnit: 0xE5, isReleased: false),
+            .unicode(codeUnit: 0xE5, isReleased: true),
+        ])
+    }
+
     func testRightOptionIsAltWithAKeyItTypesNoCharacterWith() {
         let harness = makeHarness()
         let f4 = RDPKeyboardScancode(code: 0x3E)
@@ -618,6 +673,29 @@ final class RemoteInputCaptureViewTests: XCTestCase {
             .keyboard(scancode: leftAlt, isReleased: false),
             .keyboard(scancode: lKey, isReleased: false),
             .keyboard(scancode: lKey, isReleased: true),
+            .keyboard(scancode: leftAlt, isReleased: true),
+        ])
+    }
+
+    func testLeftOptionStaysAltWithADeadKey() {
+        // Alt-E reaches the remote even where Option-E starts a dead key on the Mac.
+        let harness = makeHarness()
+        let leftAlt = RDPKeyboardScancode(code: 0x38)
+        let eKey = RDPKeyboardScancode(code: 0x12)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Option), flags: .leftOptionDown))
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_ANSI_E),
+            charactersIgnoringModifiers: "e",
+            flags: .leftOptionDown
+        ))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: UInt16(kVK_ANSI_E), charactersIgnoringModifiers: "e", flags: .leftOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Option), flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: leftAlt, isReleased: false),
+            .keyboard(scancode: eKey, isReleased: false),
+            .keyboard(scancode: eKey, isReleased: true),
             .keyboard(scancode: leftAlt, isReleased: true),
         ])
     }
