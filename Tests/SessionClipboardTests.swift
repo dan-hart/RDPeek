@@ -465,6 +465,28 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertFalse(fileExists(secondFileURL))
     }
 
+    func testFinishedDownloadIsRemovedOnceRemoteTextOrALocalCopyReplacesIt() throws {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        clipboard.attach(session)
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        var fileURL = try XCTUnwrap(copiedFileURL())
+        clipboard.poll()
+        XCTAssertTrue(fileExists(fileURL))
+        clipboard.receiveText("remote")
+        XCTAssertFalse(fileExists(fileURL))
+
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        fileURL = try XCTUnwrap(copiedFileURL())
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        clipboard.poll()
+        XCTAssertFalse(fileExists(fileURL))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: downloadRoot.path), [])
+    }
+
     func testDownloadsLeftByAnEarlierRunAreRemoved() throws {
         let leftover = downloadRoot.appendingPathComponent("earlier", isDirectory: true)
         try FileManager.default.createDirectory(at: leftover, withIntermediateDirectories: true)

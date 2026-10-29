@@ -174,6 +174,7 @@ final class SessionClipboard {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         pasteboardChangeCount = pasteboard.changeCount
+        removeCopiedDownloadIfReplaced()
         onToast("Remote text copied", "doc.on.clipboard")
     }
 
@@ -265,8 +266,10 @@ final class SessionClipboard {
         }
 
         if nextChangeCount != pasteboardChangeCount {
-            // A newer local copy replaces a remote one still downloading.
+            // A newer local copy replaces a remote one still downloading,
+            // and one already on the pasteboard.
             discardFileTransfer()
+            removeCopiedDownloadIfReplaced()
         }
         pasteboardChangeCount = nextChangeCount
         cancelLocalFileRead()
