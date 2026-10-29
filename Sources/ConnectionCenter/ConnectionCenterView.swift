@@ -19,7 +19,7 @@ struct ConnectionCenterView: View {
                     deviceList.addNewDevice()
                 }
             } else {
-                deviceGrid
+                deviceGrid(deviceList.filteredDevices)
             }
         }
         .frame(minWidth: 740, minHeight: 480)
@@ -54,7 +54,9 @@ struct ConnectionCenterView: View {
             prompt: "Search devices"
         )
         .sheet(item: $deviceList.editorState) { editorState in
-            DeviceEditorSheet(editorState: editorState)
+            DeviceEditorSheet(editorState: editorState) { device in
+                connect(device)
+            }
         }
         .confirmationDialog(
             deletionTitle,
@@ -98,10 +100,11 @@ struct ConnectionCenterView: View {
         }
     }
 
-    private var deviceGrid: some View {
+    /// `devices` is `filteredDevices`, which `body` computes once per update.
+    private func deviceGrid(_ devices: [DeviceProfile]) -> some View {
         ScrollView {
             LazyVGrid(columns: columns, spacing: 18) {
-                ForEach(deviceList.filteredDevices) { device in
+                ForEach(devices) { device in
                     DeviceCardView(
                         device: device,
                         isSelected: selectedDeviceID == device.id,
@@ -115,17 +118,17 @@ struct ConnectionCenterView: View {
                 }
             }
             .padding(20)
-            .animation(.spring(duration: 0.35, bounce: 0.15), value: deviceList.filteredDevices.map(\.id))
+            .animation(.spring(duration: 0.35, bounce: 0.15), value: devices.map(\.id))
         }
         .overlay {
-            if deviceList.filteredDevices.isEmpty {
+            if devices.isEmpty {
                 ContentUnavailableView.search(text: deviceList.searchText)
             }
         }
         .background {
             // Return connects the selection; Delete asks to remove it.
             Button("") {
-                if let device = selectedDevice {
+                if let device = devices.first(where: { $0.id == selectedDeviceID }) {
                     connect(device)
                 }
             }
@@ -133,7 +136,7 @@ struct ConnectionCenterView: View {
             .opacity(0)
 
             Button("") {
-                if let device = selectedDevice {
+                if let device = devices.first(where: { $0.id == selectedDeviceID }) {
                     deviceList.requestDeletion(of: device)
                 }
             }
@@ -144,10 +147,6 @@ struct ConnectionCenterView: View {
         .onTapGesture {
             selectedDeviceID = nil
         }
-    }
-
-    private var selectedDevice: DeviceProfile? {
-        deviceList.filteredDevices.first { $0.id == selectedDeviceID }
     }
 
     private func connect(_ device: DeviceProfile) {

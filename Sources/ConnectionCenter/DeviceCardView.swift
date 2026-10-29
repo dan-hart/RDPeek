@@ -126,7 +126,6 @@ struct DeviceCardView: View {
                 .padding(10)
                 .opacity(isHovering ? 1 : 0)
                 .scaleEffect(isHovering ? 1 : 0.7)
-                .animation(AppTheme.cardSpring, value: isHovering)
             }
         }
     }

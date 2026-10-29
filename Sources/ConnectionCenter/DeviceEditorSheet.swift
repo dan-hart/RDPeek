@@ -3,9 +3,9 @@ import SwiftUI
 /// Add/edit sheet for a saved PC.
 struct DeviceEditorSheet: View {
     var editorState: DeviceEditorState
+    var onConnect: (DeviceProfile) -> Void
 
     @EnvironmentObject private var deviceList: DeviceListModel
-    @EnvironmentObject private var launchStore: SessionLaunchStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
@@ -23,8 +23,9 @@ struct DeviceEditorSheet: View {
     @State private var isLoadingPassword: Bool
     @State private var hadRememberedPassword = false
 
-    init(editorState: DeviceEditorState) {
+    init(editorState: DeviceEditorState, onConnect: @escaping (DeviceProfile) -> Void) {
         self.editorState = editorState
+        self.onConnect = onConnect
         let device = editorState.device
         _name = State(initialValue: device.name)
         _host = State(initialValue: device.host)
@@ -171,7 +172,7 @@ struct DeviceEditorSheet: View {
                 Button("Save & Connect") {
                     if let device = saveChanges() {
                         dismiss()
-                        deviceList.connect(device, using: launchStore)
+                        onConnect(device)
                     }
                 }
                 .buttonStyle(.borderedProminent)
