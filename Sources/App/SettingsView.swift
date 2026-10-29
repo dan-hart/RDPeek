@@ -19,7 +19,7 @@ struct SettingsView: View {
                 Stepper(
                     "Connection timeout: \(timeoutSeconds)s",
                     value: $timeoutSeconds,
-                    in: 3 ... 60,
+                    in: DeviceProfile.timeoutSecondsRange,
                     step: 1
                 )
             } header: {

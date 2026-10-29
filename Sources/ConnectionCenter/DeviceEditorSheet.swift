@@ -18,6 +18,7 @@ struct DeviceEditorSheet: View {
     @State private var clipboardSharingEnabled: Bool
     @State private var audioPlaybackEnabled: Bool
     @State private var hideCertificateWarnings: Bool
+    @State private var timeoutSeconds: Int
     @State private var validationMessage: String?
     @State private var isLoadingPassword: Bool
     @State private var hadRememberedPassword = false
@@ -34,6 +35,7 @@ struct DeviceEditorSheet: View {
         _clipboardSharingEnabled = State(initialValue: device.clipboardSharingEnabled)
         _audioPlaybackEnabled = State(initialValue: device.audioPlaybackEnabled)
         _hideCertificateWarnings = State(initialValue: device.hideCertificateWarnings)
+        _timeoutSeconds = State(initialValue: device.timeoutSeconds)
         _isLoadingPassword = State(initialValue: device.rememberPassword)
     }
 
@@ -64,6 +66,12 @@ struct DeviceEditorSheet: View {
                     Toggle("Share clipboard", isOn: $clipboardSharingEnabled)
                     Toggle("Play remote audio", isOn: $audioPlaybackEnabled)
                     Toggle("Hide certificate warnings", isOn: $hideCertificateWarnings)
+                    Stepper(
+                        "Connection timeout: \(timeoutSeconds)s",
+                        value: $timeoutSeconds,
+                        in: DeviceProfile.timeoutSecondsRange,
+                        step: 1
+                    )
                 }
 
                 if let validationMessage {
@@ -188,6 +196,7 @@ struct DeviceEditorSheet: View {
             device.clipboardSharingEnabled = clipboardSharingEnabled
             device.audioPlaybackEnabled = audioPlaybackEnabled
             device.hideCertificateWarnings = hideCertificateWarnings
+            device.timeoutSeconds = timeoutSeconds
 
             return try deviceList.save(
                 editor: editorState,

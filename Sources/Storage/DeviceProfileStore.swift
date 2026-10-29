@@ -35,6 +35,10 @@ struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
     var updatedAt: Date
     var lastConnectedAt: Date?
 
+    /// The connection timeouts the editor and Settings offer, the same
+    /// range as the RDPKit example's connection form.
+    static let timeoutSecondsRange = 3 ... 60
+
     static func makeNew(defaults: UserDefaults = .standard) -> DeviceProfile {
         DeviceProfile(
             id: UUID(),
