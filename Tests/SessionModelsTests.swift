@@ -449,6 +449,30 @@ final class SessionModelsTests: XCTestCase {
         )
     }
 
+    func testLicensingFailureRetriesOnceWithoutTheStoredLicense() {
+        let licensing = makeReport(stage: "rdp-licensing", failure: .licensing(errorCode: 0x0000_0008))
+        let badLicense = makeReport(
+            stage: "rdp-licensing",
+            failure: .serverTermination(termination: RDPRemoteTermination(errorInfo: 0x0000_0105))
+        )
+
+        XCTAssertEqual(outcome(after: licensing, presentedStoredClientLicense: true), .retryWithoutStoredClientLicense)
+        XCTAssertEqual(outcome(after: badLicense, presentedStoredClientLicense: true), .retryWithoutStoredClientLicense)
+        // The retry presents none, so it ends there.
+        XCTAssertEqual(outcome(after: licensing), .end(RDPSessionEndReason(
+            kind: .failed,
+            message: "The remote computer could not license this connection."
+        )))
+        // Another termination is not the license's doing.
+        let denied = makeReport(
+            stage: "rdp-licensing",
+            failure: .serverTermination(termination: RDPRemoteTermination(errorInfo: 0x0000_0009))
+        )
+        guard case .end = outcome(after: denied, presentedStoredClientLicense: true) else {
+            return XCTFail("A denied connection was retried")
+        }
+    }
+
     func testNothingIsRetriedOnceTheDesktopShowed() {
         let report = makeReport(stage: "rdp-graphics-dynamic-channel", failure: .timedOut)
 
@@ -554,6 +578,7 @@ final class SessionModelsTests: XCTestCase {
         after report: RDPConnectionReport,
         host: String = "winbox",
         usedLegacyRSAKeyExchange: Bool = false,
+        presentedStoredClientLicense: Bool = false,
         unreachableRetriesSpent: Int = 0,
         retriedFirstFrameTimeout: Bool = false
     ) -> SessionAttemptOutcome {
@@ -562,6 +587,7 @@ final class SessionModelsTests: XCTestCase {
             host: host,
             presentedFrames: false,
             usedLegacyRSAKeyExchange: usedLegacyRSAKeyExchange,
+            presentedStoredClientLicense: presentedStoredClientLicense,
             unreachableRetriesSpent: unreachableRetriesSpent,
             retriedFirstFrameTimeout: retriedFirstFrameTimeout
         )

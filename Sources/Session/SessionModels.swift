@@ -407,6 +407,9 @@ enum SessionAttemptOutcome: Equatable {
     /// Connect again at once offering only RSA key exchange: the server's
     /// certificate does not allow the ECDHE key exchange offered first.
     case retryWithLegacyRSAKeyExchange
+    /// Connect again at once without presenting the client license stored
+    /// for the PC, which the server's licensing may have refused.
+    case retryWithoutStoredClientLicense
     /// Connect again after a short pause.
     case retry(SessionAutoRetryReason)
     /// Ask for the user name and password again, saying why.
@@ -432,6 +435,10 @@ enum SessionAttemptOutcome: Equatable {
     /// - A server that accepted the sign-in but did not show the desktop in
     ///   time (RDPKit bounds the wait for the first frame) gets one more
     ///   attempt, with the credentials it accepted.
+    /// - A licensing failure on a connection that had a stored client
+    ///   license to present gets one attempt without it, so the server can
+    ///   issue a new one. Licensing follows the sign-in, which goes to the
+    ///   same server again.
     ///
     /// After a Server Redirection (`redirectionDepth` above 0) the server
     /// typed in took the sign-in and passed the session on, so a target
@@ -442,6 +449,7 @@ enum SessionAttemptOutcome: Equatable {
         host: String,
         presentedFrames: Bool,
         usedLegacyRSAKeyExchange: Bool = false,
+        presentedStoredClientLicense: Bool = false,
         unreachableRetriesSpent: Int = 0,
         retriedFirstFrameTimeout: Bool = false
     ) -> Self {
@@ -478,6 +486,11 @@ enum SessionAttemptOutcome: Equatable {
             )
         case .timedOut where report.connectionStage == .graphics && report.rdpGraphicsFirstFrame == nil:
             return retriedFirstFrameTimeout ? .end(.firstFrameTimeout) : .retry(.firstFrameTimeout)
+        case .licensing where presentedStoredClientLicense:
+            return .retryWithoutStoredClientLicense
+        case let .serverTermination(termination)
+            where presentedStoredClientLicense && termination.category == .licensing:
+            return .retryWithoutStoredClientLicense
         default:
             break
         }

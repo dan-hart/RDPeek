@@ -56,6 +56,11 @@ final class SessionViewController: NSViewController {
     /// certificate turned down ECDHE. Not saved: every connection tries
     /// ECDHE first.
     private var usesLegacyRSAKeyExchange = false
+    /// This connection presents no stored client license, after the
+    /// server's licensing failed with it. A license the server issues
+    /// replaces the stored one; every connection the user starts presents
+    /// the stored license first.
+    private var omitsStoredClientLicense = false
     private var connectionRequestsAudio = false
     private var didReportAudioFailure = false
     private var activeConnectionID: UUID?
@@ -705,6 +710,7 @@ final class SessionViewController: NSViewController {
         didRetryFirstFrameTimeout = false
         isAutoRetryPending = false
         usesLegacyRSAKeyExchange = false
+        omitsStoredClientLicense = false
         autoRetryReason = nil
         connect(using: credentialSource(remembersPassword: draft.rememberPassword))
     }
@@ -849,6 +855,7 @@ final class SessionViewController: NSViewController {
     ) {
         let clientLicenseStore = clientLicenseStore
         let clientLicenseKey = ClientLicenseStoreKey(identity: draft.identity)
+        let presentsStoredClientLicense = omitsStoredClientLicense == false
         let trustedCertificateStore = trustedCertificateStore
         let acceptsUntrustedCertificates = draft.hideCertificateWarnings
         let port = baseConfiguration.port
@@ -860,7 +867,9 @@ final class SessionViewController: NSViewController {
             var configuration = baseConfiguration
             // Read here, not on the main thread: the Keychain can block on
             // its access-approval dialog. No connection deadline runs yet.
-            configuration.storedClientLicense = try? clientLicenseStore.license(for: clientLicenseKey)
+            if presentsStoredClientLicense {
+                configuration.storedClientLicense = try? clientLicenseStore.license(for: clientLicenseKey)
+            }
             var keyframeRequests = RDPKeyframeRequestThrottle()
             let decodeQueue = RDPFrameDecodeQueue(
                 shouldCancel: {
@@ -1077,7 +1086,8 @@ final class SessionViewController: NSViewController {
     }
 
     /// The session ended without the user ending it: record why, then
-    /// connect again, ask to sign in, or show the end.
+    /// connect again, ask to sign in, or show the end. `configuration` is
+    /// the one the session ran with, stored client license included.
     private func finishConnection(
         _ finishedReport: RDPConnectionReport,
         configuration: RDPConnectionConfiguration
@@ -1089,6 +1099,7 @@ final class SessionViewController: NSViewController {
             host: configuration.host,
             presentedFrames: hasPresentedFrame,
             usedLegacyRSAKeyExchange: configuration.legacyRSAKeyExchange,
+            presentedStoredClientLicense: configuration.storedClientLicense != nil,
             unreachableRetriesSpent: autoRetryCount,
             retriedFirstFrameTimeout: didRetryFirstFrameTimeout
         )
@@ -1112,6 +1123,9 @@ final class SessionViewController: NSViewController {
         switch outcome {
         case .retryWithLegacyRSAKeyExchange:
             usesLegacyRSAKeyExchange = true
+            startConnectionAttempt()
+        case .retryWithoutStoredClientLicense:
+            omitsStoredClientLicense = true
             startConnectionAttempt()
         case let .retry(reason):
             switch reason {
