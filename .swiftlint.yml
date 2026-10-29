@@ -33,3 +33,7 @@ only_rules:
   - unused_optional_binding
   - weak_delegate
   - yoda_condition
+
+analyzer_rules:
+  - unused_declaration
+  - unused_import

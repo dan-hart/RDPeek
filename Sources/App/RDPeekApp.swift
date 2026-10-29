@@ -3,6 +3,8 @@ import SwiftUI
 
 @main
 struct RDPeekApp: App {
+    // Read by nothing: declaring it is what installs the app delegate.
+    // swiftlint:disable:next unused_declaration
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var launchStore: SessionLaunchStore
     @StateObject private var deviceList: DeviceListModel

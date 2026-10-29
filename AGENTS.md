@@ -51,6 +51,14 @@ implementation.
   -destination 'platform=macOS' -derivedDataPath DerivedData test`
 - Warnings are errors; keep the build clean.
 - Swift style gate: `swiftlint lint --strict` must pass.
+- Unused-code gate: `swiftlint analyze --strict` must pass too. It reads
+  the compiler log of a clean app build, so it covers `Sources` only:
+  `xcodebuild -project RDPeek.xcodeproj -scheme RDPeek
+  -destination 'platform=macOS' -derivedDataPath DerivedData clean build
+  > build.log`, then
+  `swiftlint analyze --strict --compiler-log-path build.log`. Use the
+  `build` log, not `build-for-testing`: the test target compiles some app
+  sources without their callers, which reads as unused code.
 - App icon: the master artwork is `Sources/Resources/AppIcon.svg`
   (excluded from the app bundle); regenerate the asset catalog with
   `Sources/Resources/build-app-icon.sh`. The glyph is a custom path on
