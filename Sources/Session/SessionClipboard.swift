@@ -31,14 +31,20 @@ final class SessionClipboard {
     private(set) var isSharingEnabled: Bool
     /// Shows a transient message: its text and an SF Symbol name.
     var onToast: (_ text: String, _ systemImage: String) -> Void = { _, _ in }
-    private var pasteboardChangeCount = NSPasteboard.general.changeCount
+    private let pasteboard: NSPasteboard
+    private var pasteboardChangeCount: Int
+    private var localFileRead: Task<Void, Never>?
     private var temporarySharingExpiresAt: Date?
     private var fileTransfer: SessionRemoteClipboardFileTransfer?
     private var downloadDirectory: URL?
     private var nextStreamID: UInt32 = 1
 
-    init(isSharingEnabled: Bool) {
+    /// `pasteboard` is the user's clipboard except in tests, which use one
+    /// of their own.
+    init(isSharingEnabled: Bool, pasteboard: NSPasteboard = .general) {
         self.isSharingEnabled = isSharingEnabled
+        self.pasteboard = pasteboard
+        pasteboardChangeCount = pasteboard.changeCount
     }
 
     var canSync: Bool {
@@ -76,7 +82,8 @@ final class SessionClipboard {
     func detach() {
         session = nil
         discardFileTransfer()
-        pasteboardChangeCount = NSPasteboard.general.changeCount
+        cancelLocalFileRead()
+        pasteboardChangeCount = pasteboard.changeCount
     }
 
     /// The user's choice, which also ends a temporary share.
@@ -120,7 +127,7 @@ final class SessionClipboard {
         guard isSharingEnabled else {
             return
         }
-        let pasteboard = NSPasteboard.general
+        cancelLocalFileRead()
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         pasteboardChangeCount = pasteboard.changeCount
@@ -217,31 +224,52 @@ final class SessionClipboard {
         guard enabled else {
             temporarySharingExpiresAt = nil
             discardFileTransfer()
+            cancelLocalFileRead()
             session?.publishLocalUnicodeText(nil)
-            pasteboardChangeCount = NSPasteboard.general.changeCount
+            pasteboardChangeCount = pasteboard.changeCount
             return
         }
         publishPasteboardIfChanged(force: true)
     }
 
     private func publishPasteboardIfChanged(force: Bool = false) {
-        guard isSharingEnabled else {
-            pasteboardChangeCount = NSPasteboard.general.changeCount
-            return
-        }
-        guard let session else {
-            pasteboardChangeCount = NSPasteboard.general.changeCount
+        guard isSharingEnabled, session != nil else {
+            pasteboardChangeCount = pasteboard.changeCount
             return
         }
 
-        let pasteboard = NSPasteboard.general
         let nextChangeCount = pasteboard.changeCount
         guard force || nextChangeCount != pasteboardChangeCount else {
             return
         }
 
         pasteboardChangeCount = nextChangeCount
-        switch localPayload(from: pasteboard) {
+        cancelLocalFileRead()
+        let fileURLs = pasteboardFileURLs()
+        guard fileURLs.isEmpty else {
+            // Reading up to 32 MiB, or a file iCloud has to download first,
+            // on the main thread would stall the window and its input. A
+            // newer local copy, remote clipboard, or sharing turned off
+            // cancels the publish.
+            localFileRead = Task { [weak self] in
+                let payload = await Task.detached(priority: .userInitiated) {
+                    Self.localFiles(from: fileURLs)
+                }.value
+                guard Task.isCancelled == false else {
+                    return
+                }
+                self?.publish(payload, force: force)
+            }
+            return
+        }
+        publish(localTextPayload(), force: force)
+    }
+
+    private func publish(_ payload: SessionLocalClipboardPayload, force: Bool) {
+        guard isSharingEnabled, let session else {
+            return
+        }
+        switch payload {
         case let .text(text):
             session.publishLocalUnicodeText(text)
             if force {
@@ -261,11 +289,12 @@ final class SessionClipboard {
         }
     }
 
-    private func localPayload(from pasteboard: NSPasteboard) -> SessionLocalClipboardPayload {
-        let fileURLs = pasteboardFileURLs(from: pasteboard)
-        if fileURLs.isEmpty == false {
-            return localFiles(from: fileURLs)
-        }
+    private func cancelLocalFileRead() {
+        localFileRead?.cancel()
+        localFileRead = nil
+    }
+
+    private func localTextPayload() -> SessionLocalClipboardPayload {
         if let text = pasteboard.string(forType: .string) {
             guard RDPClipboardLimits.canPublishUnicodeText(text) else {
                 return .ignored("Local text is too large to sync.")
@@ -275,7 +304,7 @@ final class SessionClipboard {
         return .empty
     }
 
-    private func pasteboardFileURLs(from pasteboard: NSPasteboard) -> [URL] {
+    private func pasteboardFileURLs() -> [URL] {
         var urls: [URL] = []
         if let pasteboardItems = pasteboard.pasteboardItems {
             for item in pasteboardItems {
@@ -299,7 +328,7 @@ final class SessionClipboard {
         urls.append(url)
     }
 
-    private func localFiles(from urls: [URL]) -> SessionLocalClipboardPayload {
+    private nonisolated static func localFiles(from urls: [URL]) -> SessionLocalClipboardPayload {
         var files: [RDPClipboardLocalFile] = []
         var totalByteCount = 0
 
@@ -402,7 +431,7 @@ final class SessionClipboard {
     }
 
     private func finishFileTransfer(_ transfer: SessionRemoteClipboardFileTransfer) {
-        let pasteboard = NSPasteboard.general
+        cancelLocalFileRead()
         pasteboard.clearContents()
         guard pasteboard.writeObjects(transfer.downloadedFileURLs.map { $0 as NSURL }) else {
             failFileTransfer(transfer, message: "Remote files could not be copied")
@@ -485,7 +514,7 @@ final class SessionClipboard {
     }
 }
 
-private enum SessionLocalClipboardPayload: Equatable {
+private enum SessionLocalClipboardPayload: Equatable, Sendable {
     case text(String)
     case files([RDPClipboardLocalFile])
     case empty
