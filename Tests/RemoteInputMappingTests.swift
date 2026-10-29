@@ -181,6 +181,10 @@ final class RemoteInputMappingTests: XCTestCase {
         XCTAssertFalse(deadKeys.isDeadKey(keyCode: UInt16(kVK_ANSI_L), modifierFlags: .option))
         XCTAssertFalse(deadKeys.isDeadKey(keyCode: eKey, modifierFlags: [.option, .shift]))
         XCTAssertFalse(deadKeys.isDeadKey(keyCode: eKey, modifierFlags: []))
+        // With no dead key pending, A types "a", Shift-A "A" and Option-E nothing.
+        XCTAssertEqual(deadKeys.output(keyCode: UInt16(kVK_ANSI_A), modifierFlags: []), "a")
+        XCTAssertEqual(deadKeys.output(keyCode: UInt16(kVK_ANSI_A), modifierFlags: .shift), "A")
+        XCTAssertEqual(deadKeys.output(keyCode: eKey, modifierFlags: .option), "")
     }
 
     // MARK: - A dead key's accent ahead of a key it does not compose with

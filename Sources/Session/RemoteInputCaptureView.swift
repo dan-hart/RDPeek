@@ -20,6 +20,9 @@ final class RemoteInputCaptureNSView: NSView {
     /// Whether the Mac keyboard layout makes the key, with these modifiers, a dead key. Tests
     /// substitute a fixed layout.
     var isDeadKey: @MainActor (UInt16, NSEvent.ModifierFlags) -> Bool = MacRDPDeadKeys.isDeadKeyInCurrentLayout
+    /// What the Mac keyboard layout types with the key and these modifiers when no dead key is
+    /// pending, or nil where it cannot tell. Tests substitute a fixed layout.
+    var keyOutput: @MainActor (UInt16, NSEvent.ModifierFlags) -> String? = MacRDPDeadKeys.outputInCurrentLayout
     var inputSession: (any RemoteInputEventSink)? {
         willSet {
             if inputSession != nil, inputSession !== newValue {
@@ -40,6 +43,9 @@ final class RemoteInputCaptureNSView: NSView {
     /// such as "@" with Option-L on German, and those go as text with no Alt around them.
     private var deferredRightAlt = MacRDPDeferredWindowsKey()
     private var wheelAccumulator = RDPScrollWheelAccumulator()
+    /// A dead key went to the server as a chord, such as Alt-E with left Option. macOS started it
+    /// all the same, so the next key's `characters` carry its accent.
+    private var isAfterChordedDeadKey = false
     private var commandKeyUpMonitor: Any?
 
     /// A view released while still in its window was never told to stop observing it. The
@@ -203,11 +209,18 @@ final class RemoteInputCaptureNSView: NSView {
         syncModifierKeys(with: event)
         let scancode = MacRDPKeyboardMapping.scancode(forKeyCode: event.keyCode)
         let isHeldAsScancode = scancode.map { inputState.isScancodePressed($0) } ?? false
-        if isHeldAsScancode == false, isTypedWithRightOption(event) {
+        // After a dead key the server took as a chord, the key's own output stands in for the
+        // characters macOS composed with it. A key with no scancode keeps AppKit's: the layout
+        // gives some, such as keypad Clear, a control character.
+        let characters = isAfterChordedDeadKey && event.isARepeat == false && scancode != nil
+            ? keyOutput(event.keyCode, event.modifierFlags) ?? event.characters
+            : event.characters
+        isAfterChordedDeadKey = false
+        if isHeldAsScancode == false, isTypedWithRightOption(characters, event: event) {
             // Right Option was used to type, or to start a dead key whose accent the next key
             // types as text, so releasing it is no Alt tap. A dead key itself sends nothing.
             deferredRightAlt.noteChordedElsewhere()
-            let events = MacRDPKeyboardMapping.unicodeEvents(for: event.characters ?? "")
+            let events = MacRDPKeyboardMapping.unicodeEvents(for: characters ?? "")
             if events.isEmpty == false {
                 inputSession?.send(events)
             }
@@ -219,7 +232,7 @@ final class RemoteInputCaptureNSView: NSView {
                modifierFlags: event.modifierFlags,
                isHeldAsScancode: isHeldAsScancode
            ) || MacRDPKeyboardMapping.windowsTypes(
-               event.characters,
+               characters,
                charactersIgnoringModifiers: event.charactersIgnoringModifiers,
                for: scancode,
                modifierFlags: event.modifierFlags,
@@ -228,14 +241,15 @@ final class RemoteInputCaptureNSView: NSView {
         {
             // A dead key typed before a key it does not compose with, such as Return, types its
             // accent ahead of the key. A repeat of the held key types the accent no more.
-            let prefix = isHeldAsScancode ? "" : MacRDPKeyboardMapping.deadKeyPrefix(event.characters)
+            let prefix = isHeldAsScancode ? "" : MacRDPKeyboardMapping.deadKeyPrefix(characters)
             sendKeyboardScancode(scancode, isReleased: false, after: MacRDPKeyboardMapping.unicodeEvents(for: prefix))
+            isAfterChordedDeadKey = characters?.isEmpty == true && isDeadKey(event.keyCode, event.modifierFlags)
             return
         }
         guard event.modifierFlags.isDisjoint(with: [.command, .control]) else {
             return
         }
-        let events = MacRDPKeyboardMapping.unicodeEvents(for: event.characters ?? "")
+        let events = MacRDPKeyboardMapping.unicodeEvents(for: characters ?? "")
         guard events.isEmpty == false else {
             return
         }
@@ -319,13 +333,13 @@ final class RemoteInputCaptureNSView: NSView {
         }
     }
 
-    /// Whether right Option typed the event's characters: its Alt is held back, left Option's
+    /// Whether right Option typed `characters`, the key's: its Alt is held back, left Option's
     /// Alt is not on the server, and Option made the key type a character or a dead key.
-    private func isTypedWithRightOption(_ event: NSEvent) -> Bool {
+    private func isTypedWithRightOption(_ characters: String?, event: NSEvent) -> Bool {
         deferredRightAlt.isHeld(Self.rightAlt)
             && inputState.isScancodePressed(Self.leftAlt) == false
             && MacRDPKeyboardMapping.optionTypes(
-                event.characters,
+                characters,
                 charactersIgnoringModifiers: event.charactersIgnoringModifiers,
                 modifierFlags: event.modifierFlags,
                 isDeadKey: isDeadKey(event.keyCode, event.modifierFlags)
@@ -530,6 +544,7 @@ final class RemoteInputCaptureNSView: NSView {
     private func releasePressedInputs() {
         deferredWindowsKey.reset()
         deferredRightAlt.reset()
+        isAfterChordedDeadKey = false
         let releaseEvents = inputState.releasePressedInputs()
         inputSession?.send(releaseEvents)
     }

@@ -720,6 +720,46 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    func testKeyAfterALeftOptionDeadKeyGoesUncomposed() {
+        // US Option-E with left Option goes as Alt-E, which opens a Windows
+        // app's Edit menu, but macOS still starts the dead key: A after it
+        // reports "á" and Return "´\r". A goes as its scancode, the menu's
+        // accelerator, and Return types no accent.
+        let harness = makeHarness()
+        let eKey = UInt16(kVK_ANSI_E)
+        let aKey = UInt16(kVK_ANSI_A)
+        let aScancode = RDPKeyboardScancode(code: 0x1E)
+        let typeLeftOptionE = {
+            harness.view.flagsChanged(with: self.flagsEvent(keyCode: UInt16(kVK_Option), flags: .leftOptionDown))
+            harness.view.keyDown(with: self.keyEvent(.keyDown, keyCode: eKey, charactersIgnoringModifiers: "e", flags: .leftOptionDown))
+            harness.view.keyUp(with: self.keyEvent(.keyUp, keyCode: eKey, charactersIgnoringModifiers: "e", flags: .leftOptionDown))
+            harness.view.flagsChanged(with: self.flagsEvent(keyCode: UInt16(kVK_Option), flags: []))
+        }
+        let altE: [RDPSlowPathInputEvent] = [
+            .keyboard(scancode: .leftAlt, isReleased: false),
+            .keyboard(scancode: RDPKeyboardScancode(code: 0x12), isReleased: false),
+            .keyboard(scancode: RDPKeyboardScancode(code: 0x12), isReleased: true),
+            .keyboard(scancode: .leftAlt, isReleased: true),
+        ]
+        typeLeftOptionE()
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: aKey, characters: "á", charactersIgnoringModifiers: "a"))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: aKey, characters: "a"))
+        typeLeftOptionE()
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_Return),
+            characters: "´\r",
+            charactersIgnoringModifiers: "\r"
+        ))
+
+        XCTAssertEqual(harness.recorder.events, altE + [
+            .keyboard(scancode: aScancode, isReleased: false),
+            .keyboard(scancode: aScancode, isReleased: true),
+        ] + altE + [
+            .keyboard(scancode: RDPKeyboardScancode(code: 0x1C), isReleased: false),
+        ])
+    }
+
     // MARK: - Command with right Option
 
     func testCommandAndRightOptionReleasedWithNothingBetweenTapNeither() {
@@ -1166,6 +1206,10 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         view.isDeadKey = { keyCode, modifierFlags in
             keyCode == UInt16(kVK_ANSI_E) && modifierFlags.contains(.option)
         }
+        // What US types with the keys these tests press after a dead key.
+        view.keyOutput = { keyCode, _ in
+            [kVK_ANSI_A: "a", kVK_Return: "\r"][Int(keyCode)]
+        }
         let window = TestWindow(isKey: true)
         window.contentView = view
         view.inputSession = recorder
@@ -1342,5 +1386,6 @@ private extension RDPKeyboardScancode {
     static let rightWindows = RDPKeyboardScancode(code: 0x005C, isExtended: true)
     static let leftControl = RDPKeyboardScancode(code: 0x001D)
     static let leftShift = RDPKeyboardScancode(code: 0x002A)
+    static let leftAlt = RDPKeyboardScancode(code: 0x0038)
     static let rightAlt = RDPKeyboardScancode(code: 0x0038, isExtended: true)
 }
