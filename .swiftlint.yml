@@ -1,10 +1,6 @@
 included:
   - Sources
-
-excluded:
-  - DerivedData
-  - Generated
-  - RDPeek.xcodeproj
+  - Tests
 
 only_rules:
   - contains_over_filter_count
@@ -32,6 +28,7 @@ only_rules:
   - unavailable_condition
   - unavailable_function
   - unhandled_throwing_task
+  - unneeded_override
   - unowned_variable_capture
   - unused_optional_binding
   - weak_delegate
