@@ -68,12 +68,6 @@ struct TrustedCertificateStore: @unchecked Sendable {
         saveTrustedCertificateIDs(certificateIDs)
     }
 
-    func removeTrust(_ key: RDPServerCertificateTrustKey) {
-        var certificateIDs = trustedCertificateIDs()
-        certificateIDs.remove(key.storageIdentifier)
-        saveTrustedCertificateIDs(certificateIDs)
-    }
-
     private func trustedCertificateIDs() -> Set<String> {
         Set(defaults.stringArray(forKey: storageKey) ?? [])
     }
