@@ -235,13 +235,13 @@ final class DeviceListModel: ObservableObject {
             throw DeviceValidationError.missingPasswordForKeychain
         }
 
-        // The keychain entry is keyed by identity, so drop the old entry when
-        // host, port, username, or domain changed — unless another profile
-        // still remembers its password under that identity.
+        // The keychain entry is keyed by account name, so drop the old entry
+        // when host, port, username, or domain changed it — unless another
+        // profile still remembers its password under that account.
         if hadRememberedPassword,
-           snapshot.identity.hasSameConnectionIdentity(as: device.identity) == false,
-           rememberedPasswordIsShared(snapshot.identity, excluding: device.id) == false,
-           let oldKey = KeychainCredentialKey(identity: snapshot.identity)
+           let oldKey = KeychainCredentialKey(identity: snapshot.identity),
+           oldKey.account != device.identity.credentialAccountName,
+           rememberedPasswordIsShared(snapshot.identity, excluding: device.id) == false
         {
             try credentialStore.deletePassword(for: oldKey)
         }
@@ -266,18 +266,19 @@ final class DeviceListModel: ObservableObject {
             // Delete the profile first: if the store write throws, nothing
             // irreversible has happened to the keychain yet.
             devices = try store.delete(id: device.id)
-            // Profiles for the same machine share one cached password and
-            // one keychain entry; keep each while another profile uses it.
-            let twins = devices.filter { $0.identity.hasSameConnectionIdentity(as: device.identity) }
-            if twins.isEmpty, let account = device.identity.credentialAccountName {
-                credentialCache.removePassword(for: account)
-            }
-            // The confirmation dialog promises the saved password is removed
-            // too, so a failure must surface, not be swallowed.
-            if twins.contains(where: \.rememberPassword) == false,
-               let key = KeychainCredentialKey(identity: device.identity)
-            {
-                try credentialStore.deletePassword(for: key)
+            // Profiles that sign in to the same account share one cached
+            // password and one keychain entry, both keyed by the account
+            // name; keep each while another profile uses it.
+            if let key = KeychainCredentialKey(identity: device.identity) {
+                let twins = devices.filter { $0.identity.credentialAccountName == key.account }
+                if twins.isEmpty {
+                    credentialCache.removePassword(for: key.account)
+                }
+                // The confirmation dialog promises the saved password is
+                // removed too, so a failure must surface, not be swallowed.
+                if twins.contains(where: \.rememberPassword) == false {
+                    try credentialStore.deletePassword(for: key)
+                }
             }
         } catch {
             errorMessage = String(describing: error)
@@ -285,14 +286,19 @@ final class DeviceListModel: ObservableObject {
         devicePendingDeletion = nil
     }
 
-    /// Whether another profile remembers its password under `identity`, and
-    /// so still needs the keychain entry. Profiles that don't remember their
-    /// password never read it.
+    /// Whether another profile remembers its password under `identity`'s
+    /// account name, and so still needs the keychain entry. Identities can
+    /// differ and share the account: user `CORP\bob` with no domain is
+    /// `bob` in domain `CORP`. Profiles that don't remember their password never
+    /// read it.
     func rememberedPasswordIsShared(_ identity: RDPConnectionIdentity, excluding deviceID: UUID) -> Bool {
-        devices.contains { other in
+        guard let account = identity.credentialAccountName else {
+            return false
+        }
+        return devices.contains { other in
             other.id != deviceID
                 && other.rememberPassword
-                && other.identity.hasSameConnectionIdentity(as: identity)
+                && other.identity.credentialAccountName == account
         }
     }
 

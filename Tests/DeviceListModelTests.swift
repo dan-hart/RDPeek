@@ -111,6 +111,22 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertNil(harness.model.errorMessage)
     }
 
+    func testConfirmDeletionKeepsCredentialOfAnotherIdentityWithTheSameAccount() throws {
+        // Different identities, one keychain account, CORP\bob@host.example:3389.
+        let device = makeDevice(name: "Work PC", username: "CORP\\bob", rememberPassword: true)
+        let twin = makeDevice(name: "Work PC Too", username: "bob", domain: "CORP", rememberPassword: true)
+        let harness = try makeHarness(devices: [device, twin])
+        let account = try account(for: device)
+        XCTAssertEqual(account, try self.account(for: twin))
+        harness.cache.setPassword("cached", for: account)
+
+        harness.model.confirmDeletion(of: device)
+
+        XCTAssertEqual(harness.credentials.deletedAccounts, [])
+        XCTAssertEqual(harness.cache.password(for: account), "cached")
+        XCTAssertNil(harness.model.errorMessage)
+    }
+
     func testConfirmDeletionLeavesKeychainUntouchedWhenProfileDeleteFails() throws {
         let device = makeDevice()
         let harness = try makeHarness(devices: [device])
@@ -249,6 +265,43 @@ final class DeviceListModelTests: XCTestCase {
         )
 
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
+    }
+
+    func testSaveKeepsCredentialWhenRememberTurnedOffButSameAccountRemembers() throws {
+        let device = makeDevice(username: "CORP\\bob", rememberPassword: true)
+        let twin = makeDevice(name: "Twin", username: "bob", domain: "CORP", rememberPassword: true)
+        let harness = try makeHarness(devices: [device, twin])
+        let editor = DeviceEditorState(device: device, isNew: false)
+        var edited = device
+        edited.rememberPassword = false
+
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "",
+            hadRememberedPassword: true
+        )
+
+        XCTAssertEqual(harness.credentials.deletedAccounts, [])
+    }
+
+    func testSaveKeepsCredentialWhenIdentityChangesButAccountDoesNot() throws {
+        let device = makeDevice(username: "CORP\\bob", rememberPassword: true)
+        let harness = try makeHarness(devices: [device])
+        let editor = DeviceEditorState(device: device, isNew: false)
+        var edited = device
+        edited.username = "bob"
+        edited.domain = "CORP"
+
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "pw",
+            hadRememberedPassword: true
+        )
+
+        XCTAssertEqual(harness.credentials.deletedAccounts, [])
+        XCTAssertEqual(harness.credentials.passwords[try account(for: device)], "pw")
     }
 
     func testSaveCachesTypedPasswordWhenNotRemembered() throws {
