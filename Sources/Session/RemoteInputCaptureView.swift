@@ -160,6 +160,8 @@ final class RemoteInputCaptureNSView: NSView {
         guard events.isEmpty == false else {
             return
         }
+        // Command held to scroll was used, so releasing it is no Win tap.
+        deferredWindowsKey.noteChordedElsewhere()
         inputSession?.send(events)
     }
 

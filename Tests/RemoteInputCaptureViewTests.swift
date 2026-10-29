@@ -212,6 +212,18 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftWindows, isReleased: true)])
     }
 
+    func testScrollingWithCommandHeldSendsNoTap() {
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.scrollWheel(with: scrollEvent(flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+
+        XCTAssertEqual(harness.recorder.events.count, 1)
+        guard case .verticalWheel = harness.recorder.events.first else {
+            return XCTFail("Expected only the wheel event, got \(harness.recorder.events)")
+        }
+    }
+
     func testCommandChordTheRemoteNeverSeesSendsNoTap() {
         // A Command chord on a key with no scancode is left to the menus.
         let harness = makeHarness()
@@ -670,7 +682,9 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         return event
     }
 
-    private func scrollEvent() -> NSEvent {
+    /// One notch at (100, 50) in the view, which fills the window at the
+    /// main display's bottom-left corner.
+    private func scrollEvent(flags: NSEvent.ModifierFlags = []) -> NSEvent {
         guard let cgEvent = CGEvent(
             scrollWheelEvent2Source: nil,
             units: .line,
@@ -681,7 +695,9 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ) else {
             preconditionFailure("Failed to synthesize scroll event")
         }
-        cgEvent.flags = []
+        // Core Graphics measures y down from the main display's top edge.
+        cgEvent.location = CGPoint(x: 100, y: CGDisplayBounds(CGMainDisplayID()).height - 50)
+        cgEvent.flags = CGEventFlags(rawValue: UInt64(flags.rawValue))
         guard let event = NSEvent(cgEvent: cgEvent) else {
             preconditionFailure("Failed to convert scroll event")
         }
