@@ -178,6 +178,12 @@ final class SessionViewController: NSViewController {
 
         frameClockView.translatesAutoresizingMaskIntoConstraints = false
         frameClockView.isHidden = true
+        frameClockView.onFrame = { [weak self] displayLink in
+            self?.displayLinkFrameArrived(displayLink)
+        }
+        frameClockView.onTimingChange = { [weak self] nextState in
+            self?.updateFramePacing(nextState)
+        }
         view.addSubview(frameClockView)
 
         // Full-bleed hosts must not report an intrinsic size, or the window
@@ -303,7 +309,7 @@ final class SessionViewController: NSViewController {
         hudModel.update(\.canSyncClipboard, to: commands.canSyncClipboard)
         hudModel.update(\.canShareClipboardTemporarily, to: commands.canShareClipboardTemporarily)
 
-        updateFrameClock()
+        frameClockView.isEnabled = framePresentationClockEnabled
         publishSessionCommandStateIfKey(commands)
     }
 
@@ -405,18 +411,6 @@ final class SessionViewController: NSViewController {
 
     fileprivate var isClosed: Bool {
         didClose
-    }
-
-    private func updateFrameClock() {
-        frameClockView.configure(
-            isEnabled: framePresentationClockEnabled,
-            onFrame: { [weak self] displayLink in
-                self?.displayLinkFrameArrived(displayLink)
-            },
-            onTimingChange: { [weak self] nextState in
-                self?.updateFramePacing(nextState)
-            }
-        )
     }
 
     private func startDiagnosticsLoop() {
@@ -1061,6 +1055,8 @@ final class SessionViewController: NSViewController {
             return applyFramePresentation(presentation)
         }
 
+        // The display link idles until a frame waits for it.
+        frameClockView.requestFrame()
         if framePresentationBuffer.replacePendingPresentation(presentation) {
             let skippedAt = Date()
             renderMetricsStore.recordSkippedPresentationFrame(at: skippedAt)

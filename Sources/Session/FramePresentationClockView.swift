@@ -1,16 +1,31 @@
 import AppKit
 import QuartzCore
-import RDPKit
 
 /// An invisible view that owns the window's display link and publishes frame
 /// pacing changes, so decoded frames can be presented on the display clock.
+/// The link runs only while a frame waits for the next refresh, and timing is
+/// read again only when the window's display changes.
 final class FramePresentationClockNSView: NSView {
     private var displayLink: CADisplayLink?
     private weak var observedWindow: NSWindow?
-    private var isEnabled = false
+    private var isFrameRequested = false
     private var lastPublishedState = RDPFramePacingState()
-    private var onFrame: ((CADisplayLink) -> Void)?
-    private var onTimingChange: ((RDPFramePacingState) -> Void)?
+
+    /// Called on the first display refresh after `requestFrame()`.
+    var onFrame: ((CADisplayLink) -> Void)?
+    var onTimingChange: ((RDPFramePacingState) -> Void)?
+
+    /// Whether the session presents frames on the display clock; frames
+    /// requested while it is off wait until it is on.
+    var isEnabled = false {
+        didSet {
+            guard isEnabled != oldValue else {
+                return
+            }
+            updateDisplayLinkPaused()
+            publishTimingIfChanged()
+        }
+    }
 
     deinit {
         MainActor.assumeIsolated {
@@ -39,17 +54,17 @@ final class FramePresentationClockNSView: NSView {
         publishTimingIfChanged(force: true)
     }
 
-    func configure(
-        isEnabled: Bool,
-        onFrame: @escaping (CADisplayLink) -> Void,
-        onTimingChange: @escaping (RDPFramePacingState) -> Void
-    ) {
-        self.isEnabled = isEnabled
-        self.onFrame = onFrame
-        self.onTimingChange = onTimingChange
-        configureDisplayLink(for: window)
-        displayLink?.isPaused = !isEnabled
-        publishTimingIfChanged()
+    /// Runs the display link until its next refresh calls `onFrame`.
+    func requestFrame() {
+        guard isFrameRequested == false else {
+            return
+        }
+        isFrameRequested = true
+        updateDisplayLinkPaused()
+    }
+
+    private func updateDisplayLinkPaused() {
+        displayLink?.isPaused = !(isEnabled && isFrameRequested)
     }
 
     private func configureDisplayLink(for nextWindow: NSWindow?) {
@@ -68,18 +83,25 @@ final class FramePresentationClockNSView: NSView {
 
         NotificationCenter.default.addObserver(
             self,
-            selector: #selector(windowDidChangeScreen(_:)),
+            selector: #selector(displayDidChange(_:)),
             name: NSWindow.didChangeScreenNotification,
             object: nextWindow
+        )
+        // A refresh-rate or resolution change keeps the window on its screen.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(displayDidChange(_:)),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
         )
 
         let nextDisplayLink = nextWindow.displayLink(
             target: self,
             selector: #selector(displayLinkFired(_:))
         )
-        nextDisplayLink.isPaused = !isEnabled
-        nextDisplayLink.add(to: .main, forMode: .common)
         displayLink = nextDisplayLink
+        updateDisplayLinkPaused()
+        nextDisplayLink.add(to: .main, forMode: .common)
         publishTimingIfChanged(force: true)
     }
 
@@ -96,23 +118,32 @@ final class FramePresentationClockNSView: NSView {
                 object: observedWindow
             )
         }
+        NotificationCenter.default.removeObserver(
+            self,
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
         observedWindow = nil
     }
 
     @objc private func displayLinkFired(_ displayLink: CADisplayLink) {
-        publishTimingIfChanged()
+        isFrameRequested = false
         onFrame?(displayLink)
+        // Pauses again unless onFrame requested another refresh.
+        updateDisplayLinkPaused()
     }
 
-    @objc private func windowDidChangeScreen(_: Notification) {
+    @objc private func displayDidChange(_: Notification) {
         publishTimingIfChanged(force: true)
     }
 
+    /// The display link idles between frames, so the published pause state
+    /// is whether the clock is enabled, not whether the link is running.
     private func publishTimingIfChanged(force: Bool = false) {
         let nextState = RDPFramePacingState.current(
             window: observedWindow,
             displayLink: displayLink,
-            isPaused: displayLink?.isPaused ?? true
+            isPaused: !isEnabled
         )
         guard force || nextState != lastPublishedState else {
             return
