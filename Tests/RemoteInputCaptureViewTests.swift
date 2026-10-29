@@ -396,10 +396,11 @@ final class RemoteInputCaptureViewTests: XCTestCase {
     }
 
     func testTheKeyUpMonitorIgnoresKeyUpsFromOtherWindows() {
-        // Every capture view's monitor sees all of the app's key-ups.
+        // Every capture view's monitor sees all of the app's key-ups. Both
+        // views hold W, so each key-up must release it only in its window.
         let harness = makeHarness()
         let other = makeHarness()
-        let wKey = RDPKeyboardScancode(code: 0x11)
+        let wUp = RDPSlowPathInputEvent.keyboard(scancode: RDPKeyboardScancode(code: 0x11), isReleased: true)
         let releaseW = { (window: NSWindow) in
             NSApplication.shared.sendEvent(self.keyEvent(
                 .keyUp,
@@ -409,16 +410,20 @@ final class RemoteInputCaptureViewTests: XCTestCase {
                 window: window
             ))
         }
-        _ = harness.view.performKeyEquivalent(
-            with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_W), characters: "w", flags: .leftCommandDown)
-        )
+        for view in [harness.view, other.view] {
+            _ = view.performKeyEquivalent(
+                with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_W), characters: "w", flags: .leftCommandDown)
+            )
+        }
         harness.recorder.events.removeAll()
+        other.recorder.events.removeAll()
 
         releaseW(other.window)
         XCTAssertEqual(harness.recorder.events, [])
+        XCTAssertEqual(other.recorder.events, [wUp])
         releaseW(harness.window)
-        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: wKey, isReleased: true)])
-        XCTAssertEqual(other.recorder.events, [])
+        XCTAssertEqual(harness.recorder.events, [wUp])
+        XCTAssertEqual(other.recorder.events, [wUp])
     }
 
     func testCommandTappedWhileAKeyIsHeldLeavesTheKeyDown() {
