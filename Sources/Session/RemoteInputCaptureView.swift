@@ -29,9 +29,19 @@ final class RemoteInputCaptureNSView: NSView {
 
     private var trackingArea: NSTrackingArea?
     private var inputState = RDPInputStateTracker()
-    private var pressedKeyScancodes = Set<RDPKeyboardScancode>()
     private var deferredWindowsKey = MacRDPDeferredWindowsKey()
     private var wheelAccumulator = RDPScrollWheelAccumulator()
+    private var commandKeyUpMonitor: Any?
+
+    /// A view released while still in its window was never told to stop observing it. The
+    /// notification observers go with the view, but the key-up monitor must be removed.
+    deinit {
+        MainActor.assumeIsolated {
+            if let commandKeyUpMonitor {
+                NSEvent.removeMonitor(commandKeyUpMonitor)
+            }
+        }
+    }
 
     override var acceptsFirstResponder: Bool {
         true
@@ -57,46 +67,14 @@ final class RemoteInputCaptureNSView: NSView {
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
-        if newWindow == nil {
-            releasePressedInputs()
-        }
-        if let window {
-            NotificationCenter.default.removeObserver(
-                self,
-                name: NSWindow.didResignKeyNotification,
-                object: window
-            )
-            NotificationCenter.default.removeObserver(
-                self,
-                name: NSWindow.didBecomeKeyNotification,
-                object: window
-            )
-        }
-        if let newWindow {
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(windowDidResignKey),
-                name: NSWindow.didResignKeyNotification,
-                object: newWindow
-            )
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(windowDidBecomeKey),
-                name: NSWindow.didBecomeKeyNotification,
-                object: newWindow
-            )
-        }
+        releasePressedInputs()
+        stopObservingWindow()
         super.viewWillMove(toWindow: newWindow)
     }
 
-    @objc private func windowDidResignKey() {
-        releasePressedInputs()
-    }
-
-    @objc private func windowDidBecomeKey() {
-        if window?.firstResponder === self {
-            synchronizeToggleKeys(NSEvent.modifierFlags)
-        }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        startObservingWindow()
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -223,9 +201,6 @@ final class RemoteInputCaptureNSView: NSView {
                layout: keyboardLayout
            )
         {
-            // A repeat for a scancode we no longer track (its release was
-            // flushed when Command went up) re-presses the key remotely; the
-            // tracker sends it as an initial press so its keyUp is not lost.
             sendKeyboardScancode(scancode, isReleased: false)
             return
         }
@@ -251,14 +226,6 @@ final class RemoteInputCaptureNSView: NSView {
 
     override func flagsChanged(with event: NSEvent) {
         var events: [RDPSlowPathInputEvent] = []
-        // AppKit withholds keyUp from views while Command is held, so any
-        // scancode still tracked when the last Command key goes up has a
-        // swallowed release pending.
-        if MacRDPKeyboardMapping.isCommandKeyCode(event.keyCode),
-           event.modifierFlags.contains(.command) == false
-        {
-            events += releaseEventsForPressedKeys()
-        }
         if Int(event.keyCode) == kVK_CapsLock {
             events += toggleKeySynchronizationEvents(event.modifierFlags)
         } else if let modifier = MacRDPModifierKey(keyCode: event.keyCode) {
@@ -274,6 +241,64 @@ final class RemoteInputCaptureNSView: NSView {
         // the other side of a keyboard that reports no side bits.
         events += modifierSyncEvents(for: event.modifierFlags)
         inputSession?.send(events)
+    }
+
+    private func startObservingWindow() {
+        guard let window else {
+            return
+        }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidResignKey(_:)),
+            name: NSWindow.didResignKeyNotification,
+            object: window
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidBecomeKey(_:)),
+            name: NSWindow.didBecomeKeyNotification,
+            object: window
+        )
+        // AppKit never dispatches keyUp to the window while Command is held, which would leave
+        // keys pressed during a Command chord stuck down on the server.
+        commandKeyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
+            MainActor.assumeIsolated {
+                self?.forwardCommandKeyUp(event)
+            }
+            return event
+        }
+    }
+
+    private func stopObservingWindow() {
+        if let window {
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: window)
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didBecomeKeyNotification, object: window)
+        }
+        if let commandKeyUpMonitor {
+            NSEvent.removeMonitor(commandKeyUpMonitor)
+            self.commandKeyUpMonitor = nil
+        }
+    }
+
+    @objc private func windowDidResignKey(_: Notification) {
+        releasePressedInputs()
+    }
+
+    @objc private func windowDidBecomeKey(_: Notification) {
+        if window?.firstResponder === self {
+            synchronizeToggleKeys(NSEvent.modifierFlags)
+        }
+    }
+
+    private func forwardCommandKeyUp(_ event: NSEvent) {
+        guard event.modifierFlags.contains(.command),
+              event.window === window,
+              window?.firstResponder === self
+        else {
+            return
+        }
+        deferredWindowsKey.noteChordedElsewhere()
+        keyUp(with: event)
     }
 
     /// Reconciles every modifier key with the event's flags, so a modifier
@@ -394,26 +419,12 @@ final class RemoteInputCaptureNSView: NSView {
     }
 
     private func sendKeyboardScancode(_ scancode: RDPKeyboardScancode, isReleased: Bool) {
-        if isReleased {
-            pressedKeyScancodes.remove(scancode)
-        } else {
-            pressedKeyScancodes.insert(scancode)
-        }
         let windowsKeyEvents = isReleased ? [] : deferredWindowsKey.flush(&inputState)
         inputSession?.send(windowsKeyEvents + [inputState.keyboard(scancode: scancode, isReleased: isReleased)])
     }
 
-    private func releaseEventsForPressedKeys() -> [RDPSlowPathInputEvent] {
-        let events = pressedKeyScancodes.map { scancode in
-            inputState.keyboard(scancode: scancode, isReleased: true)
-        }
-        pressedKeyScancodes.removeAll()
-        return events
-    }
-
     /// A Windows key still deferred never reached the server, so nothing is sent for it.
     private func releasePressedInputs() {
-        pressedKeyScancodes.removeAll()
         deferredWindowsKey.reset()
         let releaseEvents = inputState.releasePressedInputs()
         inputSession?.send(releaseEvents)
@@ -579,10 +590,6 @@ enum MacRDPKeyboardMapping {
     }
 
     private static let spaceScancode = RDPKeyboardScancode(code: 0x39)
-
-    static func isCommandKeyCode(_ keyCode: UInt16) -> Bool {
-        Int(keyCode) == kVK_Command || Int(keyCode) == kVK_RightCommand
-    }
 
     static func unicodeEvents(for characters: String) -> [RDPSlowPathInputEvent] {
         characters.utf16

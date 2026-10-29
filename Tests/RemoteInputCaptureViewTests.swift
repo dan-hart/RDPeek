@@ -328,40 +328,82 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
-    // MARK: - Swallowed keyUp while Command is held
+    // MARK: - keyUp AppKit withholds while Command is held
 
-    func testCommandReleaseFlushesSwallowedKeyUp() {
-        // AppKit never delivers the keyUp for W while Cmd is held, so the
-        // flush on Cmd-up must release it.
+    func testCommandChordKeyIsReleasedAsItGoesUp() {
+        // AppKit never dispatches W's keyUp while Command is held; the
+        // view's key-up monitor sends it at once, so a second ⌘W is a new
+        // press rather than a repeat of a W the server still holds.
         let harness = makeHarness()
+        let wKey = RDPKeyboardScancode(code: 0x11)
         harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
-        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: 13, characters: "w", flags: .leftCommandDown))
-        harness.recorder.events.removeAll()
-
+        for _ in 0 ..< 2 {
+            XCTAssertTrue(harness.view.performKeyEquivalent(
+                with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_W), characters: "w", flags: .leftCommandDown)
+            ))
+            NSApplication.shared.sendEvent(keyEvent(
+                .keyUp,
+                keyCode: UInt16(kVK_ANSI_W),
+                characters: "w",
+                flags: .leftCommandDown,
+                window: harness.window
+            ))
+        }
         harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+
         XCTAssertEqual(harness.recorder.events, [
-            .keyboard(scancode: RDPKeyboardScancode(code: 0x0011), isReleased: true),
+            .keyboard(scancode: .leftWindows, isReleased: false),
+            .keyboard(scancode: wKey, isReleased: false),
+            .keyboard(scancode: wKey, isReleased: true),
+            .keyboard(scancode: wKey, isReleased: false),
+            .keyboard(scancode: wKey, isReleased: true),
             .keyboard(scancode: .leftWindows, isReleased: true),
         ])
     }
 
-    func testKeyRepeatAfterFlushIsRetrackedAndReleased() {
-        // Hold Cmd+Left-arrow, release Cmd first: the flush releases the
-        // arrow, but auto-repeat keeps pressing it. The repeat must be
-        // re-tracked so the final physical keyUp reaches the remote.
+    func testTheKeyUpMonitorIgnoresKeyUpsFromOtherWindows() {
+        // Every capture view's monitor sees all of the app's key-ups.
         let harness = makeHarness()
-        let leftArrow = RDPKeyboardScancode(code: 0x004B, isExtended: true)
+        let other = makeHarness()
+        let wKey = RDPKeyboardScancode(code: 0x11)
+        let releaseW = { (window: NSWindow) in
+            NSApplication.shared.sendEvent(self.keyEvent(
+                .keyUp,
+                keyCode: UInt16(kVK_ANSI_W),
+                characters: "w",
+                flags: .leftCommandDown,
+                window: window
+            ))
+        }
+        _ = harness.view.performKeyEquivalent(
+            with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_W), characters: "w", flags: .leftCommandDown)
+        )
+        harness.recorder.events.removeAll()
+
+        releaseW(other.window)
+        XCTAssertEqual(harness.recorder.events, [])
+        releaseW(harness.window)
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: wKey, isReleased: true)])
+        XCTAssertEqual(other.recorder.events, [])
+    }
+
+    func testCommandTappedWhileAKeyIsHeldLeavesTheKeyDown() {
+        // Only the key's own keyUp releases it; Command going up does not.
+        let harness = makeHarness()
+        let leftArrow = RDPKeyboardScancode(code: 0x4B, isExtended: true)
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_LeftArrow)))
         harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
-        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: 123, flags: .leftCommandDown))
         harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
-        harness.recorder.events.removeAll()
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_LeftArrow), isARepeat: true))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: UInt16(kVK_LeftArrow)))
 
-        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: 123, isARepeat: true))
-        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: leftArrow, isReleased: false)])
-
-        harness.recorder.events.removeAll()
-        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: 123))
-        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: leftArrow, isReleased: true)])
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: leftArrow, isReleased: false),
+            .keyboard(scancode: .leftWindows, isReleased: false),
+            .keyboard(scancode: .leftWindows, isReleased: true),
+            .keyboard(scancode: leftArrow, isReleased: false, wasDown: true),
+            .keyboard(scancode: leftArrow, isReleased: true),
+        ])
     }
 
     func testKeyHeldAsScancodeKeepsRepeatingAsItsScancodeAfterTheModifierIsReleased() {
@@ -542,14 +584,15 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         characters: String = "",
         charactersIgnoringModifiers: String? = nil,
         flags: NSEvent.ModifierFlags = [],
-        isARepeat: Bool = false
+        isARepeat: Bool = false,
+        window: NSWindow? = nil
     ) -> NSEvent {
         guard let event = NSEvent.keyEvent(
             with: type,
             location: .zero,
             modifierFlags: flags,
             timestamp: 0,
-            windowNumber: 0,
+            windowNumber: window?.windowNumber ?? 0,
             context: nil,
             characters: characters,
             charactersIgnoringModifiers: charactersIgnoringModifiers ?? characters,
