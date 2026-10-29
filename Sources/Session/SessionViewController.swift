@@ -20,17 +20,26 @@ final class SessionViewController: NSViewController {
     private(set) var draft: RDPConnectionDraft
 
     private var requestedDesktopSizeLabel = "auto"
-    private var rememberPassword: Bool
+    /// The Keychain holds a password for the draft's identity.
     private var hasRememberedPassword = false
     private var isAwaitingCredentials = false
     private var isResolvingStoredCredentials = false
+    private var credentialResolutionTask: Task<Void, Never>?
     private var didPromptForCredentials = false
+    /// The attempt sent the draft's password, which is kept once the server
+    /// accepts it.
+    private var isAwaitingCredentialAcceptance = false
     private var isConnecting = false
     private var hasEverPresentedFrame = false
     private var autoRetryCount = 0
+    private var didRetryFirstFrameTimeout = false
     private var isAutoRetryPending = false
     private var autoRetryTask: Task<Void, Never>?
     private var firstFrameWatchdogTask: Task<Void, Never>?
+    /// This connection offers only RSA key exchange, after the server's
+    /// certificate turned down ECDHE. Not saved: every connection tries
+    /// ECDHE first.
+    private var usesLegacyRSAKeyExchange = false
     private var audioMessage: String?
     private var activeConnectionID: UUID?
     private var activeCancellation: RDPConnectionCancellation?
@@ -82,7 +91,6 @@ final class SessionViewController: NSViewController {
         self.sessionID = sessionID
         self.draft = draft
         self.launchStore = launchStore
-        rememberPassword = draft.rememberPassword
         clipboard = SessionClipboard(isSharingEnabled: draft.clipboardSharingEnabled)
         audioPlaybackEnabled = draft.audioPlaybackEnabled
         super.init(nibName: nil, bundle: nil)
@@ -109,7 +117,7 @@ final class SessionViewController: NSViewController {
         startClipboardPollingLoop()
         if shouldAutoConnect {
             shouldAutoConnect = false
-            resolveStoredCredentialsAndConnect()
+            startConnection()
         }
         render()
     }
@@ -499,7 +507,7 @@ final class SessionViewController: NSViewController {
     private func promptForCredentials(errorMessage: String? = nil) {
         hudModel.prefillUsername = draft.username
         hudModel.prefillDomain = draft.domain
-        hudModel.prefillRememberPassword = rememberPassword
+        hudModel.prefillRememberPassword = draft.rememberPassword
         hudModel.credentialsErrorMessage = errorMessage
         didPromptForCredentials = true
         isAwaitingCredentials = true
@@ -507,16 +515,25 @@ final class SessionViewController: NSViewController {
     }
 
     private func applyCredentials(username: String, domain: String, password: String, remember: Bool) {
-        draft.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft.domain = domain.trimmingCharacters(in: .whitespacesAndNewlines)
+        let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let domain = domain.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Leaving every field empty connects without credentials; anything
+        // in between would only fail the connection.
+        do {
+            _ = try RDPCredentials.validated(username: username, domain: domain, password: password)
+        } catch {
+            promptForCredentials(errorMessage: "Enter both a user name and a password.")
+            return
+        }
+        let previousIdentity = draft.identity
+        draft.username = username
+        draft.domain = domain
         draft.password = password
-        rememberPassword = remember
         draft.rememberPassword = remember
-        if remember == false,
-           password.isEmpty == false,
-           let account = draft.identity.credentialAccountName
-        {
-            InMemoryCredentialCache.shared.setPassword(password, for: account)
+        // A password the Keychain held for the previous user is not this
+        // one's to delete.
+        if draft.identity.hasSameConnectionIdentity(as: previousIdentity) == false {
+            hasRememberedPassword = false
         }
         isAwaitingCredentials = false
         hudModel.credentialsErrorMessage = nil
@@ -525,24 +542,27 @@ final class SessionViewController: NSViewController {
 
     // MARK: - Connection lifecycle
 
-    /// A user-initiated (or post-credential) connection: resets the
-    /// automatic retry budget before attempting.
+    /// The one way a connection starts: the window opening, Reconnect, ⌘R,
+    /// signing in, and trusting a certificate. Resets the automatic retries
+    /// and finds the password first when the session has none.
     func startConnection() {
         autoRetryTask?.cancel()
         autoRetryTask = nil
         autoRetryCount = 0
+        didRetryFirstFrameTimeout = false
         isAutoRetryPending = false
+        usesLegacyRSAKeyExchange = false
         hudModel.connectingStatusDetail = nil
-        startConnectionAttempt()
+        guard draft.password.isEmpty else {
+            startConnectionAttempt()
+            return
+        }
+        resolveStoredCredentialsAndConnect()
     }
 
-    /// Retries shortly after a transport-level failure. The first connection
-    /// to a LAN host often fails while macOS shows the local-network
-    /// permission dialog; a quiet retry papers over that race. Only failures
-    /// that happened before TLS was established are retried, so credentials
-    /// are never re-submitted automatically.
+    /// Waits briefly, then connects again; `connectingStatusDetail` says why
+    /// meanwhile.
     private func scheduleAutoRetry() {
-        autoRetryCount += 1
         isAutoRetryPending = true
         hudModel.connectingStatusDetail = "Network hiccup — retrying…"
         render()
@@ -558,16 +578,16 @@ final class SessionViewController: NSViewController {
         }
     }
 
-    /// RDPKit's live-viewer mode has no deadline on post-TLS reads, so a
-    /// stalled handshake would otherwise show "Connecting" forever. Cancel
-    /// the attempt ourselves when no frame arrives in time, and lean on the
-    /// auto-retry budget — this automates the manual disconnect/reconnect
-    /// that recovers from the stall.
+    /// Bounds the wait for the first frame once the server accepted the
+    /// sign-in. RDPKit bounds each connection step up to then, but a live
+    /// session that keeps getting traffic and no frame would show
+    /// "Connecting" forever. The credentials were accepted, so connecting
+    /// again once is safe.
     private func startFirstFrameWatchdog() {
         firstFrameWatchdogTask?.cancel()
-        let deadlineSeconds = UInt64(max(5, draft.timeoutSeconds) + 5)
+        let timeoutSeconds = UInt64(max(1, draft.timeoutSeconds))
         firstFrameWatchdogTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: deadlineSeconds * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
             guard Task.isCancelled == false,
                   let self,
                   didClose == false,
@@ -577,19 +597,66 @@ final class SessionViewController: NSViewController {
                 return
             }
             cancelConnection(shouldRecordCancellation: false)
-            if autoRetryCount < 2 {
-                scheduleAutoRetry()
-            } else {
-                sessionEndReason = RDPSessionEndReason(
-                    kind: .failed,
-                    message: "Timed out waiting for the remote desktop."
-                )
+            if didRetryFirstFrameTimeout {
+                sessionEndReason = .firstFrameTimeout
                 render()
+            } else {
+                didRetryFirstFrameTimeout = true
+                scheduleAutoRetry()
             }
         }
     }
 
+    /// One attempt with the draft as it is. Automatic retries call this
+    /// directly; everything else goes through `startConnection()`.
     private func startConnectionAttempt() {
+        resetForConnectionAttempt()
+
+        let target: RDPConnectionTarget
+        let credentials: RDPCredentials?
+        do {
+            target = try RDPConnectionTarget(host: draft.host, port: draft.port)
+            // RDPKit signs in with a "DOMAIN\user" name split in two; the
+            // draft keeps the name as typed for its Keychain entry.
+            let logonName = RDPLogonName(username: draft.identity.username, domain: draft.identity.domain ?? "")
+            credentials = try RDPCredentials.validated(
+                username: logonName.username,
+                domain: logonName.domain,
+                password: draft.password
+            )
+        } catch {
+            sessionEndReason = RDPSessionEndReason(kind: .failed, message: String(describing: error))
+            render()
+            return
+        }
+        let desktopSize = initialDesktopSize()
+        let configuration = makeConnectionConfiguration(
+            target: target,
+            credentials: credentials,
+            desktopSize: desktopSize
+        )
+
+        let connectionID = UUID()
+        let cancellation = RDPConnectionCancellation()
+        activeConnectionID = connectionID
+        activeCancellation = cancellation
+        isAwaitingCredentialAcceptance = credentials != nil
+        renderMetricsStore.reset(connectionStartedAt: Date())
+        updateViewerMetricsSummary(renderMetricsStore.metrics)
+        isConnecting = true
+        launchStore?.recordConnectionStart(for: draft.deviceID)
+        render()
+
+        startSessionThread(
+            configuration: configuration,
+            desktopSize: desktopSize,
+            sink: SessionMainActorSink(controller: self, connectionID: connectionID),
+            cancellation: cancellation
+        )
+    }
+
+    /// Forgets the previous attempt, however it ended.
+    private func resetForConnectionAttempt() {
         isAwaitingCredentials = false
         isAutoRetryPending = false
         activeCancellation?.cancel()
@@ -610,89 +677,55 @@ final class SessionViewController: NSViewController {
         certificateTrustedByApp = false
         certificateRefusal = nil
         certificateTrustMessage = nil
+    }
 
-        let target: RDPConnectionTarget
-        do {
-            target = try RDPConnectionTarget(host: draft.host, portText: String(draft.port))
-        } catch {
-            sessionEndReason = RDPSessionEndReason(kind: .failed, message: String(describing: error))
-            render()
-            return
-        }
-        let requestedDesktopSize = initialDesktopSize()
-        requestedDesktopSizeLabel = "\(requestedDesktopSize.width)x\(requestedDesktopSize.height)"
-
-        let trimmedUsername = draft.username.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedDomain = draft.domain.trimmingCharacters(in: .whitespacesAndNewlines)
-        let identity = RDPConnectionIdentity(
-            host: target.host,
-            port: target.port,
-            username: trimmedUsername,
-            domain: trimmedDomain
-        )
-        let credentialKey = KeychainCredentialKey(identity: identity)
-        let clientLicenseKey = ClientLicenseStoreKey(identity: identity)
-        let credentials: RDPCredentials?
-        do {
-            credentials = try RDPCredentials.validated(
-                username: trimmedUsername,
-                domain: trimmedDomain,
-                password: draft.password
-            )
-        } catch {
-            sessionEndReason = RDPSessionEndReason(kind: .failed, message: String(describing: error))
-            render()
-            return
-        }
-        let credentialPersistenceRequest = credentialPersistenceRequest(
-            key: credentialKey,
-            password: draft.password,
-            hasCredentials: credentials != nil
-        )
-
+    private func makeConnectionConfiguration(
+        target: RDPConnectionTarget,
+        credentials: RDPCredentials?,
+        desktopSize: RDPDesktopSize
+    ) -> RDPConnectionConfiguration {
+        requestedDesktopSizeLabel = "\(desktopSize.width)x\(desktopSize.height)"
         // Announce the Mac's keyboard layout so the server maps scancodes to
         // the characters the keys are labelled with; the input layer sends
         // keys by the layout this session announced.
         let keyboardLayout = MacRDPKeyboardLayout.current()
         canvasView.keyboardLayout = keyboardLayout
-        let baseConfiguration = RDPConnectionConfiguration(
+        return RDPConnectionConfiguration(
             target: target,
             credentials: credentials,
             timeoutSeconds: draft.timeoutSeconds,
             hideCertificateWarnings: draft.hideCertificateWarnings,
             graphicsFrameCaptureLimit: nil,
-            desktopSize: requestedDesktopSize,
+            desktopSize: desktopSize,
             clipboardEnabled: clipboard.isSharingEnabled,
             audioPlaybackEnabled: audioPlaybackEnabled,
             // RDPeek never exposes a graphics-profile picker: automatic lets
             // RDPKit negotiate the best path per host (Windows included).
             graphicsCapabilityProfile: .automatic,
-            keyboardLayout: keyboardLayout
+            keyboardLayout: keyboardLayout,
+            legacyRSAKeyExchange: usesLegacyRSAKeyExchange
         )
+    }
 
-        let connectionID = UUID()
-        let cancellation = RDPConnectionCancellation()
-        let connectionStartedAt = Date()
-        activeConnectionID = connectionID
-        activeCancellation = cancellation
-        renderMetricsStore.reset(connectionStartedAt: connectionStartedAt)
-        updateViewerMetricsSummary(renderMetricsStore.metrics)
-        audioMessage = nil
-        isConnecting = true
-        launchStore?.recordConnectionStart(for: draft.deviceID)
-        render()
-        startFirstFrameWatchdog()
-
-        let sink = SessionMainActorSink(controller: self, connectionID: connectionID)
-        let credentialStore = credentialStore
+    private func startSessionThread(
+        configuration baseConfiguration: RDPConnectionConfiguration,
+        desktopSize requestedDesktopSize: RDPDesktopSize,
+        sink: SessionMainActorSink,
+        cancellation: RDPConnectionCancellation
+    ) {
         let clientLicenseStore = clientLicenseStore
+        let clientLicenseKey = ClientLicenseStoreKey(identity: draft.identity)
         let trustedCertificateStore = trustedCertificateStore
         let acceptsUntrustedCertificates = draft.hideCertificateWarnings
-        // RDPSessionClient.run blocks for the whole session and waits on the
-        // decode queue, so it gets its own thread rather than pinning a Swift
-        // concurrency worker per session, which could starve the decode drain.
+        let port = baseConfiguration.port
+        // RDPSessionClient.connect blocks for the whole session and waits on
+        // the decode queue, so it gets its own thread rather than pinning a
+        // Swift concurrency worker per session, which could starve the
+        // decode drain.
         let sessionThread = Thread {
             var configuration = baseConfiguration
+            // Read here, not on the main thread: the Keychain can block on
+            // its access-approval dialog. No connection deadline runs yet.
             configuration.storedClientLicense = try? clientLicenseStore.license(for: clientLicenseKey)
             var keyframeRequests = RDPKeyframeRequestThrottle()
             let decodeQueue = RDPFrameDecodeQueue(
@@ -749,194 +782,206 @@ final class SessionViewController: NSViewController {
                 wireReceiveCoalescer.cancel()
                 decodeQueue.cancel()
             }
-            let nextReport = RDPSessionClient().run(
-                configuration: configuration,
-                onGraphicsFrame: { frame in
-                    let completion = decodeQueue.submitAndWait(
-                        frame,
-                        receivedAt: Date(),
-                        shouldContinue: {
-                            cancellation.isCancelled == false
-                        }
-                    )
-                    if frame.contentKind == .video, completion == .decoded {
-                        keyframeRequests.recordDecodedVideo()
-                    }
-                    // An update that fails to decode leaves stale pixels, not
-                    // a broken session. Failed video waits for a keyframe,
-                    // which the server is asked for.
-                    if case .failed = completion {
-                        if frame.contentKind == .video, keyframeRequests.shouldRequest(at: Date()) {
-                            sink.apply { controller in
-                                controller.requestKeyframe(desktopSize: requestedDesktopSize)
+            let result = Result<RDPConnectionReport, any Error> {
+                try RDPSessionClient().connect(
+                    configuration: configuration,
+                    onGraphicsFrame: { frame in
+                        let completion = decodeQueue.submitAndWait(
+                            frame,
+                            receivedAt: Date(),
+                            shouldContinue: {
+                                cancellation.isCancelled == false
                             }
+                        )
+                        if frame.contentKind == .video, completion == .decoded {
+                            keyframeRequests.recordDecodedVideo()
                         }
-                        return
-                    }
-                    try completion.requireDecoded()
-                },
-                onInputReady: { session in
-                    // Keychain writes can block on the access-approval
-                    // dialog; keep them off the connection thread so the
-                    // graphics handshake (and the first-frame watchdog)
-                    // are not held up behind them.
-                    if let credentialPersistenceRequest {
-                        Task.detached(priority: .utility) {
-                            let persistenceResult = persistCredentials(
-                                credentialPersistenceRequest,
-                                store: credentialStore
-                            )
-                            // The write may finish after the connection
-                            // ended (keychain approval dialog); its outcome
-                            // is not connection-scoped, so do not drop it
-                            // with the stale-event gate. Carry the identity
-                            // the entry was stored under — the draft can be
-                            // re-signed-in with different credentials by then.
-                            let identity = credentialPersistenceRequest.key.identity
-                            sink.applyIgnoringConnectionState { controller in
-                                controller.applyCredentialPersistenceResult(
-                                    persistenceResult,
-                                    identity: identity
-                                )
+                        // An update that fails to decode leaves stale pixels,
+                        // not a broken session. Failed video waits for a
+                        // keyframe, which the server is asked for.
+                        if case .failed = completion {
+                            if frame.contentKind == .video, keyframeRequests.shouldRequest(at: Date()) {
+                                sink.apply { controller in
+                                    controller.requestKeyframe(desktopSize: requestedDesktopSize)
+                                }
                             }
-                        }
-                    }
-                    sink.apply { controller in
-                        controller.inputSession = session
-                        controller.render()
-                    }
-                },
-                onDisplayControlReady: { session in
-                    sink.apply { controller in
-                        controller.displayControlSession = session
-                        // A server redirection's target has not been sent
-                        // the layout the first server got.
-                        controller.lastRequestedDisplayRequest = nil
-                        controller.scheduleAutoDisplaySizeUpdate()
-                        controller.render()
-                    }
-                },
-                onClipboardReady: { session in
-                    sink.apply { controller in
-                        controller.clipboard.attach(session)
-                        controller.render()
-                    }
-                },
-                onClipboardText: { text in
-                    sink.apply { controller in
-                        controller.clipboard.receiveText(text)
-                        controller.render()
-                    }
-                },
-                onClipboardFileGroupDescriptor: { descriptorList in
-                    sink.apply { controller in
-                        controller.clipboard.receiveFileList(descriptorList)
-                        controller.render()
-                    }
-                },
-                onClipboardFileContents: { response in
-                    sink.apply { controller in
-                        controller.clipboard.receiveFileContents(response)
-                        controller.render()
-                    }
-                },
-                onAudioSample: { sample in
-                    sink.apply { controller in
-                        guard controller.audioPlaybackEnabled else {
                             return
                         }
-                        do {
-                            let queued = try controller.remoteAudioPlayer.enqueue(sample)
-                            controller.updateAudioMessage(queued ? nil : "Dropping delayed audio")
-                        } catch {
-                            controller.updateAudioMessage(String(describing: error))
+                        try completion.requireDecoded()
+                    },
+                    onInputReady: { session in
+                        sink.apply { controller in
+                            controller.sessionActivated(session)
                         }
-                    }
-                },
-                onCertificate: { info in
-                    // Runs before any credential is sent, so cancelling here
-                    // refuses the server without signing in to it.
-                    let refusal = trustedCertificateStore.refusal(
-                        of: info,
-                        port: target.port,
-                        acceptsUntrusted: acceptsUntrustedCertificates
-                    )
-                    if refusal != nil {
-                        cancellation.cancel()
-                    }
-                    sink.apply { controller in
-                        controller.liveCertificate = info
-                        // After a server redirection, the certificate belongs
-                        // to the redirection target.
-                        controller.certificateTrustedByApp = controller.trustedCertificateStore.isTrusted(
-                            host: info.host,
-                            port: target.port,
-                            sha256: info.sha256
+                    },
+                    onDisplayControlReady: { session in
+                        sink.apply { controller in
+                            controller.displayControlSession = session
+                            // A server redirection's target has not been sent
+                            // the layout the first server got.
+                            controller.lastRequestedDisplayRequest = nil
+                            controller.scheduleAutoDisplaySizeUpdate()
+                            controller.render()
+                        }
+                    },
+                    onClipboardReady: { session in
+                        sink.apply { controller in
+                            controller.clipboard.attach(session)
+                            controller.render()
+                        }
+                    },
+                    onClipboardText: { text in
+                        sink.apply { controller in
+                            controller.clipboard.receiveText(text)
+                            controller.render()
+                        }
+                    },
+                    onClipboardFileGroupDescriptor: { descriptorList in
+                        sink.apply { controller in
+                            controller.clipboard.receiveFileList(descriptorList)
+                            controller.render()
+                        }
+                    },
+                    onClipboardFileContents: { response in
+                        sink.apply { controller in
+                            controller.clipboard.receiveFileContents(response)
+                            controller.render()
+                        }
+                    },
+                    onAudioSample: { sample in
+                        sink.apply { controller in
+                            controller.playAudioSample(sample)
+                        }
+                    },
+                    onCertificate: { info in
+                        // Runs before any credential is sent, so cancelling
+                        // here refuses the server without signing in to it.
+                        let refusal = trustedCertificateStore.refusal(
+                            of: info,
+                            port: port,
+                            acceptsUntrusted: acceptsUntrustedCertificates
                         )
-                        if let refusal {
-                            controller.refuseCertificate(refusal)
+                        if refusal != nil {
+                            cancellation.cancel()
                         }
-                        controller.render()
-                    }
-                },
-                onWireReceive: { sample in
-                    wireReceiveCoalescer.record(sample)
-                },
-                cancellation: cancellation
-            )
-            let finalWireReceiveSample = wireReceiveCoalescer.takePendingSample()
-            // License persistence is not connection-scoped. Save an issued
-            // license even when closing the window cancelled the session, so
-            // the next connection can present it to the server.
-            if let license = nextReport.rdpIssuedClientLicense {
+                        sink.apply { controller in
+                            controller.receiveCertificate(info, port: port, refusal: refusal)
+                        }
+                    },
+                    onWireReceive: { sample in
+                        wireReceiveCoalescer.record(sample)
+                    },
+                    cancellation: cancellation
+                )
+            }
+            // A license the server issued stays valid even when closing the
+            // window cancelled the session; the next connection presents it.
+            if case let .success(report) = result, let license = report.rdpIssuedClientLicense {
                 try? clientLicenseStore.saveLicense(license, for: clientLicenseKey)
             }
             guard cancellation.isCancelled == false else {
                 return
             }
+            let finalWireReceiveSample = wireReceiveCoalescer.takePendingSample()
             sink.apply { controller in
                 if let finalWireReceiveSample {
                     controller.renderMetricsStore.recordWireReceive(finalWireReceiveSample)
                 }
-                controller.flushPendingFramePresentation()
-                controller.publishRenderMetricsSnapshotIfNeeded(force: true)
-                controller.report = nextReport
-                controller.sessionEndReason = RDPSessionEndReason(report: nextReport)
-                controller.certificateTrustedByApp = controller.trustedCertificateStore.isTrusted(
-                    host: controller.liveCertificate?.host ?? target.host,
-                    port: target.port,
-                    sha256: nextReport.certificateSHA256
-                )
-                if controller.previewFrame == nil {
-                    controller.previewFrame = nextReport.rdpGraphicsFirstFrame.map(RDPFrameMetadata.init)
-                }
-                controller.isConnecting = false
-                controller.activeConnectionID = nil
-                controller.activeCancellation = nil
-                // The channel is closed once the run loop returns; drop the
-                // session objects so clipboard sync/polling and the input
-                // wiring can't keep talking to a dead channel.
-                controller.detachSessionChannels()
-                controller.firstFrameWatchdogTask?.cancel()
-                // Retry transport failures (no negotiation response ever
-                // arrived) and pre-frame stalls. Some servers give no
-                // explicit bad-credential signal — rejected credentials
-                // surface as a timeout, which the retry budget bounds.
-                if let reason = controller.sessionEndReason,
-                   reason.kind == .failed,
-                   controller.hasPresentedFrame == false,
-                   controller.autoRetryCount < 2,
-                   nextReport.responseHex == nil
-                   || nextReport.error?.contains("RDP Graphics Update") == true
-                {
-                    controller.scheduleAutoRetry()
-                }
-                controller.render()
+                controller.finishConnection(result, configuration: configuration)
             }
         }
         sessionThread.name = "RDPeek session"
         sessionThread.qualityOfService = .userInitiated
         sessionThread.start()
+    }
+
+    /// The server activated the session: it accepted the sign-in.
+    private func sessionActivated(_ session: RDPInputSession) {
+        inputSession = session
+        // Activation repeats after a reactivation or server redirection;
+        // the sign-in is kept only the first time.
+        if isAwaitingCredentialAcceptance {
+            isAwaitingCredentialAcceptance = false
+            keepAcceptedCredentials()
+        }
+        if hasPresentedFrame == false {
+            startFirstFrameWatchdog()
+        }
+        render()
+    }
+
+    private func receiveCertificate(
+        _ info: RDPServerCertificateInfo,
+        port: UInt16,
+        refusal: CertificateRefusal?
+    ) {
+        liveCertificate = info
+        // After a server redirection, the certificate belongs to the
+        // redirection target.
+        certificateTrustedByApp = trustedCertificateStore.isTrusted(
+            host: info.host,
+            port: port,
+            sha256: info.sha256
+        )
+        if let refusal {
+            refuseCertificate(refusal)
+        }
+        render()
+    }
+
+    /// The session ended without the user ending it: record why, then
+    /// connect again, ask to sign in, or show the end.
+    private func finishConnection(
+        _ result: Result<RDPConnectionReport, any Error>,
+        configuration: RDPConnectionConfiguration
+    ) {
+        flushPendingFramePresentation()
+        publishRenderMetricsSnapshotIfNeeded(force: true)
+        let finishedReport: RDPConnectionReport
+        let outcome: SessionAttemptOutcome
+        switch result {
+        case let .success(sessionReport):
+            finishedReport = sessionReport
+            outcome = .afterSession(
+                sessionReport,
+                presentedFrames: hasPresentedFrame,
+                usedLegacyRSAKeyExchange: configuration.legacyRSAKeyExchange
+            )
+        case let .failure(error):
+            finishedReport = RDPConnectionReport(connectionError: error, configuration: configuration)
+            outcome = .afterConnectionError(error, host: configuration.host, retriesSpent: autoRetryCount)
+        }
+        report = finishedReport
+        certificateTrustedByApp = trustedCertificateStore.isTrusted(
+            host: liveCertificate?.host ?? configuration.host,
+            port: configuration.port,
+            sha256: finishedReport.certificateSHA256
+        )
+        if previewFrame == nil {
+            previewFrame = finishedReport.rdpGraphicsFirstFrame.map(RDPFrameMetadata.init)
+        }
+        isConnecting = false
+        activeConnectionID = nil
+        activeCancellation = nil
+        // The channel is closed once the session returns; drop the session
+        // objects so clipboard sync/polling and the input wiring can't keep
+        // talking to a dead channel.
+        detachSessionChannels()
+        firstFrameWatchdogTask?.cancel()
+
+        switch outcome {
+        case .retryWithLegacyRSAKeyExchange:
+            usesLegacyRSAKeyExchange = true
+            startConnectionAttempt()
+        case .retry:
+            autoRetryCount += 1
+            scheduleAutoRetry()
+        case let .promptForCredentials(message):
+            promptForCredentials(errorMessage: message)
+        case let .end(reason):
+            sessionEndReason = reason
+            render()
+        }
     }
 
     func cancelConnection(shouldRecordCancellation: Bool = true) {
@@ -946,6 +991,8 @@ final class SessionViewController: NSViewController {
         autoRetryTask?.cancel()
         autoRetryTask = nil
         firstFrameWatchdogTask?.cancel()
+        credentialResolutionTask?.cancel()
+        credentialResolutionTask = nil
         isAutoRetryPending = false
         isResolvingStoredCredentials = false
         hudModel.connectingStatusDetail = nil
@@ -1245,6 +1292,18 @@ final class SessionViewController: NSViewController {
         render()
     }
 
+    private func playAudioSample(_ sample: RDPAudioSample) {
+        guard audioPlaybackEnabled else {
+            return
+        }
+        do {
+            let queued = try remoteAudioPlayer.enqueue(sample)
+            updateAudioMessage(queued ? nil : "Dropping delayed audio")
+        } catch {
+            updateAudioMessage(String(describing: error))
+        }
+    }
+
     /// Surfaces remote audio problems once per change, so a silent session
     /// explains itself instead of just not playing sound.
     private func updateAudioMessage(_ message: String?) {
@@ -1302,108 +1361,135 @@ final class SessionViewController: NSViewController {
 
     // MARK: - Credentials
 
-    /// Resolves the password (Keychain, then the in-memory cache) without
-    /// blocking the main thread, then connects or asks the user to sign in.
-    /// The Keychain read can block on the access-approval dialog, so it runs
-    /// off the main actor while the connecting overlay is up.
+    /// Finds the password — in the Keychain when the device remembers it,
+    /// else among those kept for this app run — or asks the user to sign
+    /// in. The Keychain read can block on the access-approval dialog, so it
+    /// runs off the main actor while the connecting overlay is up.
     private func resolveStoredCredentialsAndConnect() {
-        guard draft.password.isEmpty else {
-            hasRememberedPassword = rememberPassword
-            startConnection()
+        credentialResolutionTask?.cancel()
+        guard let key = KeychainCredentialKey(identity: draft.identity) else {
+            // Without a user name there is nothing stored. Connect without
+            // credentials once the user left the sign-in fields empty.
+            if didPromptForCredentials {
+                startConnectionAttempt()
+            } else {
+                promptForCredentials()
+            }
             return
         }
-
-        guard let key = KeychainCredentialKey(identity: draft.identity) else {
-            promptForCredentials()
+        guard draft.rememberPassword else {
+            connectWithCachedPasswordOrPrompt()
             return
         }
 
         isResolvingStoredCredentials = true
         render()
         let store = credentialStore
-        Task { @MainActor [weak self] in
+        credentialResolutionTask = Task { @MainActor [weak self] in
             let savedPassword = await Task.detached(priority: .userInitiated) {
                 try? store.password(for: key)
             }.value
 
-            guard let self, didClose == false, isResolvingStoredCredentials else {
+            guard Task.isCancelled == false, let self, didClose == false else {
                 return
             }
+            credentialResolutionTask = nil
             isResolvingStoredCredentials = false
 
             if let savedPassword, savedPassword.isEmpty == false {
                 hasRememberedPassword = true
-                rememberPassword = true
                 draft.password = savedPassword
-                startConnection()
-                return
+                startConnectionAttempt()
+            } else {
+                hasRememberedPassword = false
+                connectWithCachedPasswordOrPrompt()
             }
-
-            hasRememberedPassword = false
-            if let account = draft.identity.credentialAccountName,
-               let cachedPassword = InMemoryCredentialCache.shared.password(for: account)
-            {
-                draft.password = cachedPassword
-                startConnection()
-                return
-            }
-
-            promptForCredentials()
         }
     }
 
-    private func credentialPersistenceRequest(
-        key: KeychainCredentialKey?,
-        password: String,
-        hasCredentials: Bool
-    ) -> CredentialPersistenceRequest? {
-        guard hasCredentials,
-              let key
+    private func connectWithCachedPasswordOrPrompt() {
+        guard let account = draft.identity.credentialAccountName,
+              let cachedPassword = InMemoryCredentialCache.shared.password(for: account)
         else {
-            return nil
+            promptForCredentials()
+            return
         }
+        draft.password = cachedPassword
+        startConnectionAttempt()
+    }
 
-        if rememberPassword {
-            return .save(key: key, password: password)
+    /// Keeps the password the server just accepted: in the Keychain when
+    /// the user asked to remember it, else for this app run only. Turning
+    /// Remember off deletes a password the Keychain held for this identity.
+    private func keepAcceptedCredentials() {
+        guard let key = KeychainCredentialKey(identity: draft.identity),
+              draft.password.isEmpty == false
+        else {
+            return
         }
+        if draft.rememberPassword {
+            persistAcceptedCredentials(.save(key: key, password: draft.password))
+            return
+        }
+        InMemoryCredentialCache.shared.setPassword(draft.password, for: key.account)
         if hasRememberedPassword {
-            return .delete(key: key)
+            persistAcceptedCredentials(.delete(key: key))
         }
-        return nil
+    }
+
+    /// Writes to the Keychain off the main actor: the write can block on
+    /// the access-approval dialog. The outcome reaches the device profile
+    /// and the password cache even when the window closed meanwhile.
+    private func persistAcceptedCredentials(_ request: CredentialPersistenceRequest) {
+        let store = credentialStore
+        let launchStore = launchStore
+        let deviceID = draft.deviceID
+        Task { @MainActor [weak self, weak launchStore] in
+            let result = await Task.detached(priority: .utility) {
+                persistCredentials(request, store: store)
+            }.value
+            let identity = request.key.identity
+            switch (request, result) {
+            case (_, .success(.saved)):
+                // The Keychain has it now; the copy for this app run would
+                // outlive turning Remember off.
+                InMemoryCredentialCache.shared.removePassword(for: request.key.account)
+                launchStore?.recordCredentialPersistence(for: deviceID, identity: identity, remembered: true)
+            case (_, .success(.deleted)):
+                launchStore?.recordCredentialPersistence(for: deviceID, identity: identity, remembered: false)
+            case let (.save(key, password), .failure):
+                // Keep the password for this app run at least.
+                InMemoryCredentialCache.shared.setPassword(password, for: key.account)
+            case (.delete, .failure):
+                break
+            }
+            self?.applyCredentialPersistenceResult(result, request: request)
+        }
     }
 
     private func applyCredentialPersistenceResult(
         _ result: Result<CredentialPersistenceResult, Error>,
-        identity: RDPConnectionIdentity
+        request: CredentialPersistenceRequest
     ) {
         // A delayed write can land after the user re-signed in with
         // different credentials; only mirror it on session state when it
         // matches what the session is now using.
-        let matchesCurrentDraft = draft.identity.hasSameConnectionIdentity(as: identity)
+        let matchesCurrentDraft = draft.identity.hasSameConnectionIdentity(as: request.key.identity)
         switch result {
         case .success(.saved):
             if matchesCurrentDraft {
                 hasRememberedPassword = true
-                rememberPassword = true
             }
-            // Reflect the save on the device profile, or the editor keeps
-            // showing remember-off and later renames orphan the entry.
-            launchStore?.recordCredentialPersistence(
-                for: draft.deviceID,
-                identity: identity,
-                remembered: true
-            )
         case .success(.deleted):
             if matchesCurrentDraft {
                 hasRememberedPassword = false
             }
-            launchStore?.recordCredentialPersistence(
-                for: draft.deviceID,
-                identity: identity,
-                remembered: false
-            )
-        case .failure:
-            break
+        case let .failure(error):
+            let action = switch request {
+            case .save: "Password not saved to Keychain"
+            case .delete: "Password not removed from Keychain"
+            }
+            toast("\(action): \(error)", systemImage: "exclamationmark.triangle")
         }
     }
 
