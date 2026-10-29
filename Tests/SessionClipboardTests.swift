@@ -115,17 +115,18 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.attach(session)
         XCTAssertTrue(session.publishedFiles.isEmpty, "The read finishes after attach returns")
 
-        try await waitUntil { session.publishedFiles.isEmpty == false }
+        try await XCTUnwrap(clipboard.localFileRead).value
         XCTAssertEqual(session.publishedFiles.map { $0.map(\.contents) }, [[Data("hello".utf8)]])
 
         // A newer copy wins over a file read still in flight.
         pasteboard.clearContents()
         pasteboard.writeObjects([fileURL as NSURL])
         clipboard.syncNow()
+        let staleRead = try XCTUnwrap(clipboard.localFileRead)
         pasteboard.clearContents()
         pasteboard.setString("newer", forType: .string)
         clipboard.syncNow()
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await staleRead.value
         XCTAssertEqual(session.publishedFiles.count, 1)
         XCTAssertEqual(session.publishedTexts.last, "newer")
     }
@@ -139,16 +140,18 @@ final class SessionClipboardTests: XCTestCase {
         pasteboard.clearContents()
         pasteboard.writeObjects([fileURL as NSURL])
         clipboard.syncNow()
+        var staleRead = try XCTUnwrap(clipboard.localFileRead)
         clipboard.receiveText("remote")
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await staleRead.value
         XCTAssertTrue(session.publishedFiles.isEmpty)
         XCTAssertEqual(pasteboard.string(forType: .string), "remote")
 
         pasteboard.clearContents()
         pasteboard.writeObjects([fileURL as NSURL])
         clipboard.syncNow()
+        staleRead = try XCTUnwrap(clipboard.localFileRead)
         clipboard.setSharingEnabled(false)
-        try await Task.sleep(nanoseconds: 200_000_000)
+        await staleRead.value
         XCTAssertTrue(session.publishedFiles.isEmpty)
     }
 
@@ -284,12 +287,5 @@ final class SessionClipboardTests: XCTestCase {
         let fileURL = directory.appendingPathComponent(fileName)
         try contents.write(to: fileURL)
         return fileURL
-    }
-
-    /// Lets the main actor run, for up to two seconds, until `condition` holds.
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        for _ in 0 ..< 200 where condition() == false {
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
     }
 }

@@ -36,7 +36,8 @@ final class SessionClipboard {
     var onToast: (_ text: String, _ systemImage: String) -> Void = { _, _ in }
     private let pasteboard: NSPasteboard
     private var pasteboardChangeCount: Int
-    private var localFileRead: Task<Void, Never>?
+    /// Reads copied local files off the main thread; tests await it.
+    private(set) var localFileRead: Task<Void, Never>?
     private var temporarySharingExpiresAt: Date?
     private var fileTransfer: SessionRemoteClipboardFileTransfer?
     private var downloadDirectory: URL?
