@@ -480,10 +480,6 @@ final class SessionClipboard {
             if reportsResult {
                 onToast(message, "exclamationmark.triangle")
             }
-        case let .ignored(message):
-            if reportsResult {
-                onToast(message, "exclamationmark.triangle")
-            }
         }
     }
 
@@ -494,8 +490,12 @@ final class SessionClipboard {
 
     private func localTextPayload() -> SessionLocalClipboardPayload {
         if let text = pasteboard.string(forType: .string) {
+            // Too large to send, it still replaces the server's older
+            // copy, with an empty clipboard, as text sent would: that copy
+            // is neither fetched once sharing turns on nor applied should
+            // it reach this thread late.
             guard RDPClipboardLimits.canPublishUnicodeText(text) else {
-                return .ignored("Local text is too large to sync")
+                return .unsupported("Local text is too large to sync; remote clipboard cleared")
             }
             return .text(text)
         }
@@ -786,7 +786,6 @@ private enum SessionLocalClipboardPayload: Sendable {
     case files([RDPClipboardLocalFile])
     case empty
     case unsupported(String)
-    case ignored(String)
 }
 
 private struct SessionRemoteClipboardFileTransfer {

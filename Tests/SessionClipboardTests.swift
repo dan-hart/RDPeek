@@ -197,6 +197,25 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(session.publishedTexts, [nil, "local", "local"])
     }
 
+    /// Text too large to send still replaces the server's older copy, with
+    /// an empty clipboard, so turning sharing on again cannot bring that
+    /// copy back.
+    func testTextTooLargeToSendEmptiesTheServerClipboard() {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+        session.publishedTexts.removeAll()
+
+        pasteboard.clearContents()
+        pasteboard.setString(String(repeating: "a", count: 8 * 1024 * 1024), forType: .string)
+        clipboard.poll()
+
+        XCTAssertEqual(session.publishedTexts, [nil])
+        XCTAssertEqual(toasts, ["Local text is too large to sync; remote clipboard cleared"])
+    }
+
     /// A remote copy can reach the main thread after the bridge published
     /// there, though the server announced it before: that publish replaced
     /// it on the server, so it is dropped. Here the server's clipboard,
