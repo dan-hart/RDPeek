@@ -43,23 +43,28 @@ private final class RecordedClipboard: SessionClipboardSending {
 
 @MainActor
 final class SessionClipboardTests: XCTestCase {
-    /// A pasteboard of the test's own, so tests never read or replace the
-    /// user's clipboard.
+    /// A pasteboard and download root of the test's own, so tests never
+    /// read or replace the user's clipboard or its downloads.
     private var pasteboard: NSPasteboard!
+    private var downloadRoot: URL!
 
     override func setUp() async throws {
         pasteboard = NSPasteboard(name: NSPasteboard.Name("RDPeekTests.\(UUID().uuidString)"))
+        downloadRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RDPeekTests.\(UUID().uuidString)", isDirectory: true)
     }
 
     override func tearDown() async throws {
         pasteboard.releaseGlobally()
         pasteboard = nil
+        try? FileManager.default.removeItem(at: downloadRoot)
+        downloadRoot = nil
     }
 
     // MARK: - Temporary sharing
 
     func testTemporaryShareEndsOnlySharingItTurnedOn() {
-        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        let clipboard = makeClipboard()
         var toasts: [String] = []
         clipboard.onToast = { text, _ in toasts.append(text) }
         XCTAssertFalse(clipboard.canStartTemporarySharing, "No session to share with yet")
@@ -93,7 +98,7 @@ final class SessionClipboardTests: XCTestCase {
 
     func testTurningSharingOffClearsTheServerClipboard() {
         let session = RecordedClipboard()
-        let clipboard = SessionClipboard(isSharingEnabled: false, pasteboard: pasteboard)
+        let clipboard = makeClipboard(isSharingEnabled: false)
         clipboard.attach(session)
         XCTAssertEqual(session.publishedTexts, [nil])
 
@@ -111,7 +116,7 @@ final class SessionClipboardTests: XCTestCase {
         pasteboard.writeObjects([fileURL as NSURL])
 
         let session = RecordedClipboard()
-        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        let clipboard = makeClipboard()
         clipboard.attach(session)
         XCTAssertTrue(session.publishedFiles.isEmpty, "The read finishes after attach returns")
 
@@ -134,7 +139,7 @@ final class SessionClipboardTests: XCTestCase {
     func testRemoteTextOrSharingOffDropsAFileReadInFlight() async throws {
         let fileURL = try makeLocalFile(named: "notes.txt", contents: Data("hello".utf8))
         let session = RecordedClipboard()
-        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        let clipboard = makeClipboard()
         clipboard.attach(session)
 
         pasteboard.clearContents()
@@ -159,7 +164,7 @@ final class SessionClipboardTests: XCTestCase {
 
     func testRemoteFileArrivesOverRangesTheServerAnswersShort() throws {
         let session = RecordedClipboard()
-        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        let clipboard = makeClipboard()
         clipboard.attach(session)
         let contents = Data((0 ..< 1_500_000).map { UInt8(truncatingIfNeeded: $0 &* 31) })
 
@@ -181,16 +186,13 @@ final class SessionClipboardTests: XCTestCase {
         }
 
         XCTAssertTrue(session.rangeRequests.isEmpty)
-        let fileURL = try XCTUnwrap((pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first)
-        addTeardownBlock {
-            try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent())
-        }
+        let fileURL = try XCTUnwrap(copiedFileURL())
         XCTAssertEqual(try Data(contentsOf: fileURL), contents)
     }
 
     func testEmptyRangeAnswerBeforeTheEndFailsTheDownload() throws {
         let session = RecordedClipboard()
-        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        let clipboard = makeClipboard()
         var toasts: [String] = []
         clipboard.onToast = { text, _ in toasts.append(text) }
         clipboard.attach(session)
@@ -210,7 +212,7 @@ final class SessionClipboardTests: XCTestCase {
 
     func testRangeAnswerLongerThanAskedOrFailedFailsTheDownload() throws {
         let session = RecordedClipboard()
-        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        let clipboard = makeClipboard()
         var toasts: [String] = []
         clipboard.onToast = { text, _ in toasts.append(text) }
         clipboard.attach(session)
@@ -240,22 +242,19 @@ final class SessionClipboardTests: XCTestCase {
 
     func testEmptyRemoteFileIsCopiedWithoutARangeRequest() throws {
         let session = RecordedClipboard()
-        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        let clipboard = makeClipboard()
         clipboard.attach(session)
 
         try startRemoteFileDownload(Data(), to: clipboard, from: session)
 
         XCTAssertTrue(session.rangeRequests.isEmpty)
-        let fileURL = try XCTUnwrap((pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first)
-        addTeardownBlock {
-            try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent())
-        }
+        let fileURL = try XCTUnwrap(copiedFileURL())
         XCTAssertEqual(try Data(contentsOf: fileURL), Data())
     }
 
     func testNewerCopyDropsARemoteFileStillDownloading() throws {
         let session = RecordedClipboard()
-        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        let clipboard = makeClipboard()
         var toasts: [String] = []
         clipboard.onToast = { text, _ in toasts.append(text) }
         clipboard.attach(session)
@@ -285,9 +284,63 @@ final class SessionClipboardTests: XCTestCase {
         }
         XCTAssertEqual(pasteboard.string(forType: .string), "remote")
         XCTAssertFalse(toasts.contains { $0.hasPrefix("Remote file copied") })
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: downloadRoot.path), [])
+    }
+
+    // MARK: - Download cleanup
+
+    func testFinishedDownloadIsRemovedOnceItLeavesThePasteboard() throws {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        clipboard.attach(session)
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        let firstFileURL = try XCTUnwrap(copiedFileURL())
+
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        XCTAssertTrue(fileExists(firstFileURL), "Still pasteable while the next file downloads")
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        let secondFileURL = try XCTUnwrap(copiedFileURL())
+        XCTAssertFalse(fileExists(firstFileURL))
+
+        clipboard.detach()
+        XCTAssertTrue(fileExists(secondFileURL), "Still pasteable after the session ends")
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        clipboard.detach()
+        XCTAssertFalse(fileExists(secondFileURL))
+    }
+
+    func testDownloadsLeftByAnEarlierRunAreRemoved() throws {
+        let leftover = downloadRoot.appendingPathComponent("earlier", isDirectory: true)
+        try FileManager.default.createDirectory(at: leftover, withIntermediateDirectories: true)
+        _ = makeClipboard()
+        XCTAssertFalse(fileExists(leftover))
+    }
+
+    func testDownloadsLeftByAnEarlierRunStayWhileFilesAreCopied() throws {
+        let leftover = downloadRoot.appendingPathComponent("earlier", isDirectory: true)
+        try FileManager.default.createDirectory(at: leftover, withIntermediateDirectories: true)
+        let fileURL = try makeLocalFile(named: "notes.txt", contents: Data())
+        pasteboard.clearContents()
+        pasteboard.writeObjects([fileURL as NSURL])
+        _ = makeClipboard()
+        XCTAssertTrue(fileExists(leftover))
     }
 
     // MARK: - Helpers
+
+    private func makeClipboard(isSharingEnabled: Bool = true) -> SessionClipboard {
+        SessionClipboard(isSharingEnabled: isSharingEnabled, pasteboard: pasteboard, downloadRoot: downloadRoot)
+    }
+
+    private func copiedFileURL() -> URL? {
+        (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first
+    }
+
+    private func fileExists(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
+    }
 
     /// Offers one remote file of `contents` and answers the size request.
     private func startRemoteFileDownload(

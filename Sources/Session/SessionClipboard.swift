@@ -35,20 +35,38 @@ final class SessionClipboard {
     /// Shows a transient message: its text and an SF Symbol name.
     var onToast: (_ text: String, _ systemImage: String) -> Void = { _, _ in }
     private let pasteboard: NSPasteboard
+    /// Holds a directory for each remote file download.
+    private let downloadRoot: URL
     private var pasteboardChangeCount: Int
     /// Reads copied local files off the main thread; tests await it.
     private(set) var localFileRead: Task<Void, Never>?
     private var temporarySharingExpiresAt: Date?
     private var fileTransfer: SessionRemoteClipboardFileTransfer?
-    private var downloadDirectory: URL?
+    /// The last download put on the pasteboard, and the pasteboard's change
+    /// count once it was there: a later count means its files are gone from
+    /// the pasteboard.
+    private var copiedDownload: (directory: URL, changeCount: Int)?
     private var nextStreamID: UInt32 = 1
 
-    /// `pasteboard` is the user's clipboard except in tests, which use one
-    /// of their own.
-    init(isSharingEnabled: Bool, pasteboard: NSPasteboard = .general) {
+    /// Download roots this process has cleared of earlier runs' downloads.
+    private static var clearedDownloadRoots: Set<URL> = []
+
+    /// `pasteboard` and `downloadRoot` are the user's clipboard and a
+    /// directory in the temporary directory except in tests, which use their
+    /// own.
+    init(
+        isSharingEnabled: Bool,
+        pasteboard: NSPasteboard = .general,
+        downloadRoot: URL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RDPeekRemoteClipboard", isDirectory: true)
+    ) {
         self.isSharingEnabled = isSharingEnabled
         self.pasteboard = pasteboard
+        self.downloadRoot = downloadRoot
         pasteboardChangeCount = pasteboard.changeCount
+        if Self.clearedDownloadRoots.insert(downloadRoot).inserted {
+            removeEarlierDownloads()
+        }
     }
 
     var canSync: Bool {
@@ -82,11 +100,13 @@ final class SessionClipboard {
     }
 
     /// Forgets the session once its channel is gone, so polling and syncing
-    /// stop talking to it, and drops any download in flight.
+    /// stop talking to it, and drops any download in flight. A finished
+    /// download stays only while its files are still on the pasteboard.
     func detach() {
         session = nil
         discardFileTransfer()
         cancelLocalFileRead()
+        removeCopiedDownloadIfReplaced()
         pasteboardChangeCount = pasteboard.changeCount
     }
 
@@ -449,18 +469,20 @@ final class SessionClipboard {
         // A local copy made since the last poll is newer than the download,
         // so it stays.
         guard pasteboard.changeCount == pasteboardChangeCount else {
-            removeDownloadDirectory(transfer.downloadDirectory)
+            try? FileManager.default.removeItem(at: transfer.downloadDirectory)
             fileTransfer = nil
             return
         }
         cancelLocalFileRead()
         pasteboard.clearContents()
+        removeCopiedDownloadIfReplaced()
         guard pasteboard.writeObjects(transfer.downloadedFileURLs.map { $0 as NSURL }) else {
             failFileTransfer(transfer, message: "Remote files could not be copied")
             return
         }
 
         pasteboardChangeCount = pasteboard.changeCount
+        copiedDownload = (transfer.downloadDirectory, pasteboardChangeCount)
         fileTransfer = nil
         if transfer.downloadedFileURLs.count == 1,
            let fileName = transfer.files.first?.fileName
@@ -472,7 +494,7 @@ final class SessionClipboard {
     }
 
     private func failFileTransfer(_ transfer: SessionRemoteClipboardFileTransfer, message: String) {
-        removeDownloadDirectory(transfer.downloadDirectory)
+        try? FileManager.default.removeItem(at: transfer.downloadDirectory)
         fileTransfer = nil
         onToast(message, "exclamationmark.triangle")
     }
@@ -494,31 +516,39 @@ final class SessionClipboard {
         guard let fileTransfer else {
             return
         }
-        removeDownloadDirectory(fileTransfer.downloadDirectory)
+        try? FileManager.default.removeItem(at: fileTransfer.downloadDirectory)
         self.fileTransfer = nil
     }
 
-    private func removeDownloadDirectory(_ directory: URL) {
-        try? FileManager.default.removeItem(at: directory)
-        if downloadDirectory == directory {
-            downloadDirectory = nil
+    /// Removes the last download put on the pasteboard once something else
+    /// has replaced it there.
+    private func removeCopiedDownloadIfReplaced() {
+        guard let copiedDownload,
+              pasteboard.changeCount != copiedDownload.changeCount
+        else {
+            return
         }
+        try? FileManager.default.removeItem(at: copiedDownload.directory)
+        self.copiedDownload = nil
     }
 
-    /// Replaces the previous download directory; files from the last completed
-    /// transfer stay on the pasteboard until the next transfer starts.
-    private func makeDownloadDirectory() throws -> URL {
-        let fileManager = FileManager.default
-        if let downloadDirectory {
-            try? fileManager.removeItem(at: downloadDirectory)
+    /// Removes what earlier runs left behind: downloads a crash cut short,
+    /// and ones still on the pasteboard at quit. Telling whether the
+    /// pasteboard holds one would mean reading its contents, which a session
+    /// that does not share must not do, so while the pasteboard holds any
+    /// files they are left for a later run.
+    private func removeEarlierDownloads() {
+        guard pasteboard.types?.contains(.fileURL) != true else {
+            return
         }
+        try? FileManager.default.removeItem(at: downloadRoot)
+    }
 
-        let directory = fileManager.temporaryDirectory
-            .appendingPathComponent("RDPeekRemoteClipboard", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        downloadDirectory = directory
+    /// A new directory for each download, so the files of the previous one
+    /// stay on the pasteboard until this one replaces them.
+    private func makeDownloadDirectory() throws -> URL {
+        let directory = downloadRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
     }
 
