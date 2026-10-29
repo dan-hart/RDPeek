@@ -532,7 +532,7 @@ struct SessionMetricsRoot: View {
             Spacer()
             HStack {
                 Spacer()
-                if model.isMetricsOverlayVisible, let summary = model.metricsSummary {
+                if let summary = visibleSummary {
                     Text(verbatim: summary)
                         .font(.caption.monospaced())
                         .foregroundStyle(.white.opacity(0.85))
@@ -544,7 +544,12 @@ struct SessionMetricsRoot: View {
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: model.isMetricsOverlayVisible)
+        .animation(.easeInOut(duration: 0.25), value: visibleSummary != nil)
+    }
+
+    /// The session publishes a summary only while the desktop shows.
+    private var visibleSummary: String? {
+        model.isMetricsOverlayVisible ? model.metricsSummary : nil
     }
 }
 

@@ -59,6 +59,7 @@ targets:
       # hardened-runtime app does not need to host the tests.
       - path: Tests
       - path: Sources/ConnectionCenter/DeviceListModel.swift
+      - path: Sources/Diagnostics/DiagnosticsView.swift
       - path: Sources/Session/FramePacing.swift
       - path: Sources/Session/FramePresentationClockView.swift
       - path: Sources/Session/KeyboardLayouts.swift

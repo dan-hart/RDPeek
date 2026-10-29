@@ -77,21 +77,33 @@ private func metricBytes(_ value: Int) -> String {
     ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file)
 }
 
+/// How long the performance overlay waits for a frame, or for received
+/// bytes, before it calls the stream idle. RDPKit's rolling rates keep their
+/// last value once traffic stops, and a still remote desktop sends nothing.
+let viewerMetricsIdleInterval: TimeInterval = 3
+
 /// The one-line summary the session's performance overlay shows.
 func compactViewerMetricsSummary(
     metrics: RDPRenderMetrics,
-    framePacing: RDPFramePacingState
+    framePacing: RDPFramePacingState,
+    lastWireReceiveAt: Date?,
+    now: Date
 ) -> String? {
+    func isIdle(since date: Date?) -> Bool {
+        date.map { now.timeIntervalSince($0) >= viewerMetricsIdleInterval } ?? false
+    }
+
     var parts: [String] = []
-    let framesPerSecond = metrics.rollingFramesPerSecond ?? metrics.averageFramesPerSecond
-    if let framesPerSecond {
+    if isIdle(since: metrics.lastFrameDecodedAt) {
+        parts.append("idle")
+    } else if let framesPerSecond = metrics.rollingFramesPerSecond ?? metrics.averageFramesPerSecond {
         parts.append(metricFramesPerSecond(framesPerSecond))
     }
     if let lastDecodeMilliseconds = metrics.lastDecodeMilliseconds {
         parts.append("decode \(metricMilliseconds(lastDecodeMilliseconds))")
     }
     if let wireMegabitsPerSecond = metrics.rollingWireMegabitsPerSecond {
-        parts.append("rx \(metricMegabitsPerSecond(wireMegabitsPerSecond))")
+        parts.append(isIdle(since: lastWireReceiveAt) ? "rx idle" : "rx \(metricMegabitsPerSecond(wireMegabitsPerSecond))")
     }
     if let displayLinkFramesPerSecond = framePacing.displayLinkFramesPerSecond {
         parts.append(metricHertz(displayLinkFramesPerSecond))

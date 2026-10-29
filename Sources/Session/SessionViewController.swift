@@ -71,6 +71,9 @@ final class SessionViewController: NSViewController {
     private var latestPresentedFrame: RDPGraphicsFrameSnapshot?
     private var viewerMetricsSummary: String?
     private var isMetricsOverlayVisible = false
+    /// When received bytes last reached the metrics, for the overlay's
+    /// idle rule: RDPKit's rolling rate keeps its last value.
+    private var lastWireReceiveAt: Date?
     private var hasPresentedFrame = false
     private var framePresentationBuffer = RDPFramePresentationBuffer()
     private var framePacing = RDPFramePacingState()
@@ -81,6 +84,7 @@ final class SessionViewController: NSViewController {
     private var certificateRefusal: CertificateRefusal?
     private var shouldAutoConnect = true
     private var diagnosticsTask: Task<Void, Never>?
+    private var metricsOverlayTask: Task<Void, Never>?
     private var clipboardPollingTask: Task<Void, Never>?
     private var overlayVisibilityTask: Task<Void, Never>?
     private var didClose = false
@@ -152,6 +156,7 @@ final class SessionViewController: NSViewController {
         }
         didClose = true
         diagnosticsTask?.cancel()
+        metricsOverlayTask?.cancel()
         clipboardPollingTask?.cancel()
         overlayVisibilityTask?.cancel()
         launchStore?.unregisterDiagnostics(for: sessionID)
@@ -311,6 +316,7 @@ final class SessionViewController: NSViewController {
         if hudModel.phase != nextPhase {
             hudModel.phase = nextPhase
             updateOverlayVisibility(for: nextPhase)
+            startMetricsOverlayLoopIfNeeded()
         }
         hudModel.update(
             \.connectingStatusDetail,
@@ -318,7 +324,9 @@ final class SessionViewController: NSViewController {
         )
         hudModel.update(\.certificateNotice, to: certificateNoticeState())
         hudModel.update(\.isMetricsOverlayVisible, to: isMetricsOverlayVisible)
-        hudModel.update(\.metricsSummary, to: viewerMetricsSummary)
+        // The overlay measures the desktop, so it shows only while the
+        // desktop does.
+        hudModel.update(\.metricsSummary, to: nextPhase.isActive ? viewerMetricsSummary : nil)
         hudModel.update(\.isClipboardSharingEnabled, to: clipboard.isSharingEnabled)
         hudModel.update(\.isAudioPlaybackEnabled, to: audioPlaybackEnabled)
         hudModel.update(\.isFollowWindowSizeEnabled, to: autoApplyViewerSize)
@@ -449,6 +457,37 @@ final class SessionViewController: NSViewController {
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
         }
+    }
+
+    private var isMetricsOverlayShowing: Bool {
+        isMetricsOverlayVisible && currentPhase.isActive
+    }
+
+    /// RDPKit's rolling rates keep their last value once traffic stops,
+    /// and frames and bytes are what recompute the summary, so a still
+    /// desktop would show its last busy second forever. Recompute it every
+    /// second while the overlay shows.
+    private func startMetricsOverlayLoopIfNeeded() {
+        guard metricsOverlayTask == nil, isMetricsOverlayShowing else {
+            return
+        }
+        metricsOverlayTask = Task { @MainActor [weak self] in
+            while Task.isCancelled == false, self?.refreshMetricsOverlayIfShowing() == true {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    /// Returns false, ending the loop, once the overlay no longer shows.
+    private func refreshMetricsOverlayIfShowing() -> Bool {
+        guard isMetricsOverlayShowing else {
+            metricsOverlayTask = nil
+            return false
+        }
+        if updateViewerMetricsSummary(renderMetricsStore.metrics) {
+            render()
+        }
+        return true
     }
 
     private func startClipboardPollingLoop() {
@@ -789,6 +828,7 @@ final class SessionViewController: NSViewController {
                 onFlush: { sample in
                     sink.apply { controller in
                         controller.renderMetricsStore.recordWireReceive(sample)
+                        controller.lastWireReceiveAt = sample.receivedAt
                         if controller.publishRenderMetricsSnapshotIfNeeded(at: sample.receivedAt) {
                             controller.render()
                         }
@@ -1169,7 +1209,12 @@ final class SessionViewController: NSViewController {
     @discardableResult
     private func updateViewerMetricsSummary(_ metrics: RDPRenderMetrics) -> Bool {
         let nextSummary = isMetricsOverlayVisible
-            ? compactViewerMetricsSummary(metrics: metrics, framePacing: framePacing)
+            ? compactViewerMetricsSummary(
+                metrics: metrics,
+                framePacing: framePacing,
+                lastWireReceiveAt: lastWireReceiveAt,
+                now: Date()
+            )
             : nil
         if viewerMetricsSummary != nextSummary {
             viewerMetricsSummary = nextSummary
@@ -1182,6 +1227,7 @@ final class SessionViewController: NSViewController {
         isMetricsOverlayVisible = visible
         updateViewerMetricsSummary(renderMetricsStore.metrics)
         render()
+        startMetricsOverlayLoopIfNeeded()
     }
 
     private func resetFramePresentationState() {
