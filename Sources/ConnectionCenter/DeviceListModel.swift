@@ -155,7 +155,9 @@ final class DeviceListModel: ObservableObject {
 
     /// Persists the edited device and applies any keychain change.
     /// `editor.device` must remain the snapshot from sheet-open time — the
-    /// stale-keychain-entry cleanup compares against its original identity.
+    /// stale-keychain-entry cleanup compares against its original identity,
+    /// and the Remember toggle counts as untouched while the edited flag
+    /// still matches the snapshot's.
     /// `hadRememberedPassword` says whether the editor found a saved
     /// password for that identity.
     func save(
@@ -172,6 +174,54 @@ final class DeviceListModel: ObservableObject {
         device.domain = device.domain.trimmingCharacters(in: .whitespacesAndNewlines)
         device.updatedAt = Date()
 
+        // The editor works on a snapshot from sheet-open time; a session may
+        // have connected since, so carry the store's timestamp over instead
+        // of reverting it. Reading first also stops an unreadable store
+        // before any keychain change.
+        let current = try store.devices().first { $0.id == device.id }
+        if let current {
+            device.lastConnectedAt = current.lastConnectedAt
+        }
+
+        // A session's sign-in may also have turned Remember on or off since,
+        // saving or deleting the keychain item itself. When the user left the
+        // toggle alone and the identity is unchanged, that newer choice
+        // stands and the keychain is already right: writing the snapshot's
+        // flag back would orphan the item or re-save an old password.
+        if let current,
+           device.rememberPassword == editor.device.rememberPassword,
+           current.rememberPassword != device.rememberPassword,
+           editor.device.identity.hasSameConnectionIdentity(as: device.identity)
+        {
+            device.rememberPassword = current.rememberPassword
+        } else {
+            try applyKeychainChange(
+                from: editor.device,
+                to: device,
+                password: password,
+                hadRememberedPassword: hadRememberedPassword
+            )
+        }
+
+        // Keep the password for this app run too, so this PC connects
+        // without asking when it does not remember it, and so do others
+        // with the same sign-in that do not.
+        if password.isEmpty == false, let account = device.identity.credentialAccountName {
+            credentialCache.setPassword(password, for: account)
+        }
+
+        devices = try store.save(device)
+        return device
+    }
+
+    /// Checks that the editor's Remember choice can be kept, then saves or
+    /// deletes keychain entries to match it.
+    private func applyKeychainChange(
+        from snapshot: DeviceProfile,
+        to device: DeviceProfile,
+        password: String,
+        hadRememberedPassword: Bool
+    ) throws {
         if device.rememberPassword, device.username.isEmpty {
             throw DeviceValidationError.missingUsernameForKeychain
         }
@@ -179,21 +229,13 @@ final class DeviceListModel: ObservableObject {
             throw DeviceValidationError.missingPasswordForKeychain
         }
 
-        // The editor works on a snapshot from sheet-open time; a session may
-        // have connected since, so carry the store's timestamp over instead
-        // of reverting it. Reading first also stops an unreadable store
-        // before any keychain change.
-        if let current = try store.devices().first(where: { $0.id == device.id }) {
-            device.lastConnectedAt = current.lastConnectedAt
-        }
-
         // The keychain entry is keyed by identity, so drop the old entry when
         // host, port, username, or domain changed — unless another profile
         // still remembers its password under that identity.
         if hadRememberedPassword,
-           editor.device.identity.hasSameConnectionIdentity(as: device.identity) == false,
-           rememberedPasswordIsShared(editor.device.identity, excluding: device.id) == false,
-           let oldKey = KeychainCredentialKey(identity: editor.device.identity)
+           snapshot.identity.hasSameConnectionIdentity(as: device.identity) == false,
+           rememberedPasswordIsShared(snapshot.identity, excluding: device.id) == false,
+           let oldKey = KeychainCredentialKey(identity: snapshot.identity)
         {
             try credentialStore.deletePassword(for: oldKey)
         }
@@ -207,16 +249,6 @@ final class DeviceListModel: ObservableObject {
                 try credentialStore.deletePassword(for: key)
             }
         }
-
-        // Keep the password for this app run too, so this PC connects
-        // without asking when it does not remember it, and so do others
-        // with the same sign-in that do not.
-        if password.isEmpty == false, let account = device.identity.credentialAccountName {
-            credentialCache.setPassword(password, for: account)
-        }
-
-        devices = try store.save(device)
-        return device
     }
 
     func requestDeletion(of device: DeviceProfile) {

@@ -335,6 +335,95 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertEqual(harness.credentials.savedAccounts, [])
     }
 
+    func testSaveKeepsRememberThatASessionTurnedOnWhileEditing() throws {
+        let device = makeDevice()
+        let harness = try makeHarness(devices: [device])
+        let editor = DeviceEditorState(device: device, isNew: false)
+        // After the sheet opened, a session's sign-in saved the password.
+        let account = try account(for: device)
+        harness.credentials.passwords[account] = "from-session"
+        harness.model.recordCredentialPersistence(deviceID: device.id, identity: device.identity, remembered: true)
+        var edited = device
+        edited.name = "Renamed"
+
+        let saved = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "",
+            hadRememberedPassword: false
+        )
+
+        XCTAssertTrue(saved.rememberPassword)
+        XCTAssertEqual(saved.name, "Renamed")
+        XCTAssertEqual(try DeviceProfileStore(defaults: harness.defaults).devices().first?.rememberPassword, true)
+        XCTAssertEqual(harness.credentials.savedAccounts, [])
+        XCTAssertEqual(harness.credentials.deletedAccounts, [])
+        XCTAssertEqual(harness.credentials.passwords[account], "from-session")
+    }
+
+    func testSaveKeepsRememberThatASessionTurnedOffWhileEditing() throws {
+        let device = makeDevice(rememberPassword: true)
+        let harness = try makeHarness(devices: [device])
+        let editor = DeviceEditorState(device: device, isNew: false)
+        // After the sheet loaded the saved password, a session's sign-in
+        // deleted it.
+        harness.model.recordCredentialPersistence(deviceID: device.id, identity: device.identity, remembered: false)
+        var edited = device
+        edited.name = "Renamed"
+
+        let saved = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "old",
+            hadRememberedPassword: true
+        )
+
+        XCTAssertFalse(saved.rememberPassword)
+        XCTAssertEqual(try DeviceProfileStore(defaults: harness.defaults).devices().first?.rememberPassword, false)
+        XCTAssertEqual(harness.credentials.savedAccounts, [])
+        XCTAssertEqual(harness.credentials.deletedAccounts, [])
+    }
+
+    func testSaveKeepsEditorRememberWhenIdentityChangedToo() throws {
+        let device = makeDevice()
+        let harness = try makeHarness(devices: [device])
+        let editor = DeviceEditorState(device: device, isNew: false)
+        harness.model.recordCredentialPersistence(deviceID: device.id, identity: device.identity, remembered: true)
+        var edited = device
+        edited.host = "new.example"
+
+        let saved = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "",
+            hadRememberedPassword: false
+        )
+
+        XCTAssertFalse(saved.rememberPassword)
+        XCTAssertEqual(try DeviceProfileStore(defaults: harness.defaults).devices().first?.rememberPassword, false)
+    }
+
+    func testSaveKeepsRememberToggledInEditorOverSessionChange() throws {
+        let device = makeDevice()
+        let harness = try makeHarness(devices: [device])
+        let editor = DeviceEditorState(device: device, isNew: false)
+        let account = try account(for: device)
+        harness.credentials.passwords[account] = "from-session"
+        harness.model.recordCredentialPersistence(deviceID: device.id, identity: device.identity, remembered: true)
+        var edited = device
+        edited.rememberPassword = true
+
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "typed",
+            hadRememberedPassword: false
+        )
+
+        XCTAssertEqual(harness.credentials.savedAccounts, [account])
+        XCTAssertEqual(harness.credentials.passwords[account], "typed")
+    }
+
     // MARK: - recordCredentialPersistence
 
     func testRecordCredentialPersistenceFlipsAndPersistsFlagOnIdentityMatch() throws {
