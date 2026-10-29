@@ -25,8 +25,6 @@ enum DeviceSortOrder: String, CaseIterable, Identifiable {
 struct DeviceEditorState: Identifiable {
     var device: DeviceProfile
     var isNew: Bool
-    var initialPassword: String
-    var hadRememberedPassword: Bool
 
     var id: UUID {
         device.id
@@ -101,30 +99,28 @@ final class DeviceListModel: ObservableObject {
     // MARK: - Editing
 
     func addNewDevice() {
-        editorState = DeviceEditorState(
-            device: .makeNew(defaults: defaults),
-            isNew: true,
-            initialPassword: "",
-            hadRememberedPassword: false
-        )
+        editorState = DeviceEditorState(device: .makeNew(defaults: defaults), isNew: true)
     }
 
+    /// Opens the editor at once; the sheet loads the saved password itself
+    /// through `savedPassword(for:)`.
     func edit(_ device: DeviceProfile) {
-        var initialPassword = ""
-        var hadRememberedPassword = false
-        if device.rememberPassword,
-           let key = KeychainCredentialKey(identity: device.identity),
-           let savedPassword = try? credentialStore.password(for: key)
-        {
-            initialPassword = savedPassword
-            hadRememberedPassword = true
+        editorState = DeviceEditorState(device: device, isNew: false)
+    }
+
+    /// The device's remembered password, or nil when it has none or the
+    /// keychain read fails. The read runs off the main actor: it can block
+    /// on the access-approval dialog.
+    func savedPassword(for device: DeviceProfile) async -> String? {
+        guard device.rememberPassword,
+              let key = KeychainCredentialKey(identity: device.identity)
+        else {
+            return nil
         }
-        editorState = DeviceEditorState(
-            device: device,
-            isNew: false,
-            initialPassword: initialPassword,
-            hadRememberedPassword: hadRememberedPassword
-        )
+        let credentialStore = credentialStore
+        return await Task.detached(priority: .userInitiated) {
+            try? credentialStore.password(for: key)
+        }.value
     }
 
     func duplicate(_ device: DeviceProfile) {
@@ -147,7 +143,14 @@ final class DeviceListModel: ObservableObject {
     /// Persists the edited device and applies any keychain change.
     /// `editor.device` must remain the snapshot from sheet-open time — the
     /// stale-keychain-entry cleanup compares against its original identity.
-    func save(editor: DeviceEditorState, editedDevice: DeviceProfile, password: String) throws -> DeviceProfile {
+    /// `hadRememberedPassword` says whether the editor found a saved
+    /// password for that identity.
+    func save(
+        editor: DeviceEditorState,
+        editedDevice: DeviceProfile,
+        password: String,
+        hadRememberedPassword: Bool
+    ) throws -> DeviceProfile {
         var device = editedDevice
         let target = try RDPConnectionTarget(host: device.host, portText: String(device.port))
         device.host = target.host
@@ -174,7 +177,7 @@ final class DeviceListModel: ObservableObject {
         // The keychain entry is keyed by identity, so drop the old entry when
         // host, port, username, or domain changed — unless another profile
         // still remembers its password under that identity.
-        if editor.hadRememberedPassword,
+        if hadRememberedPassword,
            editor.device.identity.hasSameConnectionIdentity(as: device.identity) == false,
            rememberedPasswordIsShared(editor.device.identity, excluding: device.id) == false,
            let oldKey = KeychainCredentialKey(identity: editor.device.identity)
@@ -185,7 +188,7 @@ final class DeviceListModel: ObservableObject {
         if let key = KeychainCredentialKey(identity: device.identity) {
             if device.rememberPassword {
                 try credentialStore.savePassword(password, for: key)
-            } else if editor.hadRememberedPassword,
+            } else if hadRememberedPassword,
                       rememberedPasswordIsShared(device.identity, excluding: device.id) == false
             {
                 try credentialStore.deletePassword(for: key)

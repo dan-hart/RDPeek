@@ -104,16 +104,21 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertNotNil(harness.model.errorMessage)
     }
 
-    // MARK: - save(editor:editedDevice:password:)
+    // MARK: - save(editor:editedDevice:password:hadRememberedPassword:)
 
     func testSaveDeletesStaleCredentialWhenIdentityChanges() throws {
         let device = makeDevice(host: "old.example", rememberPassword: true)
         let harness = try makeHarness(devices: [device])
-        let editor = makeEditor(for: device, hadRememberedPassword: true)
+        let editor = DeviceEditorState(device: device, isNew: false)
         var edited = device
         edited.host = "new.example"
 
-        _ = try harness.model.save(editor: editor, editedDevice: edited, password: "pw")
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "pw",
+            hadRememberedPassword: true
+        )
 
         XCTAssertEqual(harness.credentials.deletedAccounts, [try account(for: device)])
         XCTAssertEqual(harness.credentials.savedAccounts, [try account(for: edited)])
@@ -123,11 +128,16 @@ final class DeviceListModelTests: XCTestCase {
         let device = makeDevice(host: "shared.example", rememberPassword: true)
         let twin = makeDevice(name: "Twin", host: "shared.example", rememberPassword: true)
         let harness = try makeHarness(devices: [device, twin])
-        let editor = makeEditor(for: device, hadRememberedPassword: true)
+        let editor = DeviceEditorState(device: device, isNew: false)
         var edited = device
         edited.host = "new.example"
 
-        _ = try harness.model.save(editor: editor, editedDevice: edited, password: "pw")
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "pw",
+            hadRememberedPassword: true
+        )
 
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
         XCTAssertEqual(harness.credentials.savedAccounts, [try account(for: edited)])
@@ -137,11 +147,16 @@ final class DeviceListModelTests: XCTestCase {
         let device = makeDevice(host: "shared.example", rememberPassword: true)
         let twin = makeDevice(name: "Twin", host: "shared.example")
         let harness = try makeHarness(devices: [device, twin])
-        let editor = makeEditor(for: device, hadRememberedPassword: true)
+        let editor = DeviceEditorState(device: device, isNew: false)
         var edited = device
         edited.host = "new.example"
 
-        _ = try harness.model.save(editor: editor, editedDevice: edited, password: "pw")
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "pw",
+            hadRememberedPassword: true
+        )
 
         XCTAssertEqual(harness.credentials.deletedAccounts, [try account(for: device)])
     }
@@ -149,11 +164,16 @@ final class DeviceListModelTests: XCTestCase {
     func testSaveWithUnchangedIdentityDeletesNothing() throws {
         let device = makeDevice(rememberPassword: true)
         let harness = try makeHarness(devices: [device])
-        let editor = makeEditor(for: device, hadRememberedPassword: true)
+        let editor = DeviceEditorState(device: device, isNew: false)
         var edited = device
         edited.name = "Renamed"
 
-        _ = try harness.model.save(editor: editor, editedDevice: edited, password: "pw")
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "pw",
+            hadRememberedPassword: true
+        )
 
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
         XCTAssertEqual(harness.credentials.savedAccounts, [try account(for: device)])
@@ -162,11 +182,16 @@ final class DeviceListModelTests: XCTestCase {
     func testSaveDeletesCredentialWhenRememberTurnedOff() throws {
         let device = makeDevice(rememberPassword: true)
         let harness = try makeHarness(devices: [device])
-        let editor = makeEditor(for: device, hadRememberedPassword: true)
+        let editor = DeviceEditorState(device: device, isNew: false)
         var edited = device
         edited.rememberPassword = false
 
-        _ = try harness.model.save(editor: editor, editedDevice: edited, password: "")
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "",
+            hadRememberedPassword: true
+        )
 
         XCTAssertEqual(harness.credentials.deletedAccounts, [try account(for: device)])
         XCTAssertEqual(harness.credentials.savedAccounts, [])
@@ -176,11 +201,16 @@ final class DeviceListModelTests: XCTestCase {
         let device = makeDevice(rememberPassword: true)
         let twin = makeDevice(name: "Twin", rememberPassword: true)
         let harness = try makeHarness(devices: [device, twin])
-        let editor = makeEditor(for: device, hadRememberedPassword: true)
+        let editor = DeviceEditorState(device: device, isNew: false)
         var edited = device
         edited.rememberPassword = false
 
-        _ = try harness.model.save(editor: editor, editedDevice: edited, password: "")
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "",
+            hadRememberedPassword: true
+        )
 
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
     }
@@ -188,9 +218,14 @@ final class DeviceListModelTests: XCTestCase {
     func testSaveCachesTypedPasswordWhenNotRemembered() throws {
         let device = makeDevice()
         let harness = try makeHarness(devices: [device])
-        let editor = makeEditor(for: device, hadRememberedPassword: false)
+        let editor = DeviceEditorState(device: device, isNew: false)
 
-        _ = try harness.model.save(editor: editor, editedDevice: device, password: "typed")
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: device,
+            password: "typed",
+            hadRememberedPassword: false
+        )
 
         XCTAssertEqual(harness.cache.password(for: try account(for: device)), "typed")
         XCTAssertEqual(harness.credentials.savedAccounts, [])
@@ -202,11 +237,16 @@ final class DeviceListModelTests: XCTestCase {
         let harness = try makeHarness(devices: [device])
         let account = try account(for: device)
         harness.cache.setPassword("stale", for: account)
-        let editor = makeEditor(for: device, hadRememberedPassword: false)
+        let editor = DeviceEditorState(device: device, isNew: false)
         var edited = device
         edited.rememberPassword = true
 
-        _ = try harness.model.save(editor: editor, editedDevice: edited, password: "new")
+        _ = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "new",
+            hadRememberedPassword: false
+        )
 
         XCTAssertEqual(harness.credentials.passwords[account], "new")
         XCTAssertNil(harness.cache.password(for: account))
@@ -218,11 +258,16 @@ final class DeviceListModelTests: XCTestCase {
         // A session connected after the editor sheet opened on its snapshot.
         let connectedAt = Date(timeIntervalSinceReferenceDate: 1_000_000)
         try DeviceProfileStore(defaults: harness.defaults).touchLastConnected(id: device.id, at: connectedAt)
-        let editor = makeEditor(for: device, hadRememberedPassword: false)
+        let editor = DeviceEditorState(device: device, isNew: false)
         var edited = device
         edited.name = "Renamed"
 
-        let saved = try harness.model.save(editor: editor, editedDevice: edited, password: "")
+        let saved = try harness.model.save(
+            editor: editor,
+            editedDevice: edited,
+            password: "",
+            hadRememberedPassword: false
+        )
 
         XCTAssertEqual(saved.lastConnectedAt, connectedAt)
         XCTAssertEqual(harness.model.devices.first?.lastConnectedAt, connectedAt)
@@ -231,15 +276,25 @@ final class DeviceListModelTests: XCTestCase {
     func testSaveRequiresUsernameAndPasswordToRemember() throws {
         let device = makeDevice(rememberPassword: true)
         let harness = try makeHarness(devices: [device])
-        let editor = makeEditor(for: device, hadRememberedPassword: false)
+        let editor = DeviceEditorState(device: device, isNew: false)
         var missingUsername = device
         missingUsername.username = ""
 
         XCTAssertThrowsError(
-            try harness.model.save(editor: editor, editedDevice: missingUsername, password: "pw")
+            try harness.model.save(
+                editor: editor,
+                editedDevice: missingUsername,
+                password: "pw",
+                hadRememberedPassword: false
+            )
         )
         XCTAssertThrowsError(
-            try harness.model.save(editor: editor, editedDevice: device, password: "")
+            try harness.model.save(
+                editor: editor,
+                editedDevice: device,
+                password: "",
+                hadRememberedPassword: false
+            )
         )
         XCTAssertEqual(harness.credentials.savedAccounts, [])
     }
@@ -305,39 +360,47 @@ final class DeviceListModelTests: XCTestCase {
 
     // MARK: - edit
 
-    func testEditReadsCredentialStoreWhenPasswordIsRemembered() throws {
+    func testEditOpensEditorWithoutReadingCredentialStore() throws {
+        let device = makeDevice(rememberPassword: true)
+        let harness = try makeHarness(devices: [device])
+
+        harness.model.edit(device)
+
+        XCTAssertEqual(harness.model.editorState?.device, device)
+        XCTAssertEqual(harness.credentials.readAccounts, [])
+    }
+
+    func testSavedPasswordReadsCredentialStoreWhenPasswordIsRemembered() async throws {
         let device = makeDevice(rememberPassword: true)
         let harness = try makeHarness(devices: [device])
         let account = try account(for: device)
         harness.credentials.passwords[account] = "secret"
 
-        harness.model.edit(device)
+        let password = await harness.model.savedPassword(for: device)
 
+        XCTAssertEqual(password, "secret")
         XCTAssertEqual(harness.credentials.readAccounts, [account])
-        XCTAssertEqual(harness.model.editorState?.initialPassword, "secret")
-        XCTAssertEqual(harness.model.editorState?.hadRememberedPassword, true)
     }
 
-    func testEditSkipsCredentialStoreWhenPasswordIsNotRemembered() throws {
+    func testSavedPasswordSkipsCredentialStoreWhenPasswordIsNotRemembered() async throws {
         let device = makeDevice()
         let harness = try makeHarness(devices: [device])
+        harness.credentials.passwords[try account(for: device)] = "secret"
 
-        harness.model.edit(device)
+        let password = await harness.model.savedPassword(for: device)
 
+        XCTAssertNil(password)
         XCTAssertEqual(harness.credentials.readAccounts, [])
-        XCTAssertEqual(harness.model.editorState?.initialPassword, "")
-        XCTAssertEqual(harness.model.editorState?.hadRememberedPassword, false)
     }
 
-    func testEditTreatsCredentialReadFailureAsNoSavedPassword() throws {
+    func testSavedPasswordTreatsReadFailureAsNone() async throws {
         let device = makeDevice(rememberPassword: true)
         let harness = try makeHarness(devices: [device])
         harness.credentials.readError = KeychainError.unexpectedStatus(-1)
 
-        harness.model.edit(device)
+        let password = await harness.model.savedPassword(for: device)
 
-        XCTAssertEqual(harness.model.editorState?.initialPassword, "")
-        XCTAssertEqual(harness.model.editorState?.hadRememberedPassword, false)
+        XCTAssertNil(password)
     }
 
     // MARK: - connect
@@ -414,15 +477,6 @@ final class DeviceListModelTests: XCTestCase {
         )
     }
 
-    private func makeEditor(for device: DeviceProfile, hadRememberedPassword: Bool) -> DeviceEditorState {
-        DeviceEditorState(
-            device: device,
-            isNew: false,
-            initialPassword: hadRememberedPassword ? "pw" : "",
-            hadRememberedPassword: hadRememberedPassword
-        )
-    }
-
     private func account(for device: DeviceProfile) throws -> String {
         try XCTUnwrap(KeychainCredentialKey(identity: device.identity)).account
     }
@@ -430,7 +484,9 @@ final class DeviceListModelTests: XCTestCase {
 
 /// Recording fake for the keychain seam: tests must never touch the real
 /// Keychain, so credential traffic lands in plain dictionaries instead.
-private final class CredentialStoreRecorder: CredentialStoring {
+/// Unchecked Sendable: a test awaits each call, so no two tasks touch it
+/// at once.
+private final class CredentialStoreRecorder: CredentialStoring, @unchecked Sendable {
     var passwords: [String: String] = [:]
     var readError: Error?
     var saveError: Error?

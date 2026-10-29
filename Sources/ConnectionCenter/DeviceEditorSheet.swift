@@ -13,12 +13,14 @@ struct DeviceEditorSheet: View {
     @State private var portText: String
     @State private var username: String
     @State private var domain: String
-    @State private var password: String
+    @State private var password = ""
     @State private var rememberPassword: Bool
     @State private var clipboardSharingEnabled: Bool
     @State private var audioPlaybackEnabled: Bool
     @State private var hideCertificateWarnings: Bool
     @State private var validationMessage: String?
+    @State private var isLoadingPassword: Bool
+    @State private var hadRememberedPassword = false
 
     init(editorState: DeviceEditorState) {
         self.editorState = editorState
@@ -28,11 +30,11 @@ struct DeviceEditorSheet: View {
         _portText = State(initialValue: String(device.port))
         _username = State(initialValue: device.username)
         _domain = State(initialValue: device.domain)
-        _password = State(initialValue: editorState.initialPassword)
         _rememberPassword = State(initialValue: device.rememberPassword)
         _clipboardSharingEnabled = State(initialValue: device.clipboardSharingEnabled)
         _audioPlaybackEnabled = State(initialValue: device.audioPlaybackEnabled)
         _hideCertificateWarnings = State(initialValue: device.hideCertificateWarnings)
+        _isLoadingPassword = State(initialValue: device.rememberPassword)
     }
 
     var body: some View {
@@ -49,7 +51,12 @@ struct DeviceEditorSheet: View {
                 Section("Credentials") {
                     TextField("Username", text: $username)
                     TextField("Domain", text: $domain, prompt: Text("Optional"))
-                    SecureField("Password", text: $password)
+                    SecureField(
+                        "Password",
+                        text: $password,
+                        prompt: isLoadingPassword ? Text("Reading Keychain…") : nil
+                    )
+                    .disabled(isLoadingPassword)
                     Toggle("Remember password in Keychain", isOn: $rememberPassword)
                 }
 
@@ -76,6 +83,22 @@ struct DeviceEditorSheet: View {
             footer
         }
         .frame(width: 460, height: 540)
+        .task {
+            await loadSavedPassword()
+        }
+    }
+
+    /// Fills in the remembered password. Save waits for it: whether one was
+    /// found decides which keychain entries saving may delete.
+    private func loadSavedPassword() async {
+        guard isLoadingPassword else {
+            return
+        }
+        if let savedPassword = await deviceList.savedPassword(for: editorState.device) {
+            password = savedPassword
+            hadRememberedPassword = true
+        }
+        isLoadingPassword = false
     }
 
     private var header: some View {
@@ -146,7 +169,7 @@ struct DeviceEditorSheet: View {
     }
 
     private var canSave: Bool {
-        host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        isLoadingPassword == false && host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     private func saveChanges() -> DeviceProfile? {
@@ -166,7 +189,12 @@ struct DeviceEditorSheet: View {
             device.audioPlaybackEnabled = audioPlaybackEnabled
             device.hideCertificateWarnings = hideCertificateWarnings
 
-            return try deviceList.save(editor: editorState, editedDevice: device, password: password)
+            return try deviceList.save(
+                editor: editorState,
+                editedDevice: device,
+                password: password,
+                hadRememberedPassword: hadRememberedPassword
+            )
         } catch {
             validationMessage = String(describing: error)
             return nil

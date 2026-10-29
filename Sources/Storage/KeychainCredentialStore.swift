@@ -47,14 +47,15 @@ struct KeychainCredentialKey: Equatable, Sendable {
 }
 
 /// The credential operations models depend on, as a seam so tests can
-/// substitute a fake instead of touching the real Keychain.
-protocol CredentialStoring {
+/// substitute a fake instead of touching the real Keychain. Sendable so
+/// reads can run off the main actor.
+protocol CredentialStoring: Sendable {
     func password(for key: KeychainCredentialKey) throws -> String?
     func savePassword(_ password: String, for key: KeychainCredentialKey) throws
     func deletePassword(for key: KeychainCredentialKey) throws
 }
 
-struct KeychainCredentialStore: CredentialStoring, Sendable {
+struct KeychainCredentialStore: CredentialStoring {
     private let keychain = KeychainService(name: "ai.aneesiqbal.rdpeek.credentials")
 
     func password(for key: KeychainCredentialKey) throws -> String? {
