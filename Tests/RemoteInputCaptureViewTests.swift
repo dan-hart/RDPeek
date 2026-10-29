@@ -1161,6 +1161,25 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    func testADeadKeysAccentGoesWithNoControlChord() {
+        // Text never goes with ⌘ or ⌃, so ⌃-Return after a dead "´" is the
+        // shortcut alone.
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: .leftControlDown))
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_Return),
+            characters: "´\r",
+            charactersIgnoringModifiers: "\r",
+            flags: .leftControlDown
+        ))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .leftControl, isReleased: false),
+            .keyboard(scancode: RDPKeyboardScancode(code: 0x1C), isReleased: false),
+        ])
+    }
+
     func testKeypadEqualsGoesAsUnicodeWhereItsScancodeTypesSomethingElse() {
         // PC keypads have no "=": keypad "=" goes as the main-row key US
         // Windows types "=" with, which is a dead "´" on German.

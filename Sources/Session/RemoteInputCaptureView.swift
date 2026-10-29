@@ -240,8 +240,10 @@ final class RemoteInputCaptureNSView: NSView {
            )
         {
             // A dead key typed before a key it does not compose with, such as Return, types its
-            // accent ahead of the key. A repeat of the held key types the accent no more.
-            let prefix = isHeldAsScancode ? "" : MacRDPKeyboardMapping.deadKeyPrefix(characters)
+            // accent ahead of the key. A repeat of the held key types the accent no more, and
+            // text never goes with ⌘ or ⌃.
+            let isShortcut = event.modifierFlags.isDisjoint(with: [.command, .control]) == false
+            let prefix = isHeldAsScancode || isShortcut ? "" : MacRDPKeyboardMapping.deadKeyPrefix(characters)
             sendKeyboardScancode(scancode, isReleased: false, after: MacRDPKeyboardMapping.unicodeEvents(for: prefix))
             isAfterChordedDeadKey = characters?.isEmpty == true && isDeadKey(event.keyCode, event.modifierFlags)
             return
