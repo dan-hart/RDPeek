@@ -629,6 +629,19 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertEqual(persisted.first?.rememberPassword, true)
     }
 
+    func testRecordCredentialPersistenceMatchesTheKeychainAccount() throws {
+        let device = makeDevice(username: "bob", domain: "CORP")
+        let harness = try makeHarness(devices: [device])
+
+        harness.model.recordCredentialPersistence(
+            deviceID: device.id,
+            identity: RDPConnectionIdentity(host: device.host, port: device.port, username: "CORP\\bob"),
+            remembered: true
+        )
+
+        XCTAssertEqual(harness.model.devices.first?.rememberPassword, true)
+    }
+
     func testRecordCredentialPersistenceIgnoresIdentityMismatch() throws {
         let device = makeDevice()
         let harness = try makeHarness(devices: [device])

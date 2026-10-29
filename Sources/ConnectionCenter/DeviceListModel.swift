@@ -187,13 +187,13 @@ final class DeviceListModel: ObservableObject {
 
         // A session's sign-in may also have turned Remember on or off since,
         // saving or deleting the keychain item itself. When the user left the
-        // toggle alone and the identity is unchanged, that newer choice
+        // toggle alone and the account is unchanged, that newer choice
         // stands and the keychain is already right: writing the snapshot's
         // flag back would orphan the item or re-save an old password.
         let keepsSessionRemember = current.map {
             device.rememberPassword == editor.device.rememberPassword
                 && $0.rememberPassword != device.rememberPassword
-                && editor.device.identity.hasSameConnectionIdentity(as: device.identity)
+                && editor.device.identity.usesSameCredentialAccount(as: device.identity)
         } ?? false
         // Likewise, a session's sign-in may have saved a newer password over
         // the one the sheet loaded. When Remember stays on for the same
@@ -202,7 +202,7 @@ final class DeviceListModel: ObservableObject {
         let keepsSavedPassword = editor.device.rememberPassword
             && device.rememberPassword
             && password == loadedPassword
-            && editor.device.identity.credentialAccountName == device.identity.credentialAccountName
+            && editor.device.identity.usesSameCredentialAccount(as: device.identity)
         if let current, keepsSessionRemember {
             device.rememberPassword = current.rememberPassword
         } else {
@@ -311,13 +311,10 @@ final class DeviceListModel: ObservableObject {
     /// `bob` in domain `CORP`. Profiles that don't remember their password never
     /// read it.
     func rememberedPasswordIsShared(_ identity: RDPConnectionIdentity, excluding deviceID: UUID) -> Bool {
-        guard let account = identity.credentialAccountName else {
-            return false
-        }
-        return devices.contains { other in
+        devices.contains { other in
             other.id != deviceID
                 && other.rememberPassword
-                && other.identity.credentialAccountName == account
+                && other.identity.usesSameCredentialAccount(as: identity)
         }
     }
 
@@ -341,11 +338,11 @@ final class DeviceListModel: ObservableObject {
 
     /// Keeps the profile's remember-password flag in sync when a session
     /// saves or deletes the keychain credential via the in-session prompt.
-    /// Ignored when the session signed in under a different identity than
-    /// the profile — that credential is not the profile's saved password.
+    /// Ignored when the session signed in to a different account than the
+    /// profile — that credential is not the profile's saved password.
     func recordCredentialPersistence(deviceID: UUID, identity: RDPConnectionIdentity, remembered: Bool) {
         guard var device = devices.first(where: { $0.id == deviceID }),
-              device.identity.hasSameConnectionIdentity(as: identity),
+              device.identity.usesSameCredentialAccount(as: identity),
               device.rememberPassword != remembered
         else {
             return

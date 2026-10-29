@@ -79,7 +79,7 @@ struct RDPConnectionDraft: Equatable, Sendable {
         follow(\.clipboardSharingEnabled)
         follow(\.audioPlaybackEnabled)
         follow(\.rememberPassword)
-        if next.identity.hasSameConnectionIdentity(as: identity) == false {
+        if next.identity.usesSameCredentialAccount(as: identity) == false {
             next.password = ""
         }
         return next

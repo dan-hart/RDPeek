@@ -112,6 +112,11 @@ final class SessionCredentialPolicyTests: XCTestCase {
         let sameMachine = RDPConnectionIdentity(host: "winbox", username: "alice", domain: "CORP")
 
         XCTAssertTrue(SessionCredentialPolicy.keepsRememberedPassword(signingInAs: sameMachine, insteadOf: alice))
+        // One Keychain account, written two ways.
+        XCTAssertTrue(SessionCredentialPolicy.keepsRememberedPassword(
+            signingInAs: RDPConnectionIdentity(host: "winbox", username: "CORP\\alice"),
+            insteadOf: alice
+        ))
         for other in [
             RDPConnectionIdentity(host: "winbox", username: "bob", domain: "CORP"),
             RDPConnectionIdentity(host: "winbox", username: "alice"),
