@@ -47,7 +47,8 @@ client and from a full review of RDPeek, on RDPKit's next release.
   typed in.
 - A server that requires a client certificate says so.
 - Signing in with every field empty to a server that needs a sign-in
-  asks for a user name and password again.
+  asks for a user name and password again, and the sign-in sheet names
+  a field too long to send.
 - “DOMAIN\user” user names sign in to that domain.
 - The remote desktop starts at the window's size in points and grows to
   full Retina resolution on servers that support resizing, so servers
@@ -123,7 +124,8 @@ client and from a full review of RDPeek, on RDPKit's next release.
   synced” appears only after Sync Now.
 - Turning sharing off, or a 30-second share ending, takes back the
   Mac's copy only while the server still holds it, so a copy made on
-  the server since is kept.
+  the server since is kept. Text too large to send empties the server's
+  clipboard, as files too large do, so its older copy cannot come back.
 - With sharing off, nothing of the server's clipboard is fetched. Once
   on, the server's copy at connect reaches the Mac, and files copied on
   the Mac are sent rather than an older server copy.
