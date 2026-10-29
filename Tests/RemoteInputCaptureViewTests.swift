@@ -337,6 +337,21 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertEqual(nextSession.events, [.synchronize(toggleFlags: currentToggleFlags)])
     }
 
+    func testInputWithNoSessionLeavesNothingStaleForTheNextOne() {
+        // Shift's release went to a menu while connecting; the key typed after it shows Shift up,
+        // so the session attached while A is still held gets A, not Shift.
+        let harness = makeHarness()
+        harness.view.inputSession = nil
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: .shift))
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_A), characters: "a"))
+        let nextSession = InputEventRecorder()
+        harness.view.inputSession = nextSession
+        XCTAssertEqual(nextSession.events, [
+            .synchronize(toggleFlags: currentToggleFlags),
+            .keyboard(scancode: RDPKeyboardScancode(code: 0x1E), isReleased: false),
+        ])
+    }
+
     func testCapsLockSynchronizesAndKeepsNumLockOnAndHeldKeysDown() {
         // The synchronize resets the server's keys, so the held Shift is
         // pressed again after it.
