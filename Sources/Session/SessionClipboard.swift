@@ -136,6 +136,7 @@ final class SessionClipboard {
             return
         }
         cancelLocalFileRead()
+        discardFileTransfer()
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         pasteboardChangeCount = pasteboard.changeCount
@@ -222,6 +223,10 @@ final class SessionClipboard {
             return
         }
 
+        if nextChangeCount != pasteboardChangeCount {
+            // A newer local copy replaces a remote one still downloading.
+            discardFileTransfer()
+        }
         pasteboardChangeCount = nextChangeCount
         cancelLocalFileRead()
         let fileURLs = pasteboardFileURLs()
@@ -441,6 +446,13 @@ final class SessionClipboard {
     }
 
     private func finishFileTransfer(_ transfer: SessionRemoteClipboardFileTransfer) {
+        // A local copy made since the last poll is newer than the download,
+        // so it stays.
+        guard pasteboard.changeCount == pasteboardChangeCount else {
+            removeDownloadDirectory(transfer.downloadDirectory)
+            fileTransfer = nil
+            return
+        }
         cancelLocalFileRead()
         pasteboard.clearContents()
         guard pasteboard.writeObjects(transfer.downloadedFileURLs.map { $0 as NSURL }) else {

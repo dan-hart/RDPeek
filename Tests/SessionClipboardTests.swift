@@ -253,6 +253,40 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fileURL), Data())
     }
 
+    func testNewerCopyDropsARemoteFileStillDownloading() throws {
+        let session = RecordedClipboard()
+        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+
+        // A local copy the poll has not seen yet still wins.
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session) {
+            pasteboard.clearContents()
+            pasteboard.setString("local", forType: .string)
+        }
+        XCTAssertEqual(pasteboard.string(forType: .string), "local")
+
+        // So does one the poll has published.
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session) {
+            pasteboard.clearContents()
+            pasteboard.setString("newer local", forType: .string)
+            clipboard.poll()
+        }
+        XCTAssertEqual(session.publishedTexts.last, "newer local")
+        XCTAssertEqual(pasteboard.string(forType: .string), "newer local")
+
+        // And a remote copy of text.
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session) {
+            clipboard.receiveText("remote")
+        }
+        XCTAssertEqual(pasteboard.string(forType: .string), "remote")
+        XCTAssertFalse(toasts.contains { $0.hasPrefix("Remote file copied") })
+    }
+
     // MARK: - Helpers
 
     /// Offers one remote file of `contents` and answers the size request.
@@ -275,6 +309,24 @@ final class SessionClipboardTests: XCTestCase {
             streamID: streamID,
             ok: true,
             data: withUnsafeBytes(of: size) { Data($0) }
+        ))
+    }
+
+    /// Answers the outstanding range request with all of `contents`, after
+    /// running `beforeAnswer`.
+    private func finishRemoteFileDownload(
+        _ contents: Data,
+        to clipboard: SessionClipboard,
+        from session: RecordedClipboard,
+        beforeAnswer: () -> Void = {}
+    ) throws {
+        let request = try XCTUnwrap(session.rangeRequests.last)
+        session.rangeRequests.removeAll()
+        beforeAnswer()
+        clipboard.receiveFileContents(RDPClipboardFileContentsResponse(
+            streamID: request.streamID,
+            ok: true,
+            data: contents
         ))
     }
 
