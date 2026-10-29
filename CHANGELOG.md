@@ -1,5 +1,66 @@
 # Changelog
 
+## Unreleased
+
+Security, input, clipboard, and session fixes from the RDPKit example
+client, on RDPKit 0.4.0.
+
+### Security
+
+- A server certificate that neither this Mac nor RDPeek trusts, or one
+  that differs from the certificate trusted for that host, now stops the
+  connection before any credential is sent. The certificate banner
+  offers Trust and Connect. Profiles that hide certificate warnings
+  still connect, except to a certificate that replaced a trusted one.
+- Trusting a certificate for a host replaces the one trusted before,
+  and a server redirection's certificate is pinned under its own host.
+
+### Remote input
+
+- The remote desktop is told the Mac's keyboard layout instead of US
+  English, and a key that types the same character there is sent as
+  its scancode, so remote input methods see it.
+- ⌘ reaches the remote as the Windows key only together with another
+  key or click, or when tapped alone, so ⌘-Tab and Spotlight no longer
+  open the remote Start menu.
+- Modifiers whose release the window never saw, for example with a
+  menu open or Spotlight up, are released on the next event, and
+  keyboards that report no left/right modifier bits work.
+- Caps Lock and Num Lock follow the Mac when the window regains focus,
+  so keypad digits type digits; keypad Clear no longer toggles Num
+  Lock.
+- F2, F4, F13–F20, the ISO and JIS keys and the context-menu key are
+  sent, the ISO key beside left Shift reaches the remote as that key,
+  and a held key keeps repeating as the same key.
+- Horizontal scrolling goes the right way, trackpad scrolling keeps
+  its fractions, and a drag past the edge of the desktop holds the
+  pointer on the edge.
+
+### Clipboard
+
+- Share for 30 Seconds is offered while sharing is off and no longer
+  turns sharing off when it ends.
+- Copied files are read off the main thread, so a large or iCloud file
+  no longer freezes the window.
+- Remote files download in 1 MiB ranges, so pasting large files from
+  Windows and gnome-remote-desktop no longer fails.
+
+### Sessions
+
+- A graphics update that fails to decode no longer ends the session;
+  RDPeek asks the server for a fresh picture instead.
+- Each session runs on its own thread, so many open windows cannot
+  starve video decoding, and a session that fails or ends can no longer
+  leave its window on Connecting.
+- A redirected server receives the window's size.
+
+### Under the hood
+
+- Updated to RDPKit 0.4.0: timeouts bound every step before the first
+  frame, errors name their reason, and Windows, KRdp and
+  gnome-remote-desktop video and bitmap codecs are faster and more
+  correct.
+
 ## 1.1.1
 
 Compatibility and reliability improvements for Windows and KDE KRdp
