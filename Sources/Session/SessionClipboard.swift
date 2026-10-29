@@ -9,13 +9,15 @@ private let sessionMaximumFileRangeByteCount: UInt64 = 1024 * 1024
 /// fails. The server answers a whole range at once, so this allows a full
 /// range over a link of about 9 KB/s.
 private let sessionFileContentsRequestTimeout: TimeInterval = 120
-/// Characters Windows does not allow in a file name; a pasted file whose
-/// name has one fails to paste there.
+/// Characters Windows does not allow in a file name: these and U+0000 to
+/// U+001F. A pasted file whose name has one fails to paste there.
 private let windowsInvalidFileNameCharacters = CharacterSet(charactersIn: "/\\:*?\"<>|")
-    .union(.controlCharacters)
+    .union(CharacterSet(charactersIn: Unicode.Scalar(0x00) ... Unicode.Scalar(0x1F)))
 /// Device names Windows reserves, with any extension and in any case.
-private let windowsReservedFileNames: Set<String> = Set(["CON", "PRN", "AUX", "NUL"])
-    .union((1 ... 9).flatMap { ["COM\($0)", "LPT\($0)"] })
+private let windowsReservedFileNames: Set<String> = Set(["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"])
+    .union(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "\u{B9}", "\u{B2}", "\u{B3}"].flatMap {
+        ["COM\($0)", "LPT\($0)"]
+    })
 
 /// Where the clipboard bridge sends: the session's `RDPClipboardSession`, or
 /// a test's recorder.
@@ -505,8 +507,10 @@ final class SessionClipboard {
         if name.isEmpty {
             name = "file"
         }
+        // Windows also ignores spaces before the extension: "CON .txt" is
+        // CON.
         let stem = name.prefix { $0 != "." }
-        if windowsReservedFileNames.contains(stem.uppercased()) {
+        if windowsReservedFileNames.contains(stem.trimmingCharacters(in: .whitespaces).uppercased()) {
             name.insert("_", at: stem.endIndex)
         }
 

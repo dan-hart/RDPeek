@@ -436,6 +436,13 @@ final class SessionClipboardTests: XCTestCase {
         }
         XCTAssertEqual(names, ["a_b_.txt", "q_____.txt", "draft", "file", "Notes.txt", "notes-2.txt", "notes-3.TXT"])
 
+        // Only U+0000 to U+001F among the invisible characters: joiners in
+        // Persian words and emoji, soft hyphens and direction marks stay.
+        let kept = ["\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0645}.txt", "\u{1F469}\u{200D}\u{1F4BB}.txt",
+                    "soft\u{00AD}hyphen.txt", "\u{200F}rtl.txt", "del\u{007F}.txt"]
+        XCTAssertEqual(kept.map { SessionClipboard.windowsFileName($0, usedFileNames: &usedFileNames) }, kept)
+        XCTAssertEqual(SessionClipboard.windowsFileName("\u{0001}a\u{001F}.txt", usedFileNames: &usedFileNames), "_a_.txt")
+
         // A "/" Finder shows in a name is a ":" on disk. Files from two
         // folders can share a name.
         let first = try makeLocalFile(named: "a:b.txt", contents: Data())
@@ -452,14 +459,16 @@ final class SessionClipboardTests: XCTestCase {
     func testWindowsDeviceNamesAreNotUsedAsFileNames() {
         var usedFileNames = Set<String>()
         let names = [
-            "con.txt", "NUL", "Aux.tar.gz", "prn.", "com1.log", "LPT9", "CON.TXT",
-            "console.txt", "com10.txt", "lpt0", "nul_.txt", "notes.con",
+            "con.txt", "NUL", "Aux.tar.gz", "prn.", "com1.log", "LPT9", "CON.TXT", "CON .txt",
+            "com0", "LPT0.log", "com\u{B9}.txt", "LPT\u{B3}", "conin$", "CONOUT$.log",
+            "console.txt", "com10.txt", "nul_.txt", "notes.con", "conin.txt",
         ].map {
             SessionClipboard.windowsFileName($0, usedFileNames: &usedFileNames)
         }
         XCTAssertEqual(names, [
-            "con_.txt", "NUL_", "Aux_.tar.gz", "prn_", "com1_.log", "LPT9_", "CON_-2.TXT",
-            "console.txt", "com10.txt", "lpt0", "nul_.txt", "notes.con",
+            "con_.txt", "NUL_", "Aux_.tar.gz", "prn_", "com1_.log", "LPT9_", "CON_-2.TXT", "CON _.txt",
+            "com0_", "LPT0_.log", "com\u{B9}_.txt", "LPT\u{B3}_", "conin$_", "CONOUT$_.log",
+            "console.txt", "com10.txt", "nul_.txt", "notes.con", "conin.txt",
         ])
     }
 
