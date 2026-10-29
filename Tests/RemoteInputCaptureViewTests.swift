@@ -597,6 +597,26 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    func testRightOptionIsAltWithAKeyTheLayoutGivesNoOptionOutput() {
+        // A custom layout can give a key no output with Option without making
+        // it a dead key. Option types nothing with it, so it goes as Alt-L.
+        let harness = makeHarness()
+        let lKey = UInt16(kVK_ANSI_L)
+        let lScancode = RDPKeyboardScancode(code: 0x26)
+        harness.view.isDeadKey = { _, _ in false }
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: lKey, charactersIgnoringModifiers: "l", flags: .rightOptionDown))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: lKey, charactersIgnoringModifiers: "l", flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .rightAlt, isReleased: false),
+            .keyboard(scancode: lScancode, isReleased: false),
+            .keyboard(scancode: lScancode, isReleased: true),
+            .keyboard(scancode: .rightAlt, isReleased: true),
+        ])
+    }
+
     func testRightOptionIsAltInAControlChord() {
         // Control makes the key a shortcut even where Option types a character.
         let harness = makeHarness()
@@ -1130,6 +1150,10 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         let recorder = InputEventRecorder()
         let view = RemoteInputCaptureNSView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
         view.rdpFrame = makeFrameMetadata(width: 200, height: 100)
+        // Option-E, as on US, is the dead key these tests type, whatever the Mac's layout is.
+        view.isDeadKey = { keyCode, modifierFlags in
+            keyCode == UInt16(kVK_ANSI_E) && modifierFlags.contains(.option)
+        }
         let window = KeyWindow(
             contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
             styleMask: [.borderless],

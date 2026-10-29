@@ -1,6 +1,8 @@
-// Vendored from RDPKit's RDPClient example (Examples/RDPClient/Sources/KeyboardLayouts.swift);
-// keep it in step with that file and with WindowsKeyboardLayoutTables.swift.
+// Vendored from RDPKit's RDPClient example (Examples/RDPClient/Sources/KeyboardLayouts.swift),
+// except MacRDPDeadKeys, which is RDPeek's own; keep the rest in step with that file and with
+// WindowsKeyboardLayoutTables.swift.
 
+import AppKit
 import Carbon.HIToolbox
 import RDPKit
 
@@ -206,5 +208,75 @@ struct MacRDPWindowsKeyboardLayout {
         }
         let character = isShifted ? shifted[index] : unshifted[index]
         return character == "\0" ? nil : character
+    }
+}
+
+/// Which keys of a Mac keyboard layout are dead keys, read from its key translation ('uchr')
+/// data. Option types nothing with a dead key, such as Option-E on US, and the next key types its
+/// accent; a custom layout can also give a key no output with Option at all. Where the layout
+/// cannot tell, a key counts as a dead key, as every key Option types nothing with on Apple's
+/// layouts is one.
+struct MacRDPDeadKeys {
+    /// The current layout's, kept until the user switches layouts.
+    @MainActor private static var current: (identifier: String, deadKeys: MacRDPDeadKeys?)?
+
+    private let layoutData: CFData
+
+    init?(_ source: TISInputSource) {
+        guard let property = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else {
+            return nil
+        }
+        layoutData = Unmanaged<CFData>.fromOpaque(property).takeUnretainedValue()
+    }
+
+    /// Whether the key is a dead key with the current keyboard layout, whose data is read again
+    /// only once the user switches layouts.
+    @MainActor
+    static func isDeadKeyInCurrentLayout(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) -> Bool {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let property = TISGetInputSourceProperty(source, kTISPropertyInputSourceID)
+        else {
+            return true
+        }
+        let identifier = Unmanaged<CFString>.fromOpaque(property).takeUnretainedValue() as String
+        if current?.identifier != identifier {
+            current = (identifier, MacRDPDeadKeys(source))
+        }
+        return current?.deadKeys?.isDeadKey(keyCode: keyCode, modifierFlags: modifierFlags) ?? true
+    }
+
+    /// Whether the key, with `modifierFlags`, leaves the layout waiting for the next key.
+    func isDeadKey(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) -> Bool {
+        guard let bytes = CFDataGetBytePtr(layoutData) else {
+            return true
+        }
+        let maxLength = 4
+        var characters = [UniChar](repeating: 0, count: maxLength)
+        var length = 0
+        var deadKeyState: UInt32 = 0
+        let status = bytes.withMemoryRebound(to: UCKeyboardLayout.self, capacity: 1) { layout in
+            UCKeyTranslate(
+                layout,
+                keyCode,
+                UInt16(kUCKeyActionDown),
+                Self.modifierKeyState(modifierFlags),
+                UInt32(LMGetKbdType()),
+                0,
+                &deadKeyState,
+                maxLength,
+                &length,
+                &characters
+            )
+        }
+        return status != noErr || deadKeyState != 0
+    }
+
+    /// UCKeyTranslate takes the Carbon modifier bits (EventModifiers) shifted down by 8.
+    private static func modifierKeyState(_ modifierFlags: NSEvent.ModifierFlags) -> UInt32 {
+        let carbonModifiers: [(flag: NSEvent.ModifierFlags, bit: Int)] = [
+            (.command, cmdKey), (.shift, shiftKey), (.capsLock, alphaLock), (.option, optionKey), (.control, controlKey),
+        ]
+        let modifiers = carbonModifiers.filter { modifierFlags.contains($0.flag) }.reduce(0) { $0 | $1.bit }
+        return UInt32(modifiers >> 8) & 0xFF
     }
 }

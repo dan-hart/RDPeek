@@ -131,22 +131,33 @@ final class RemoteInputMappingTests: XCTestCase {
     // MARK: - Characters typed with Option
 
     func testOptionTypesOnlyWhereItChangesWhatTheKeyTypes() {
+        /// `deadKey` nil fails the test if the dead-key check is asked at all.
         func optionTypes(
             _ characters: String,
             ignoringModifiers: String,
-            _ modifierFlags: NSEvent.ModifierFlags = .option
+            _ modifierFlags: NSEvent.ModifierFlags = .option,
+            deadKey: Bool? = nil
         ) -> Bool {
             MacRDPKeyboardMapping.optionTypes(
                 characters,
                 charactersIgnoringModifiers: ignoringModifiers,
-                modifierFlags: modifierFlags
+                modifierFlags: modifierFlags,
+                isDeadKey: {
+                    guard let deadKey else {
+                        XCTFail("Asked whether a key that types something is a dead key")
+                        return false
+                    }
+                    return deadKey
+                }()
             )
         }
         // German Option-L and Shift-Option-7.
         XCTAssertTrue(optionTypes("@", ignoringModifiers: "l"))
         XCTAssertTrue(optionTypes("\\", ignoringModifiers: "/", [.option, .shift]))
         // US Option-E, a dead key: it types nothing, and the next key the accent.
-        XCTAssertTrue(optionTypes("", ignoringModifiers: "e"))
+        XCTAssertTrue(optionTypes("", ignoringModifiers: "e", deadKey: true))
+        // A key a custom layout gives no output with Option, which is no dead key.
+        XCTAssertFalse(optionTypes("", ignoringModifiers: "e", deadKey: false))
         // Option changed nothing, or typed a control or private-use character
         // (F4, the Apple logo).
         XCTAssertFalse(optionTypes("l", ignoringModifiers: "l"))
@@ -157,6 +168,19 @@ final class RemoteInputMappingTests: XCTestCase {
         XCTAssertFalse(optionTypes("é", ignoringModifiers: "e", []))
         XCTAssertFalse(optionTypes("@", ignoringModifiers: "l", [.option, .command]))
         XCTAssertFalse(optionTypes("@", ignoringModifiers: "l", [.option, .control]))
+    }
+
+    func testDeadKeysFollowTheMacLayoutsKeyTranslation() throws {
+        // The US layout, looked up by its ID rather than the Mac's current one.
+        let filter = [kTISPropertyInputSourceID as String: "com.apple.keylayout.US"] as CFDictionary
+        let sources = try XCTUnwrap(TISCreateInputSourceList(filter, true)?.takeRetainedValue() as? [TISInputSource])
+        let deadKeys = try XCTUnwrap(sources.first.flatMap(MacRDPDeadKeys.init))
+        let eKey = UInt16(kVK_ANSI_E)
+        // Option-E starts "´"; Option-L types "¬", Shift-Option-E "´" itself and E "e".
+        XCTAssertTrue(deadKeys.isDeadKey(keyCode: eKey, modifierFlags: .option))
+        XCTAssertFalse(deadKeys.isDeadKey(keyCode: UInt16(kVK_ANSI_L), modifierFlags: .option))
+        XCTAssertFalse(deadKeys.isDeadKey(keyCode: eKey, modifierFlags: [.option, .shift]))
+        XCTAssertFalse(deadKeys.isDeadKey(keyCode: eKey, modifierFlags: []))
     }
 
     // MARK: - A dead key's accent ahead of a key it does not compose with

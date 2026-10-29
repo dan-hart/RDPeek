@@ -17,6 +17,9 @@ final class RemoteInputCaptureNSView: NSView {
     var rdpFrame: RDPFrameMetadata?
     /// The layout the session announced; it decides which keys can go as scancodes.
     var keyboardLayout = RDPKeyboardLayout.unitedStates
+    /// Whether the Mac keyboard layout makes the key, with these modifiers, a dead key. Tests
+    /// substitute a fixed layout.
+    var isDeadKey: @MainActor (UInt16, NSEvent.ModifierFlags) -> Bool = MacRDPDeadKeys.isDeadKeyInCurrentLayout
     var inputSession: (any RemoteInputEventSink)? {
         willSet {
             if inputSession != nil, inputSession !== newValue {
@@ -327,7 +330,8 @@ final class RemoteInputCaptureNSView: NSView {
             && MacRDPKeyboardMapping.optionTypes(
                 event.characters,
                 charactersIgnoringModifiers: event.charactersIgnoringModifiers,
-                modifierFlags: event.modifierFlags
+                modifierFlags: event.modifierFlags,
+                isDeadKey: isDeadKey(event.keyCode, event.modifierFlags)
             )
     }
 
@@ -707,12 +711,15 @@ enum MacRDPKeyboardMapping {
     /// Whether Option, with no ⌘ or ⌃ to make the key a shortcut, made it type what the Mac
     /// layout puts on Option: a character the key does not type without Option, such as "@"
     /// with Option-L on German, or nothing, for a dead key such as Option-E on US, whose accent
-    /// the next key types. AppKit keeps Shift in `charactersIgnoringModifiers`, so Shift-Option
-    /// characters count. Control and function-key characters do not.
+    /// the next key types. `isDeadKey`, asked only for a key that types nothing, tells a dead
+    /// key from a key a custom layout gives no output with Option, which Option does not type
+    /// with. AppKit keeps Shift in `charactersIgnoringModifiers`, so Shift-Option characters
+    /// count. Control and function-key characters do not.
     static func optionTypes(
         _ characters: String?,
         charactersIgnoringModifiers: String?,
-        modifierFlags: NSEvent.ModifierFlags
+        modifierFlags: NSEvent.ModifierFlags,
+        isDeadKey: @autoclosure () -> Bool
     ) -> Bool {
         guard modifierFlags.contains(.option),
               modifierFlags.isDisjoint(with: [.command, .control]),
@@ -721,7 +728,7 @@ enum MacRDPKeyboardMapping {
         else {
             return false
         }
-        return isPrintable(characters)
+        return characters.isEmpty ? isDeadKey() : isPrintable(characters)
     }
 
     /// What a dead key left ahead of the output of a key it does not compose with: macOS types
