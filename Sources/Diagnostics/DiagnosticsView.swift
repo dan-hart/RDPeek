@@ -212,14 +212,6 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                         .textSelection(.enabled)
                 }
 
-                if let decodeError = snapshot.renderMetrics.lastDecodeError {
-                    InlineNotice(
-                        title: "Decode Error",
-                        message: decodeError,
-                        systemImage: "exclamationmark.triangle.fill"
-                    )
-                }
-
                 if snapshot.renderMetrics.hasActivity || snapshot.isConnecting {
                     PerformanceMetricsView(metrics: snapshot.renderMetrics, framePacing: snapshot.framePacing)
                 }
@@ -708,28 +700,6 @@ private struct DiagnosticRow: View {
             Text(verbatim: value)
                 .textSelection(.enabled)
         }
-    }
-}
-
-private struct InlineNotice: View {
-    var title: String
-    var message: String
-    var systemImage: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: systemImage)
-                .foregroundStyle(.yellow)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(verbatim: title)
-                    .font(.headline)
-                Text(verbatim: message)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(12)
-        .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
