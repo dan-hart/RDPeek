@@ -66,7 +66,7 @@ final class DeviceListModelTests: XCTestCase {
     func testConfirmDeletionSurfacesKeychainDeleteFailure() throws {
         let device = makeDevice()
         let harness = try makeHarness(devices: [device])
-        harness.credentials.deleteError = KeychainCredentialError.unexpectedStatus(-1)
+        harness.credentials.deleteError = KeychainError.unexpectedStatus(-1)
 
         harness.model.confirmDeletion(of: device)
 
@@ -277,7 +277,7 @@ final class DeviceListModelTests: XCTestCase {
     func testEditTreatsCredentialReadFailureAsNoSavedPassword() throws {
         let device = makeDevice(rememberPassword: true)
         let harness = try makeHarness(devices: [device])
-        harness.credentials.readError = KeychainCredentialError.unexpectedStatus(-1)
+        harness.credentials.readError = KeychainError.unexpectedStatus(-1)
 
         harness.model.edit(device)
 
