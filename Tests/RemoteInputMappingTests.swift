@@ -31,6 +31,36 @@ final class RemoteInputMappingTests: XCTestCase {
         )))
     }
 
+    func testCommandSendsWindowsKeyOnlyWithAnotherKeyOrAsATap() {
+        let leftWindows = RDPKeyboardScancode(code: 0x5B, isExtended: true)
+        var inputState = RDPInputStateTracker()
+        var windowsKey = MacRDPDeferredWindowsKey()
+
+        // Command released alone: a Win tap.
+        windowsKey.press(leftWindows)
+        XCTAssertEqual(windowsKey.release(leftWindows), [
+            .keyboard(scancode: leftWindows, isReleased: false),
+            .keyboard(scancode: leftWindows, isReleased: true),
+        ])
+
+        // Another key while Command is held: Win down goes first and is then tracked as pressed.
+        windowsKey.press(leftWindows)
+        XCTAssertEqual(windowsKey.flush(&inputState), [.keyboard(scancode: leftWindows, isReleased: false)])
+        XCTAssertTrue(inputState.isScancodePressed(leftWindows))
+        XCTAssertEqual(windowsKey.release(leftWindows), [])
+
+        // A shortcut handled locally, a missed release, or focus loss: nothing at all.
+        windowsKey.press(leftWindows)
+        windowsKey.noteChordedElsewhere()
+        XCTAssertEqual(windowsKey.release(leftWindows), [])
+        windowsKey.press(leftWindows)
+        windowsKey.discard(leftWindows)
+        XCTAssertFalse(windowsKey.isHeld(leftWindows))
+        windowsKey.press(leftWindows)
+        windowsKey.reset()
+        XCTAssertFalse(windowsKey.isHeld(leftWindows))
+    }
+
     func testRightSideAndCommandModifiersUseExtendedScancodes() throws {
         let expected: [Int: RDPKeyboardScancode] = [
             kVK_RightControl: RDPKeyboardScancode(code: 0x1D, isExtended: true),

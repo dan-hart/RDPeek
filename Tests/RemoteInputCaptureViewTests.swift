@@ -15,12 +15,12 @@ final class RemoteInputCaptureViewTests: XCTestCase {
 
     func testModifierPressAndReleaseFollowDeviceFlags() {
         let harness = makeHarness()
-        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
-        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftWindows, isReleased: false)])
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: .leftControlDown))
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftControl, isReleased: false)])
 
         harness.recorder.events.removeAll()
-        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
-        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftWindows, isReleased: true)])
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: []))
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftControl, isReleased: true)])
     }
 
     func testModifierWithoutSideBitsFollowsSideIndependentFlag() {
@@ -45,40 +45,62 @@ final class RemoteInputCaptureViewTests: XCTestCase {
 
     func testRepeatedFlagsStateSendsNoDuplicateEvents() {
         let harness = makeHarness()
-        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: .leftControlDown))
         harness.recorder.events.removeAll()
 
-        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: .leftControlDown))
         XCTAssertEqual(harness.recorder.events, [])
     }
 
-    func testMissedModifierReleaseDoesNotInvertPhase() {
-        // Hold Cmd, then Cmd+Tab away: the release happens while another
-        // app is active, so the view only sees the window resign key.
+    func testBothSidesWithoutSideBitsAreReleasedWithTheSharedFlag() {
+        // Without side bits, releasing one Shift leaves .shift set, so the
+        // other side's release only shows when the flag clears.
         let harness = makeHarness()
-        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        let leftShift = RDPKeyboardScancode(code: 0x2A)
+        let rightShift = RDPKeyboardScancode(code: 0x36)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: .shift))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_RightShift), flags: .shift))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_RightShift), flags: .shift))
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: leftShift, isReleased: false),
+            .keyboard(scancode: rightShift, isReleased: false),
+        ])
+
+        harness.recorder.events.removeAll()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: []))
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: leftShift, isReleased: true),
+            .keyboard(scancode: rightShift, isReleased: true),
+        ])
+    }
+
+    func testMissedModifierReleaseDoesNotInvertPhase() {
+        // Hold Control, then leave the window: the release happens while
+        // another app is active, so the view only sees the window resign key.
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: .leftControlDown))
         harness.recorder.events.removeAll()
         resignKey(harness)
-        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftWindows, isReleased: true)])
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftControl, isReleased: true)])
 
-        // The next physical Cmd press must be sent as a press, not as the
-        // inverted release the old toggle-based logic produced.
+        // The next physical Control press must be sent as a press, not as
+        // the inverted release the old toggle-based logic produced.
         harness.recorder.events.removeAll()
-        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
-        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftWindows, isReleased: false)])
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: .leftControlDown))
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftControl, isReleased: false)])
     }
 
     func testKeyDownResyncsStaleModifier() {
-        // Cmd-down is tracked, then released without the view ever seeing
-        // a flagsChanged. The next keystroke carries the truth in its
+        // Control-down is tracked, then released without the view ever
+        // seeing a flagsChanged. The next keystroke carries the truth in its
         // modifier flags and must repair the remote state first.
         let harness = makeHarness()
-        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: .leftControlDown))
         harness.recorder.events.removeAll()
 
         harness.view.keyDown(with: keyEvent(.keyDown, keyCode: 0, characters: "a"))
         XCTAssertEqual(harness.recorder.events, [
-            .keyboard(scancode: .leftWindows, isReleased: true),
+            .keyboard(scancode: .leftControl, isReleased: true),
             .unicode(codeUnit: 0x61, isReleased: false),
             .unicode(codeUnit: 0x61, isReleased: true),
         ])
@@ -86,12 +108,83 @@ final class RemoteInputCaptureViewTests: XCTestCase {
 
     func testMouseDownResyncsStaleModifier() {
         let harness = makeHarness()
-        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: .leftControlDown))
         harness.recorder.events.removeAll()
 
         harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: NSPoint(x: 100, y: 50)))
-        XCTAssertEqual(harness.recorder.events.first, .keyboard(scancode: .leftWindows, isReleased: true))
+        XCTAssertEqual(harness.recorder.events.first, .keyboard(scancode: .leftControl, isReleased: true))
         XCTAssertTrue(isPointerButton(harness.recorder.events.last, button: .left, isDown: true))
+    }
+
+    // MARK: - Command as the Windows key
+
+    func testCommandReleasedAloneTapsTheWindowsKey() {
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        XCTAssertEqual(harness.recorder.events, [])
+
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .leftWindows, isReleased: false),
+            .keyboard(scancode: .leftWindows, isReleased: true),
+        ])
+    }
+
+    func testCommandTabAwaySendsNoWindowsKey() {
+        // Cmd-Tab: the view sees Command go down, then the window resign
+        // key. A Win tap would open the remote Start menu.
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        resignKey(harness)
+        XCTAssertEqual(harness.recorder.events, [])
+    }
+
+    func testCommandClickSendsTheWindowsKeyBeforeTheButton() {
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: NSPoint(x: 100, y: 50), flags: .leftCommandDown))
+        XCTAssertEqual(harness.recorder.events.count, 2)
+        XCTAssertEqual(harness.recorder.events.first, .keyboard(scancode: .leftWindows, isReleased: false))
+        XCTAssertTrue(isPointerButton(harness.recorder.events.last, button: .left, isDown: true))
+
+        harness.recorder.events.removeAll()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftWindows, isReleased: true)])
+    }
+
+    func testCommandChordTheRemoteNeverSeesSendsNoTap() {
+        // A Command chord on a key with no scancode is left to the menus.
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        let handled = harness.view.performKeyEquivalent(
+            with: keyEvent(.keyDown, keyCode: UInt16(kVK_VolumeUp), flags: .leftCommandDown)
+        )
+        XCTAssertFalse(handled)
+
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+        XCTAssertEqual(harness.recorder.events, [])
+    }
+
+    func testCommandFoundAlreadyHeldIsNoTap() {
+        // Cmd-Shift-Tab into this window, then Shift and Command released:
+        // Command was never seen going down here, so it sends nothing.
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+        XCTAssertEqual(harness.recorder.events, [])
+    }
+
+    func testMissedCommandReleaseDropsTheDeferredWindowsKey() {
+        // Command released while another app (Spotlight) had the keyboard:
+        // Win never reached the server, so the next key must not take it
+        // down there.
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_LeftArrow)))
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: RDPKeyboardScancode(code: 0x4B, isExtended: true), isReleased: false),
+        ])
     }
 
     // MARK: - Window resigning key
@@ -387,12 +480,18 @@ private final class InputEventRecorder: RemoteInputEventSink {
 
 private extension UInt16 {
     static let leftCommand: UInt16 = 55
+    static let leftControl: UInt16 = 59
 }
 
 private extension NSEvent.ModifierFlags {
     /// `.command` plus the NX_DEVICELCMDKEYMASK device-dependent bit.
     static let leftCommandDown = NSEvent.ModifierFlags(
         rawValue: NSEvent.ModifierFlags.command.rawValue | 0x0000_0008
+    )
+
+    /// `.control` plus the NX_DEVICELCTLKEYMASK device-dependent bit.
+    static let leftControlDown = NSEvent.ModifierFlags(
+        rawValue: NSEvent.ModifierFlags.control.rawValue | 0x0000_0001
     )
 
     /// `.shift` plus the NX_DEVICELSHIFTKEYMASK device-dependent bit.
@@ -403,4 +502,5 @@ private extension NSEvent.ModifierFlags {
 
 private extension RDPKeyboardScancode {
     static let leftWindows = RDPKeyboardScancode(code: 0x005B, isExtended: true)
+    static let leftControl = RDPKeyboardScancode(code: 0x001D)
 }

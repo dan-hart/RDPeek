@@ -34,6 +34,7 @@ final class RemoteInputCaptureNSView: NSView {
     private var trackingArea: NSTrackingArea?
     private var inputState = RDPInputStateTracker()
     private var pressedKeyScancodes = Set<RDPKeyboardScancode>()
+    private var deferredWindowsKey = MacRDPDeferredWindowsKey()
     private var wheelAccumulator = RDPScrollWheelAccumulator()
 
     override var acceptsFirstResponder: Bool {
@@ -194,6 +195,12 @@ final class RemoteInputCaptureNSView: NSView {
               event.modifierFlags.intersection([.command, .control]).isEmpty == false,
               let scancode = MacRDPKeyboardMapping.scancode(forKeyCode: event.keyCode)
         else {
+            // A Command chord the remote never sees, such as one on a key
+            // with no scancode that a menu may take, must not leave Command's
+            // release to tap the Windows key there.
+            if event.modifierFlags.contains(.command) {
+                deferredWindowsKey.noteChordedElsewhere()
+            }
             return false
         }
         syncModifierKeys(with: event)
@@ -248,10 +255,13 @@ final class RemoteInputCaptureNSView: NSView {
             // The key code names the side that changed, so on keyboards that
             // report no side bits the side-independent flag tells its state.
             let isDown = modifier.isDown(in: event.modifierFlags)
-            if isDown != inputState.isScancodePressed(modifier.scancode) {
-                events.append(inputState.keyboard(scancode: modifier.scancode, isReleased: isDown == false))
+            if isDown != isModifierPressed(modifier.scancode) {
+                events += modifierEvents(modifier.scancode, isDown: isDown)
             }
         }
+        // After the change itself, so that Command released alone still sends
+        // its deferred tap. Once the shared flag clears, this also releases
+        // the other side of a keyboard that reports no side bits.
         events += modifierSyncEvents(for: event.modifierFlags)
         inputSession?.send(events)
     }
@@ -262,16 +272,46 @@ final class RemoteInputCaptureNSView: NSView {
     /// a key is pressed only when its own side bit shows it down, since a
     /// keyboard that reports no side bits does not say which side is held.
     private func modifierSyncEvents(for modifierFlags: NSEvent.ModifierFlags) -> [RDPSlowPathInputEvent] {
-        MacRDPModifierKey.all.compactMap { modifier in
-            let isPressed = inputState.isScancodePressed(modifier.scancode)
-            if isPressed, modifier.isDown(in: modifierFlags) == false {
-                return inputState.keyboard(scancode: modifier.scancode, isReleased: true)
+        MacRDPModifierKey.all.flatMap { modifier -> [RDPSlowPathInputEvent] in
+            let scancode = modifier.scancode
+            if modifier.isDown(in: modifierFlags) == false {
+                // A deferred Windows key whose release the view missed never
+                // reached the server, so it is dropped without a tap.
+                deferredWindowsKey.discard(scancode)
+                return inputState.isScancodePressed(scancode) ? [inputState.keyboard(scancode: scancode, isReleased: true)] : []
             }
-            if isPressed == false, modifier.isSideDown(in: modifierFlags) {
-                return inputState.keyboard(scancode: modifier.scancode, isReleased: false)
+            guard isModifierPressed(scancode) == false, modifier.isSideDown(in: modifierFlags) else {
+                return []
             }
-            return nil
+            let events = modifierEvents(scancode, isDown: true)
+            // Command found held, not seen going down, may be left over from
+            // a Cmd-Tab into this window; releasing it alone is no tap.
+            if MacRDPDeferredWindowsKey.isWindowsKey(scancode) {
+                deferredWindowsKey.noteChordedElsewhere()
+            }
+            return events
         }
+    }
+
+    private func isModifierPressed(_ scancode: RDPKeyboardScancode) -> Bool {
+        inputState.isScancodePressed(scancode) || deferredWindowsKey.isHeld(scancode)
+    }
+
+    /// The events that press or release a modifier. A Windows key not yet on
+    /// the server is held back by `deferredWindowsKey`, and any other press
+    /// sends a held-back Windows key down first.
+    private func modifierEvents(_ scancode: RDPKeyboardScancode, isDown: Bool) -> [RDPSlowPathInputEvent] {
+        if MacRDPDeferredWindowsKey.isWindowsKey(scancode), inputState.isScancodePressed(scancode) == false {
+            if isDown {
+                deferredWindowsKey.press(scancode)
+                return []
+            }
+            return deferredWindowsKey.release(scancode)
+        }
+        if isDown {
+            return deferredWindowsKey.flush(&inputState) + [inputState.keyboard(scancode: scancode, isReleased: false)]
+        }
+        return [inputState.keyboard(scancode: scancode, isReleased: true)]
     }
 
     private func syncModifierKeys(with event: NSEvent) {
@@ -302,7 +342,8 @@ final class RemoteInputCaptureNSView: NSView {
         guard let inputEvent = inputState.pointerButton(button, isDown: isDown, at: remotePoint(from: event)) else {
             return
         }
-        inputSession?.send(inputEvent)
+        let windowsKeyEvents = isDown ? deferredWindowsKey.flush(&inputState) : []
+        inputSession?.send(windowsKeyEvents + [inputEvent])
     }
 
     private func pointerButton(for event: NSEvent) -> RDPPointerButton? {
@@ -324,8 +365,8 @@ final class RemoteInputCaptureNSView: NSView {
         } else {
             pressedKeyScancodes.insert(scancode)
         }
-        let keyboardEvent = inputState.keyboard(scancode: scancode, isReleased: isReleased)
-        inputSession?.send(keyboardEvent)
+        let windowsKeyEvents = isReleased ? [] : deferredWindowsKey.flush(&inputState)
+        inputSession?.send(windowsKeyEvents + [inputState.keyboard(scancode: scancode, isReleased: isReleased)])
     }
 
     private func releaseEventsForPressedKeys() -> [RDPSlowPathInputEvent] {
@@ -336,8 +377,10 @@ final class RemoteInputCaptureNSView: NSView {
         return events
     }
 
+    /// A Windows key still deferred never reached the server, so nothing is sent for it.
     private func releasePressedInputs() {
         pressedKeyScancodes.removeAll()
+        deferredWindowsKey.reset()
         let releaseEvents = inputState.releasePressedInputs()
         inputSession?.send(releaseEvents)
     }
@@ -369,6 +412,68 @@ enum MacRDPScrollWheel {
     ) -> (vertical: Double, horizontal: Double) {
         let scale = hasPreciseScrollingDeltas ? unitsPerPoint : RDPScrollWheelAccumulator.unitsPerNotch
         return (Double(deltaY) * scale, -Double(deltaX) * scale)
+    }
+}
+
+/// Command is sent as the Windows key, and a Windows key pressed and released with nothing in
+/// between opens the server's Start menu (GNOME Activities, the KDE launcher). Command chords the
+/// server never sees, such as Cmd-Tab and Spotlight, must not reach it as such a tap, so Win
+/// down is sent only before another key or button goes to the server while Command is held, or as
+/// a tap when Command is released alone.
+struct MacRDPDeferredWindowsKey {
+    private var heldScancodes: [RDPKeyboardScancode] = []
+    private var isChordedElsewhere = false
+
+    static func isWindowsKey(_ scancode: RDPKeyboardScancode) -> Bool {
+        scancode.isExtended && (scancode.code == 0x5B || scancode.code == 0x5C)
+    }
+
+    func isHeld(_ scancode: RDPKeyboardScancode) -> Bool {
+        heldScancodes.contains(scancode)
+    }
+
+    mutating func press(_ scancode: RDPKeyboardScancode) {
+        if heldScancodes.contains(scancode) == false {
+            heldScancodes.append(scancode)
+        }
+    }
+
+    /// Sends the held Windows keys down, ahead of another key or button.
+    mutating func flush(_ inputState: inout RDPInputStateTracker) -> [RDPSlowPathInputEvent] {
+        defer {
+            reset()
+        }
+        return heldScancodes.map { inputState.keyboard(scancode: $0, isReleased: false) }
+    }
+
+    /// Command was used for something that never reached the server, for example a menu
+    /// shortcut, so releasing it sends nothing.
+    mutating func noteChordedElsewhere() {
+        isChordedElsewhere = heldScancodes.isEmpty == false
+    }
+
+    mutating func release(_ scancode: RDPKeyboardScancode) -> [RDPSlowPathInputEvent] {
+        guard let index = heldScancodes.firstIndex(of: scancode) else {
+            return []
+        }
+        heldScancodes.remove(at: index)
+        let isTap = isChordedElsewhere == false
+        if heldScancodes.isEmpty {
+            isChordedElsewhere = false
+        }
+        return isTap ? [.keyboard(scancode: scancode, isReleased: false), .keyboard(scancode: scancode, isReleased: true)] : []
+    }
+
+    mutating func discard(_ scancode: RDPKeyboardScancode) {
+        heldScancodes.removeAll { $0 == scancode }
+        if heldScancodes.isEmpty {
+            isChordedElsewhere = false
+        }
+    }
+
+    mutating func reset() {
+        heldScancodes.removeAll()
+        isChordedElsewhere = false
     }
 }
 
