@@ -978,9 +978,6 @@ final class SessionViewController: NSViewController {
             port: configuration.port,
             sha256: finishedReport.certificateSHA256
         )
-        if previewFrame == nil {
-            previewFrame = finishedReport.rdpGraphicsFirstFrame.map(RDPFrameMetadata.init)
-        }
         isConnecting = false
         activeConnectionID = nil
         activeCancellation = nil
