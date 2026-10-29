@@ -40,9 +40,11 @@ struct KeychainService: Sendable {
             throw KeychainError.unexpectedStatus(updateStatus)
         }
 
+        // No kSecAttrAccessible: items live in the file-based login
+        // keychain, which ignores it (only the data-protection keychain
+        // honors it).
         var query = baseQuery(account: account)
         query[kSecValueData as String] = data
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let addStatus = SecItemAdd(query as CFDictionary, nil)
         if addStatus == errSecDuplicateItem {
             // Another writer (editor vs. session persistence) added the
