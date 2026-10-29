@@ -9,6 +9,15 @@ enum CertificateRefusal: Equatable {
     case changed
 }
 
+/// The option behind `acceptsUntrusted`, as PC settings and the defaults
+/// for new PCs show it. Profiles save it as `hideCertificateWarnings`.
+enum UntrustedCertificatesOption {
+    static let title = "Accept untrusted certificates"
+    static let help = "Connect even when neither this Mac nor RDPeek trusts the server's certificate, "
+        + "and send your credentials without asking. Anyone able to intercept the connection could "
+        + "pose as the server and capture them. A certificate that replaced one you trusted is still refused."
+}
+
 /// Sendable because UserDefaults is thread-safe; the session thread checks certificates.
 struct TrustedCertificateStore: @unchecked Sendable {
     private let defaults: UserDefaults

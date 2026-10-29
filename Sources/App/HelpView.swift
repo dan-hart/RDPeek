@@ -64,9 +64,12 @@ struct HelpView: View {
                             "until you trust it instead."
                     )
                     HelpBody(
-                        "With “Accept untrusted certificates” on, a PC connects with a " +
-                            "certificate this Mac does not trust without asking. A " +
-                            "certificate that replaced one you trusted is still refused."
+                        "With “\(UntrustedCertificatesOption.title)” on, a PC connects " +
+                            "without asking when neither this Mac nor RDPeek trusts the " +
+                            "certificate, and sends your credentials. Anyone able to " +
+                            "intercept the connection could pose as the server and " +
+                            "capture them. A certificate that replaced one you trusted " +
+                            "is still refused."
                     )
                 }
 
