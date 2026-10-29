@@ -62,7 +62,11 @@ final class DeviceListModel: ObservableObject {
         self.defaults = defaults
         let storedSortOrder = defaults.string(forKey: "device-sort-order")
         sortOrder = storedSortOrder.flatMap(DeviceSortOrder.init(rawValue:)) ?? .byName
-        devices = store.devices()
+        do {
+            devices = try store.devices()
+        } catch {
+            errorMessage = String(describing: error)
+        }
     }
 
     var filteredDevices: [DeviceProfile] {
@@ -158,6 +162,14 @@ final class DeviceListModel: ObservableObject {
             throw DeviceValidationError.missingPasswordForKeychain
         }
 
+        // The editor works on a snapshot from sheet-open time; a session may
+        // have connected since, so carry the store's timestamp over instead
+        // of reverting it. Reading first also stops an unreadable store
+        // before any keychain change.
+        if let current = try store.devices().first(where: { $0.id == device.id }) {
+            device.lastConnectedAt = current.lastConnectedAt
+        }
+
         // The keychain entry is keyed by identity, so drop the old entry when
         // host, port, username, or domain changed — unless another profile
         // still connects with that identity and would lose its password.
@@ -186,13 +198,6 @@ final class DeviceListModel: ObservableObject {
            let account = device.identity.credentialAccountName
         {
             credentialCache.setPassword(password, for: account)
-        }
-
-        // The editor works on a snapshot from sheet-open time; a session may
-        // have connected since, so carry the store's timestamp over instead
-        // of reverting it.
-        if let current = store.devices().first(where: { $0.id == device.id }) {
-            device.lastConnectedAt = current.lastConnectedAt
         }
 
         devices = try store.save(device)

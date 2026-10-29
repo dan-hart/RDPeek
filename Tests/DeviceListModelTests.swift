@@ -11,6 +11,22 @@ final class DeviceListModelTests: XCTestCase {
         let defaults: UserDefaults
     }
 
+    // MARK: - init
+
+    func testInitSurfacesUnreadableStore() throws {
+        let defaults = try makeIsolatedDefaults()
+        defaults.set(Data("not json".utf8), forKey: "device-profiles.v1")
+
+        let model = DeviceListModel(
+            credentialStore: CredentialStoreRecorder(),
+            credentialCache: InMemoryCredentialCache(),
+            defaults: defaults
+        )
+
+        XCTAssertEqual(model.devices, [])
+        XCTAssertNotNil(model.errorMessage)
+    }
+
     // MARK: - confirmDeletion
 
     func testConfirmDeletionKeepsCredentialSharedWithAnotherProfile() throws {
@@ -203,7 +219,7 @@ final class DeviceListModelTests: XCTestCase {
         )
 
         XCTAssertEqual(harness.model.devices.first?.rememberPassword, true)
-        let persisted = DeviceProfileStore(defaults: harness.defaults).devices()
+        let persisted = try DeviceProfileStore(defaults: harness.defaults).devices()
         XCTAssertEqual(persisted.first?.rememberPassword, true)
     }
 
@@ -224,14 +240,14 @@ final class DeviceListModelTests: XCTestCase {
         )
 
         XCTAssertEqual(harness.model.devices.first?.rememberPassword, false)
-        let persisted = DeviceProfileStore(defaults: harness.defaults).devices()
+        let persisted = try DeviceProfileStore(defaults: harness.defaults).devices()
         XCTAssertEqual(persisted.first?.rememberPassword, false)
     }
 
     func testRecordCredentialPersistenceIgnoresUnknownDeviceAndEqualFlag() throws {
         let device = makeDevice()
         let harness = try makeHarness(devices: [device])
-        let persistedBefore = DeviceProfileStore(defaults: harness.defaults).devices()
+        let persistedBefore = try DeviceProfileStore(defaults: harness.defaults).devices()
 
         harness.model.recordCredentialPersistence(
             deviceID: UUID(),
@@ -246,7 +262,7 @@ final class DeviceListModelTests: XCTestCase {
         )
 
         XCTAssertNil(harness.model.errorMessage)
-        XCTAssertEqual(DeviceProfileStore(defaults: harness.defaults).devices(), persistedBefore)
+        XCTAssertEqual(try DeviceProfileStore(defaults: harness.defaults).devices(), persistedBefore)
     }
 
     // MARK: - edit

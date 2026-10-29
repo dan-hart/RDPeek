@@ -29,6 +29,8 @@ struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
     var audioPlaybackEnabled: Bool
     var rememberPassword: Bool
     var accentHue: Double
+    // Nothing reads these, but releases up to 1.1 require both keys when
+    // decoding, so dropping them would empty the list after a downgrade.
     var createdAt: Date
     var updatedAt: Date
     var lastConnectedAt: Date?
@@ -78,6 +80,35 @@ struct DeviceProfile: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+extension DeviceProfile {
+    /// Only `id` and `host` are required: a field added later, or one a
+    /// damaged profile lacks, falls back to a default instead of making
+    /// the profile unreadable.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        host = try container.decode(String.self, forKey: .host)
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        port = try container.decodeIfPresent(UInt16.self, forKey: .port) ?? 3389
+        username = try container.decodeIfPresent(String.self, forKey: .username) ?? ""
+        domain = try container.decodeIfPresent(String.self, forKey: .domain) ?? ""
+        hideCertificateWarnings = try container.decodeIfPresent(Bool.self, forKey: .hideCertificateWarnings)
+            ?? NewDeviceDefaults.hideCertificateWarnings
+        timeoutSeconds = try container.decodeIfPresent(Int.self, forKey: .timeoutSeconds)
+            ?? NewDeviceDefaults.timeoutSeconds
+        clipboardSharingEnabled = try container.decodeIfPresent(Bool.self, forKey: .clipboardSharingEnabled)
+            ?? NewDeviceDefaults.clipboardSharingEnabled
+        audioPlaybackEnabled = try container.decodeIfPresent(Bool.self, forKey: .audioPlaybackEnabled)
+            ?? NewDeviceDefaults.audioPlaybackEnabled
+        rememberPassword = try container.decodeIfPresent(Bool.self, forKey: .rememberPassword) ?? false
+        // Derived from the id, so a profile without a hue keeps one color.
+        accentHue = try container.decodeIfPresent(Double.self, forKey: .accentHue) ?? Double(id.uuid.0) / 256
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? .distantPast
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .distantPast
+        lastConnectedAt = try container.decodeIfPresent(Date.self, forKey: .lastConnectedAt)
+    }
+}
+
 enum DeviceProfileStoreError: Error, CustomStringConvertible {
     case unreadableStore(underlying: Error)
 
@@ -98,65 +129,141 @@ struct DeviceProfileStore {
         self.defaults = defaults
     }
 
-    func devices() -> [DeviceProfile] {
-        guard let decoded = try? loadDevices() else {
-            return []
-        }
-        return sorted(decoded)
+    /// The saved profiles, sorted by name. Throws when the stored list
+    /// cannot be read at all, rather than reporting no PCs.
+    func devices() throws -> [DeviceProfile] {
+        try sorted(loadStoredDevices().compactMap(\.device))
     }
 
     @discardableResult
     func save(_ device: DeviceProfile) throws -> [DeviceProfile] {
-        var nextDevices = try loadDevices()
-        if let index = nextDevices.firstIndex(where: { $0.id == device.id }) {
-            nextDevices[index] = device
-        } else {
-            nextDevices.append(device)
+        try update { devices in
+            if let index = devices.firstIndex(where: { $0.id == device.id }) {
+                devices[index] = device
+            } else {
+                devices.append(device)
+            }
         }
-        try saveDevices(nextDevices)
-        return sorted(nextDevices)
     }
 
     @discardableResult
     func delete(id: UUID) throws -> [DeviceProfile] {
-        let nextDevices = try loadDevices().filter { $0.id != id }
-        try saveDevices(nextDevices)
-        return sorted(nextDevices)
+        try update { devices in
+            devices.removeAll { $0.id == id }
+        }
     }
 
     @discardableResult
     func touchLastConnected(id: UUID, at date: Date = Date()) throws -> [DeviceProfile] {
-        var nextDevices = try loadDevices()
-        guard let index = nextDevices.firstIndex(where: { $0.id == id }) else {
-            return nextDevices
+        try update { devices in
+            if let index = devices.firstIndex(where: { $0.id == id }) {
+                devices[index].lastConnectedAt = date
+            }
         }
-        nextDevices[index].lastConnectedAt = date
-        try saveDevices(nextDevices)
-        return sorted(nextDevices)
     }
 
-    /// Mutations go through here so an unreadable store throws instead of
-    /// being treated as empty — a decode failure must never cause a
-    /// read-modify-write to overwrite every saved profile.
-    private func loadDevices() throws -> [DeviceProfile] {
+    /// Every mutation is a read-modify-write through here. An unreadable
+    /// list throws instead of being treated as empty, and elements this
+    /// version cannot read are written back as they were — a decode
+    /// failure must never cause a write to drop saved profiles.
+    private func update(_ change: (inout [DeviceProfile]) -> Void) throws -> [DeviceProfile] {
+        let stored = try loadStoredDevices()
+        var devices = stored.compactMap(\.device)
+        change(&devices)
+        let unreadable = stored.filter { $0.device == nil }
+        let data = try JSONEncoder().encode(devices.map(StoredDevice.readable) + unreadable)
+        defaults.set(data, forKey: storageKey)
+        return sorted(devices)
+    }
+
+    private func loadStoredDevices() throws -> [StoredDevice] {
         guard let data = defaults.data(forKey: storageKey) else {
             return []
         }
         do {
-            return try JSONDecoder().decode([DeviceProfile].self, from: data)
+            return try JSONDecoder().decode([StoredDevice].self, from: data)
         } catch {
             throw DeviceProfileStoreError.unreadableStore(underlying: error)
         }
     }
 
-    private func saveDevices(_ devices: [DeviceProfile]) throws {
-        let data = try JSONEncoder().encode(devices)
-        defaults.set(data, forKey: storageKey)
-    }
-
     private func sorted(_ devices: [DeviceProfile]) -> [DeviceProfile] {
         devices.sorted { lhs, rhs in
             lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+}
+
+/// One element of the stored list. An element this version cannot read as
+/// a profile (damaged, or from a newer format) is kept as raw JSON, so one
+/// bad element neither hides the other PCs nor is lost on the next save.
+private enum StoredDevice: Codable {
+    case readable(DeviceProfile)
+    case unreadable(JSONValue)
+
+    var device: DeviceProfile? {
+        if case let .readable(device) = self { device } else { nil }
+    }
+
+    init(from decoder: Decoder) throws {
+        if let device = try? DeviceProfile(from: decoder) {
+            self = .readable(device)
+        } else {
+            self = try .unreadable(JSONValue(from: decoder))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        switch self {
+        case let .readable(device):
+            try device.encode(to: encoder)
+        case let .unreadable(value):
+            try value.encode(to: encoder)
+        }
+    }
+}
+
+/// Any JSON value, decoded and re-encoded without interpretation.
+private enum JSONValue: Codable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([JSONValue])
+    case object([String: JSONValue])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
+        } else {
+            self = try .object(container.decode([String: JSONValue].self))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .null:
+            try container.encodeNil()
+        case let .bool(value):
+            try container.encode(value)
+        case let .number(value):
+            try container.encode(value)
+        case let .string(value):
+            try container.encode(value)
+        case let .array(value):
+            try container.encode(value)
+        case let .object(value):
+            try container.encode(value)
         }
     }
 }
