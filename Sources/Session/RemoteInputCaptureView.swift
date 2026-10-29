@@ -510,14 +510,17 @@ final class RemoteInputCaptureNSView: NSView {
 
     /// Command and right Option held together make a chord of their own, so releasing them taps
     /// neither the Windows key nor Alt, whether both are held back or one is already on the
-    /// server, as the Windows key is after a Command-click. A key or button pressed with them
-    /// still sends the held-back keys down first.
+    /// server, as the Windows key is after a Command-click. So does a Command pressed while the
+    /// other Command's Windows key is on the server. A key or button pressed in the chord still
+    /// sends the held-back keys down first.
     private func noteDeferredKeysChordedTogether() {
-        let isWindowsKeyDown = deferredWindowsKey.isHoldingKeys
-            || MacRDPDeferredWindowsKey.windowsKeys.contains(where: inputState.isScancodePressed)
+        let isWindowsKeyOnServer = MacRDPDeferredWindowsKey.windowsKeys.contains(where: inputState.isScancodePressed)
+        let isWindowsKeyDown = deferredWindowsKey.isHoldingKeys || isWindowsKeyOnServer
         let isRightAltDown = deferredRightAlt.isHoldingKeys || inputState.isScancodePressed(Self.rightAlt)
         if isWindowsKeyDown, isRightAltDown {
             noteDeferredKeysChordedElsewhere()
+        } else if isWindowsKeyOnServer {
+            deferredWindowsKey.noteChordedElsewhere()
         }
     }
 

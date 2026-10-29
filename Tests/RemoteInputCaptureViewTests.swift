@@ -861,6 +861,66 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    func testCommandTappedWhileTheOtherCommandIsOnTheServerTapsNothing() {
+        // A Command-click sent one Windows key down; the other Command tapped
+        // while the first is still held is part of the same chord, on either
+        // side, so no lone Windows key reaches the server.
+        let harness = makeHarness()
+        let location = NSPoint(x: 100, y: 50)
+        let bothCommands = NSEvent.ModifierFlags.leftCommandDown.union(.rightCommandDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: location, flags: .leftCommandDown))
+        harness.view.mouseUp(with: mouseEvent(.leftMouseUp, location: location, flags: .leftCommandDown))
+        harness.recorder.events.removeAll()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightCommand, flags: bothCommands))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightCommand, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftWindows, isReleased: true)])
+
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightCommand, flags: .rightCommandDown))
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: location, flags: .rightCommandDown))
+        harness.view.mouseUp(with: mouseEvent(.leftMouseUp, location: location, flags: .rightCommandDown))
+        harness.recorder.events.removeAll()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: bothCommands))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .rightCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightCommand, flags: []))
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .rightWindows, isReleased: true)])
+    }
+
+    func testChordWithOneCommandOnTheServerSendsTheOther() {
+        // With left Win already down from a click, a key pressed while right
+        // Command is held too still sends right Win down ahead of it.
+        let harness = makeHarness()
+        let location = NSPoint(x: 100, y: 50)
+        let rKey = RDPKeyboardScancode(code: 0x13)
+        let bothCommands = NSEvent.ModifierFlags.leftCommandDown.union(.rightCommandDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: location, flags: .leftCommandDown))
+        harness.view.mouseUp(with: mouseEvent(.leftMouseUp, location: location, flags: .leftCommandDown))
+        harness.recorder.events.removeAll()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightCommand, flags: bothCommands))
+        XCTAssertTrue(harness.view.performKeyEquivalent(
+            with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_R), characters: "r", flags: bothCommands)
+        ))
+        NSApplication.shared.sendEvent(keyEvent(
+            .keyUp,
+            keyCode: UInt16(kVK_ANSI_R),
+            characters: "r",
+            flags: bothCommands,
+            window: harness.window
+        ))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightCommand, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .rightWindows, isReleased: false),
+            .keyboard(scancode: rKey, isReleased: false),
+            .keyboard(scancode: rKey, isReleased: true),
+            .keyboard(scancode: .rightWindows, isReleased: true),
+            .keyboard(scancode: .leftWindows, isReleased: true),
+        ])
+    }
+
     // MARK: - Key equivalents while controlling the desktop
 
     func testPerformKeyEquivalentClaimsCommandChordForRemote() {
@@ -1232,6 +1292,7 @@ private final class InputEventRecorder: RemoteInputEventSink {
 
 private extension UInt16 {
     static let leftCommand: UInt16 = 55
+    static let rightCommand: UInt16 = 54
     static let leftControl: UInt16 = 59
     static let rightOption: UInt16 = 61
 }
@@ -1240,6 +1301,11 @@ private extension NSEvent.ModifierFlags {
     /// `.command` plus the NX_DEVICELCMDKEYMASK device-dependent bit.
     static let leftCommandDown = NSEvent.ModifierFlags(
         rawValue: NSEvent.ModifierFlags.command.rawValue | 0x0000_0008
+    )
+
+    /// `.command` plus the NX_DEVICERCMDKEYMASK device-dependent bit.
+    static let rightCommandDown = NSEvent.ModifierFlags(
+        rawValue: NSEvent.ModifierFlags.command.rawValue | 0x0000_0010
     )
 
     /// `.control` plus the NX_DEVICELCTLKEYMASK device-dependent bit.
@@ -1265,6 +1331,7 @@ private extension NSEvent.ModifierFlags {
 
 private extension RDPKeyboardScancode {
     static let leftWindows = RDPKeyboardScancode(code: 0x005B, isExtended: true)
+    static let rightWindows = RDPKeyboardScancode(code: 0x005C, isExtended: true)
     static let leftControl = RDPKeyboardScancode(code: 0x001D)
     static let leftShift = RDPKeyboardScancode(code: 0x002A)
     static let rightAlt = RDPKeyboardScancode(code: 0x0038, isExtended: true)
