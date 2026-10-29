@@ -193,7 +193,7 @@ final class DeviceListModel: ObservableObject {
         let keepsSessionRemember = current.map {
             device.rememberPassword == editor.device.rememberPassword
                 && $0.rememberPassword != device.rememberPassword
-                && editor.device.identity.usesSameCredentialAccount(as: device.identity)
+                && editor.device.identity.hasSameConnectionIdentity(as: device.identity)
         } ?? false
         // Likewise, a session's sign-in may have saved a newer password over
         // the one the sheet loaded. When Remember stays on for the same
@@ -202,7 +202,7 @@ final class DeviceListModel: ObservableObject {
         let keepsSavedPassword = editor.device.rememberPassword
             && device.rememberPassword
             && password == loadedPassword
-            && editor.device.identity.usesSameCredentialAccount(as: device.identity)
+            && editor.device.identity.hasSameConnectionIdentity(as: device.identity)
         if let current, keepsSessionRemember {
             device.rememberPassword = current.rememberPassword
         } else {
@@ -314,7 +314,7 @@ final class DeviceListModel: ObservableObject {
         devices.contains { other in
             other.id != deviceID
                 && other.rememberPassword
-                && other.identity.usesSameCredentialAccount(as: identity)
+                && other.identity.hasSameConnectionIdentity(as: identity)
         }
     }
 
@@ -342,7 +342,7 @@ final class DeviceListModel: ObservableObject {
     /// profile — that credential is not the profile's saved password.
     func recordCredentialPersistence(deviceID: UUID, identity: RDPConnectionIdentity, remembered: Bool) {
         guard var device = devices.first(where: { $0.id == deviceID }),
-              device.identity.usesSameCredentialAccount(as: identity),
+              device.identity.hasSameConnectionIdentity(as: identity),
               device.rememberPassword != remembered
         else {
             return

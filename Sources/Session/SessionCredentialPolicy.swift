@@ -111,6 +111,6 @@ enum SessionCredentialPolicy {
         signingInAs identity: RDPConnectionIdentity,
         insteadOf previousIdentity: RDPConnectionIdentity
     ) -> Bool {
-        identity.usesSameCredentialAccount(as: previousIdentity)
+        identity.hasSameConnectionIdentity(as: previousIdentity)
     }
 }

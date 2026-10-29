@@ -1604,7 +1604,7 @@ final class SessionViewController: NSViewController {
         // A delayed write can land after the user re-signed in with
         // different credentials; only mirror it on session state when it
         // matches what the session is now using.
-        let matchesCurrentDraft = draft.identity.usesSameCredentialAccount(as: request.key.identity)
+        let matchesCurrentDraft = draft.identity.hasSameConnectionIdentity(as: request.key.identity)
         switch result {
         case .success(.saved):
             if matchesCurrentDraft, case let .save(_, password) = request {

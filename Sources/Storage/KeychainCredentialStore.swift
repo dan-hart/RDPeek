@@ -22,19 +22,6 @@ struct KeychainCredentialKey: Equatable, Sendable {
     }
 }
 
-extension RDPConnectionIdentity {
-    /// Whether both sign in with one password: the Keychain item and this
-    /// app run's cached copy are keyed by the account name, which user
-    /// `CORP\bob` with no domain shares with `bob` in domain `CORP`, though
-    /// `hasSameConnectionIdentity` tells the two apart.
-    func usesSameCredentialAccount(as other: RDPConnectionIdentity) -> Bool {
-        guard let account = credentialAccountName else {
-            return false
-        }
-        return account == other.credentialAccountName
-    }
-}
-
 /// The credential operations models depend on, as a seam so tests can
 /// substitute a fake instead of touching the real Keychain. Sendable so
 /// reads can run off the main actor.
