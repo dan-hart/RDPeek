@@ -73,7 +73,22 @@ struct DeviceCardView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: device.displayName))
-        .accessibilityHint(Text("Double-tap to connect."))
+        .accessibilityHint(Text("Connects to this PC."))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        // The default action is VoiceOver's VO-Space; the rest mirror the
+        // context menu.
+        .accessibilityAction(.default) {
+            onConnect()
+        }
+        .accessibilityAction(named: Text("Edit")) {
+            onEdit()
+        }
+        .accessibilityAction(named: Text("Duplicate")) {
+            onDuplicate()
+        }
+        .accessibilityAction(named: Text("Delete")) {
+            onDelete()
+        }
     }
 
     private var thumbnail: some View {
