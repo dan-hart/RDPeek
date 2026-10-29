@@ -5,6 +5,9 @@ private let sessionMaximumLocalClipboardFileBytes = 32 * 1024 * 1024
 /// The most asked for in one FILECONTENTS_RANGE request; servers may send
 /// less anyway.
 private let sessionMaximumFileRangeByteCount: UInt64 = 1024 * 1024
+/// How long a FILECONTENTS request may go unanswered before the download
+/// fails.
+private let sessionFileContentsRequestTimeout: TimeInterval = 30
 
 /// Where the clipboard bridge sends: the session's `RDPClipboardSession`, or
 /// a test's recorder.
@@ -138,13 +141,19 @@ final class SessionClipboard {
         onToast("Sharing clipboard for 30 seconds", "clock")
     }
 
-    /// Called once a second: ends an expired temporary share and publishes
-    /// local pasteboard changes.
+    /// Called once a second: ends an expired temporary share, fails a
+    /// download the server stopped answering, and publishes local
+    /// pasteboard changes.
     func poll(now: Date = Date()) {
         // A temporary share is always one that turned sharing on.
         if let temporarySharingExpiresAt, now >= temporarySharingExpiresAt {
             setSharingEnabled(false)
             onToast("Clipboard sharing ended", "doc.on.clipboard")
+        }
+        if let fileTransfer,
+           now.timeIntervalSince(fileTransfer.requestSentAt) >= sessionFileContentsRequestTimeout
+        {
+            failFileTransfer(fileTransfer, message: "Remote file transfer timed out")
         }
         if canSync {
             publishPasteboardIfChanged()
@@ -401,6 +410,7 @@ final class SessionClipboard {
         transfer.requestedByteCount = UInt32(
             min(sessionMaximumFileRangeByteCount, expectedByteCount - receivedByteCount)
         )
+        transfer.requestSentAt = Date()
         fileTransfer = transfer
         do {
             try session.requestRemoteFileRange(
@@ -450,6 +460,8 @@ final class SessionClipboard {
             return
         }
 
+        var transfer = transfer
+        transfer.requestSentAt = Date()
         fileTransfer = transfer
         do {
             try session.requestRemoteFileSize(
@@ -592,6 +604,8 @@ private struct SessionRemoteClipboardFileTransfer {
     var receivedData = Data()
     /// What the outstanding FILECONTENTS_RANGE request asked for.
     var requestedByteCount: UInt32 = 0
+    /// When the outstanding FILECONTENTS request went out.
+    var requestSentAt = Date()
     var totalExpectedByteCount: UInt64 = 0
     var downloadedFileURLs: [URL] = []
     var downloadDirectory: URL

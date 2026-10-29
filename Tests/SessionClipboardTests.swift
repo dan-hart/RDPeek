@@ -254,6 +254,25 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fileURL), Data())
     }
 
+    func testUnansweredFileRequestTimesOut() throws {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+
+        clipboard.poll(now: Date().addingTimeInterval(29))
+        XCTAssertFalse(toasts.contains("Remote file transfer timed out"))
+        clipboard.poll(now: Date().addingTimeInterval(31))
+        XCTAssertEqual(toasts.last, "Remote file transfer timed out")
+
+        // An answer after the timeout is dropped.
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        XCTAssertNil(copiedFileURL())
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: downloadRoot.path), [])
+    }
+
     func testNewerCopyDropsARemoteFileStillDownloading() throws {
         let session = RecordedClipboard()
         let clipboard = makeClipboard()
