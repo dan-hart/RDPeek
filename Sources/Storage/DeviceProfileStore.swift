@@ -118,8 +118,8 @@ enum DeviceProfileStoreError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case let .unreadableStore(underlying):
-            "The saved PC list could not be read, so it was left unchanged. (\(underlying))"
+        case .unreadableStore:
+            "The saved PC list could not be read, so it was left unchanged."
         }
     }
 }
