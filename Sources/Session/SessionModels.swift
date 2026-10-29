@@ -320,6 +320,10 @@ enum SessionAttemptOutcome: Equatable {
                 if RDPLogonStatus.isWrongCredentials(status) {
                     return .promptForCredentials(message: wrongCredentialsMessage)
                 }
+            } else if report.stage == "credssp", error == "CredSSP requires credentials" {
+                // Connecting with every sign-in field empty sends nothing,
+                // so asking again is safe.
+                return .promptForCredentials(message: "The remote computer requires a user name and password.")
             } else if report.stage == "credssp",
                       error.contains("connection closed before receiving CredSSP")
                       || error.contains("connection lost before receiving CredSSP")

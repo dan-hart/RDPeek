@@ -240,6 +240,17 @@ final class SessionModelsTests: XCTestCase {
         }
     }
 
+    func testConnectingWithoutCredentialsToASignInServerAsksForThem() {
+        // RDPKit's error when the server picks CredSSP and the user left
+        // every sign-in field empty; nothing was sent.
+        let report = makeReport(stage: "credssp", error: "CredSSP requires credentials")
+
+        XCTAssertEqual(
+            outcome(after: report),
+            .promptForCredentials(message: "The remote computer requires a user name and password.")
+        )
+    }
+
     func testSignInTimeoutOrNTLMErrorEndsInsteadOfAskingToSignIn() {
         for error in [
             "receive failed: CredSSP response timed out after 10 seconds",
