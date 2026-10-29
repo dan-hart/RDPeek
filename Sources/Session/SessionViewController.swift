@@ -553,6 +553,7 @@ final class SessionViewController: NSViewController {
             renderMetrics: renderMetrics,
             rollingFramesPerSecond: renderMetrics.rollingFramesPerSecond(at: now),
             rollingWireMegabitsPerSecond: renderMetrics.rollingWireMegabitsPerSecond(at: now),
+            averageWireMegabitsPerSecond: renderMetrics.averageWireMegabitsPerSecond(at: now),
             framePacing: framePacing,
             sessionEndReason: sessionEndReason,
             serverCertificateInfo: liveCertificate,
