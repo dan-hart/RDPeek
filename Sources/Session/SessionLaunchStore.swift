@@ -59,17 +59,11 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
         controller.showWindow(nil)
     }
 
-    func recordConnectionStart(for deviceID: UUID?) {
-        guard let deviceID else {
-            return
-        }
+    func recordConnectionStart(for deviceID: UUID) {
         onConnectionStart?(deviceID)
     }
 
-    func recordCredentialPersistence(for deviceID: UUID?, identity: RDPConnectionIdentity, remembered: Bool) {
-        guard let deviceID else {
-            return
-        }
+    func recordCredentialPersistence(for deviceID: UUID, identity: RDPConnectionIdentity, remembered: Bool) {
         onCredentialPersistence?(deviceID, identity, remembered)
     }
 

@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 final class SessionWindowController: NSWindowController, NSWindowDelegate {
     let sessionID: UUID
-    let deviceID: UUID?
+    let deviceID: UUID
     var onClose: ((UUID) -> Void)?
     private weak var launchStore: SessionLaunchStore?
     private var firstShowGuard = SessionWindowFirstShowGuard()

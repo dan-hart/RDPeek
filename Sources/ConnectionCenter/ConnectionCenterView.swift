@@ -4,7 +4,7 @@ import SwiftUI
 /// macOS Windows App connection center.
 struct ConnectionCenterView: View {
     @EnvironmentObject private var deviceList: DeviceListModel
-    @EnvironmentObject private var launchStore: SessionLaunchStore
+    let launchStore: SessionLaunchStore
 
     @State private var selectedDeviceID: UUID?
     @FocusState private var isGridFocused: Bool
@@ -87,18 +87,6 @@ struct ConnectionCenterView: View {
                 Text(verbatim: deviceList.errorMessage ?? "")
             }
         )
-        .onAppear {
-            launchStore.onConnectionStart = { deviceID in
-                deviceList.touchLastConnected(deviceID: deviceID)
-            }
-            launchStore.onCredentialPersistence = { deviceID, identity, remembered in
-                deviceList.recordCredentialPersistence(
-                    deviceID: deviceID,
-                    identity: identity,
-                    remembered: remembered
-                )
-            }
-        }
     }
 
     /// `devices` is `filteredDevices`, which `body` computes once per update.

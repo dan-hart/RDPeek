@@ -4,13 +4,31 @@ import SwiftUI
 @main
 struct RDPeekApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var launchStore = SessionLaunchStore()
-    @StateObject private var deviceList = DeviceListModel()
+    @StateObject private var launchStore: SessionLaunchStore
+    @StateObject private var deviceList: DeviceListModel
+
+    init() {
+        let launchStore = SessionLaunchStore()
+        let deviceList = DeviceListModel()
+        // Sessions record each connection and saved credential on the
+        // device list, whether or not the Connection Center is open.
+        launchStore.onConnectionStart = { [weak deviceList] deviceID in
+            deviceList?.touchLastConnected(deviceID: deviceID)
+        }
+        launchStore.onCredentialPersistence = { [weak deviceList] deviceID, identity, remembered in
+            deviceList?.recordCredentialPersistence(
+                deviceID: deviceID,
+                identity: identity,
+                remembered: remembered
+            )
+        }
+        _launchStore = StateObject(wrappedValue: launchStore)
+        _deviceList = StateObject(wrappedValue: deviceList)
+    }
 
     var body: some Scene {
         Window("RDPeek", id: "connection-center") {
-            ConnectionCenterView()
-                .environmentObject(launchStore)
+            ConnectionCenterView(launchStore: launchStore)
                 .environmentObject(deviceList)
         }
         .defaultSize(width: 880, height: 600)
