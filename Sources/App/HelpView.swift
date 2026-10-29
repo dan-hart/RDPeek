@@ -72,6 +72,8 @@ struct HelpView: View {
                     HelpBody(
                         "Inside a session, shortcuts with ⌘ or ⌃ are sent to the remote " +
                             "desktop as scancodes, so Windows and Linux shortcuts work. " +
+                            "Left ⌥ is Alt; right ⌥ types the character it gives on your " +
+                            "Mac, such as @ with ⌥L on a German layout, and is Alt otherwise. " +
                             "The remote desktop is told your Mac's keyboard layout; keys " +
                             "that type the same character there are sent as scancodes, so " +
                             "a remote input method sees them, and other text as Unicode."

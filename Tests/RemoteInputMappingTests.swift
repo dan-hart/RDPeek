@@ -128,6 +128,36 @@ final class RemoteInputMappingTests: XCTestCase {
         XCTAssertTrue(sendsScancode(kVK_ANSI_A, .option))
     }
 
+    // MARK: - Characters typed with Option
+
+    func testOptionTypesACharacterOnlyWhereItChangesWhatTheKeyTypes() {
+        func optionTypes(
+            _ characters: String,
+            ignoringModifiers: String,
+            _ modifierFlags: NSEvent.ModifierFlags = .option
+        ) -> Bool {
+            MacRDPKeyboardMapping.optionTypesCharacter(
+                characters,
+                charactersIgnoringModifiers: ignoringModifiers,
+                modifierFlags: modifierFlags
+            )
+        }
+        // German Option-L and Shift-Option-7.
+        XCTAssertTrue(optionTypes("@", ignoringModifiers: "l"))
+        XCTAssertTrue(optionTypes("\\", ignoringModifiers: "/", [.option, .shift]))
+        // Option changed nothing, started a dead key, or typed a control or
+        // private-use character (F4, the Apple logo).
+        XCTAssertFalse(optionTypes("l", ignoringModifiers: "l"))
+        XCTAssertFalse(optionTypes("", ignoringModifiers: "e"))
+        XCTAssertFalse(optionTypes("\u{1B}", ignoringModifiers: "["))
+        XCTAssertFalse(optionTypes("\u{F707}", ignoringModifiers: "\u{F707}"))
+        XCTAssertFalse(optionTypes("\u{F8FF}", ignoringModifiers: "K", [.option, .shift]))
+        // Without Option, or with ⌘ or ⌃ making the key a shortcut.
+        XCTAssertFalse(optionTypes("é", ignoringModifiers: "e", []))
+        XCTAssertFalse(optionTypes("@", ignoringModifiers: "l", [.option, .command]))
+        XCTAssertFalse(optionTypes("@", ignoringModifiers: "l", [.option, .control]))
+    }
+
     // MARK: - Characters the announced layout types
 
     /// A remote IME commits its candidate with Space, so it goes as its scancode on every layout,

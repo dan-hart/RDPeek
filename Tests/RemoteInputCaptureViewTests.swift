@@ -465,6 +465,143 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    // MARK: - Right Option types, left Option is Alt
+
+    func testRightOptionTypesTheMacCharacterAsTextWithoutAlt() {
+        // German Option-L types "@", which German Windows types with AltGr-Q,
+        // so Alt-L would type nothing there. Repeats type it again, and
+        // releasing Option after typing is no Alt tap.
+        let harness = makeHarness()
+        let lKey = UInt16(kVK_ANSI_L)
+        harness.view.keyboardLayout = RDPKeyboardLayout(rawValue: 0x0000_0407)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        for isARepeat in [false, true] {
+            harness.view.keyDown(with: keyEvent(
+                .keyDown,
+                keyCode: lKey,
+                characters: "@",
+                charactersIgnoringModifiers: "l",
+                flags: .rightOptionDown,
+                isARepeat: isARepeat
+            ))
+        }
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: lKey, characters: "@", flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .unicode(codeUnit: 0x40, isReleased: false),
+            .unicode(codeUnit: 0x40, isReleased: true),
+            .unicode(codeUnit: 0x40, isReleased: false),
+            .unicode(codeUnit: 0x40, isReleased: true),
+        ])
+    }
+
+    func testShiftKeepsRightOptionHeldBackForShiftOptionCharacters() {
+        // German Shift-Option-7 types "\".
+        let harness = makeHarness()
+        let shiftAndRightOption = NSEvent.ModifierFlags.leftShiftDown.union(.rightOptionDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: shiftAndRightOption))
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_ANSI_7),
+            characters: "\\",
+            charactersIgnoringModifiers: "/",
+            flags: shiftAndRightOption
+        ))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .leftShiftDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .leftShift, isReleased: false),
+            .unicode(codeUnit: 0x5C, isReleased: false),
+            .unicode(codeUnit: 0x5C, isReleased: true),
+            .keyboard(scancode: .leftShift, isReleased: true),
+        ])
+    }
+
+    func testRightOptionIsAltWithAKeyItTypesNoCharacterWith() {
+        let harness = makeHarness()
+        let f4 = RDPKeyboardScancode(code: 0x3E)
+        let functionKey = String(utf16CodeUnits: [0xF707], count: 1)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_F4), characters: functionKey, flags: .rightOptionDown))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: UInt16(kVK_F4), characters: functionKey, flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .rightAlt, isReleased: false),
+            .keyboard(scancode: f4, isReleased: false),
+            .keyboard(scancode: f4, isReleased: true),
+            .keyboard(scancode: .rightAlt, isReleased: true),
+        ])
+    }
+
+    func testRightOptionIsAltInAControlChord() {
+        // Control makes the key a shortcut even where Option types a character.
+        let harness = makeHarness()
+        let controlAndRightOption = NSEvent.ModifierFlags.leftControlDown.union(.rightOptionDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: controlAndRightOption))
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_ANSI_L),
+            characters: "\u{0C}",
+            charactersIgnoringModifiers: "l",
+            flags: controlAndRightOption
+        ))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .leftControl, isReleased: false),
+            .keyboard(scancode: .rightAlt, isReleased: false),
+            .keyboard(scancode: RDPKeyboardScancode(code: 0x26), isReleased: false),
+        ])
+    }
+
+    func testRightOptionTappedAloneTapsAlt() {
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        XCTAssertEqual(harness.recorder.events, [])
+
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .rightAlt, isReleased: false),
+            .keyboard(scancode: .rightAlt, isReleased: true),
+        ])
+    }
+
+    func testRightOptionFoundAlreadyHeldIsNoTap() {
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+        XCTAssertEqual(harness.recorder.events, [])
+    }
+
+    func testLeftOptionStaysAlt() {
+        // Alt-L reaches the remote even where Option-L types "@" on the Mac.
+        let harness = makeHarness()
+        let leftAlt = RDPKeyboardScancode(code: 0x38)
+        let lKey = RDPKeyboardScancode(code: 0x26)
+        harness.view.keyboardLayout = RDPKeyboardLayout(rawValue: 0x0000_0407)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Option), flags: .leftOptionDown))
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_ANSI_L),
+            characters: "@",
+            charactersIgnoringModifiers: "l",
+            flags: .leftOptionDown
+        ))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: UInt16(kVK_ANSI_L), characters: "@", flags: .leftOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Option), flags: []))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: leftAlt, isReleased: false),
+            .keyboard(scancode: lKey, isReleased: false),
+            .keyboard(scancode: lKey, isReleased: true),
+            .keyboard(scancode: leftAlt, isReleased: true),
+        ])
+    }
+
     // MARK: - Key equivalents while controlling the desktop
 
     func testPerformKeyEquivalentClaimsCommandChordForRemote() {
@@ -759,6 +896,7 @@ private final class InputEventRecorder: RemoteInputEventSink {
 private extension UInt16 {
     static let leftCommand: UInt16 = 55
     static let leftControl: UInt16 = 59
+    static let rightOption: UInt16 = 61
 }
 
 private extension NSEvent.ModifierFlags {
@@ -777,6 +915,11 @@ private extension NSEvent.ModifierFlags {
         rawValue: NSEvent.ModifierFlags.option.rawValue | 0x0000_0020
     )
 
+    /// `.option` plus the NX_DEVICERALTKEYMASK device-dependent bit.
+    static let rightOptionDown = NSEvent.ModifierFlags(
+        rawValue: NSEvent.ModifierFlags.option.rawValue | 0x0000_0040
+    )
+
     /// `.shift` plus the NX_DEVICELSHIFTKEYMASK device-dependent bit.
     static let leftShiftDown = NSEvent.ModifierFlags(
         rawValue: NSEvent.ModifierFlags.shift.rawValue | 0x0000_0002
@@ -786,4 +929,6 @@ private extension NSEvent.ModifierFlags {
 private extension RDPKeyboardScancode {
     static let leftWindows = RDPKeyboardScancode(code: 0x005B, isExtended: true)
     static let leftControl = RDPKeyboardScancode(code: 0x001D)
+    static let leftShift = RDPKeyboardScancode(code: 0x002A)
+    static let rightAlt = RDPKeyboardScancode(code: 0x0038, isExtended: true)
 }
