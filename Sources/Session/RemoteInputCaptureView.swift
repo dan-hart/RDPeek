@@ -8,12 +8,6 @@ protocol RemoteInputEventSink: AnyObject {
     func send(_ events: [RDPSlowPathInputEvent])
 }
 
-extension RemoteInputEventSink {
-    func send(_ event: RDPSlowPathInputEvent) {
-        send([event])
-    }
-}
-
 extension RDPInputSession: RemoteInputEventSink {}
 
 final class RemoteInputCaptureNSView: NSView {
@@ -375,7 +369,7 @@ final class RemoteInputCaptureNSView: NSView {
         // Mutate the tracker outside the optional chain so its state stays
         // consistent even when no session is attached yet.
         let moveEvent = inputState.pointerMove(to: point)
-        inputSession?.send(moveEvent)
+        inputSession?.send([moveEvent])
     }
 
     private func sendPointerButton(_ button: RDPPointerButton, isDown: Bool, event: NSEvent) {
