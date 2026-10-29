@@ -78,10 +78,19 @@ final class SessionHUDModel: ObservableObject {
         }
     }
 
-    /// SessionToastRoot animates the toast in and out.
+    /// SessionToastRoot animates the toast in and out. VoiceOver announces
+    /// it, as it is gone before VoiceOver could reach it.
     func showToast(_ text: String, systemImage: String) {
         let nextToast = SessionToast(text: text, systemImage: systemImage)
         toast = nextToast
+        NSAccessibility.post(
+            element: NSApp.mainWindow ?? NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: text,
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ]
+        )
         toastDismissTask?.cancel()
         toastDismissTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_600_000_000)
