@@ -393,6 +393,24 @@ struct RDPLogonName: Equatable {
     }
 }
 
+extension RDPDesktopSize {
+    /// The desktop a connection asks for on a canvas of `pointSize`: the
+    /// canvas in points, at 100% scale. It is rounded as Display Control
+    /// rounds the layout sent once its channel opens — an even width, any
+    /// height; Client Core Data takes either parity — so on a 1x display
+    /// that layout matches the desktop and resizes nothing.
+    static func initial(canvasPointSize pointSize: CGSize) -> RDPDesktopSize {
+        let layout = RDPDisplayRequest(pointSize: pointSize, backingScaleFactor: 1)
+        guard let size = try? RDPDesktopSize(
+            width: UInt16(clamping: layout.width),
+            height: UInt16(clamping: layout.height)
+        ) else {
+            preconditionFailure("A display layout is always a valid desktop size")
+        }
+        return size
+    }
+}
+
 /// Paces the keyframe requests sent after video fails to decode: one at most every few seconds,
 /// and only a few until video decodes again, so video that never decodes does not make the
 /// server reset its graphics forever.

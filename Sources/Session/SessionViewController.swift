@@ -487,18 +487,7 @@ final class SessionViewController: NSViewController {
             surface = (view.window?.screen ?? NSScreen.main)?.visibleFrame.size
                 ?? CGSize(width: 1280, height: 800)
         }
-        guard let size = try? RDPDesktopSize(
-            width: evenDesktopDimension(UInt32(surface.width.rounded()), minimum: 640),
-            height: evenDesktopDimension(UInt32(surface.height.rounded()), minimum: 480)
-        ) else {
-            preconditionFailure("Clamped dimensions are always a valid desktop size")
-        }
-        return size
-    }
-
-    private func evenDesktopDimension(_ value: UInt32, minimum: UInt16) -> UInt16 {
-        let even = UInt16(clamping: value) & ~1
-        return min(max(even, minimum), 8192)
+        return RDPDesktopSize.initial(canvasPointSize: surface)
     }
 
     // MARK: - Credentials prompt
