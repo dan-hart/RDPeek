@@ -167,7 +167,7 @@ private struct PerformanceMetricsView: View {
 struct RemoteSessionDiagnosticsSnapshot: Equatable {
     var title = "Remote Desktop"
     var report: RDPConnectionReport?
-    var previewFrame: RDPFrameMetadata?
+    var latestFrame: RDPFrameMetadata?
     var renderMetrics = RDPRenderMetrics()
     var framePacing = RDPFramePacingState()
     var sessionEndReason: RDPSessionEndReason?
@@ -277,12 +277,12 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                     DiagnosticRow("Clipboard", clipboardState(snapshot))
                     DiagnosticRow("Clipboard Channel ID", optionalValue(snapshot.report?.rdpClipboardChannelID))
                     DiagnosticRow("Clipboard Messages", messageTypes(snapshot.report?.rdpClipboardMessages, \.typeName))
-                    // The frame presented at the latest size or codec
-                    // change, or the server's first frame if none was.
+                    // The frame presented last, or the server's first
+                    // frame if none was.
                     DiagnosticRow(
                         "Frame",
                         frameSummary(
-                            snapshot.previewFrame
+                            snapshot.latestFrame
                                 ?? snapshot.report?.rdpGraphicsFirstFrame.map(RDPFrameMetadata.init)
                         )
                     )

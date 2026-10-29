@@ -61,7 +61,12 @@ final class SessionViewController: NSViewController {
     private var remoteAudioPlayer = RDPAudioPlayer()
     private var report: RDPConnectionReport?
     private var liveCertificate: RDPServerCertificateInfo?
+    /// The frame the canvas maps the desktop with, replaced only when the
+    /// desktop size changes.
     private var previewFrame: RDPFrameMetadata?
+    /// The frame presented last, for Stats for Nerds. Its metadata, which
+    /// scans the video payload, is read only while that window is open.
+    private var latestPresentedFrame: RDPGraphicsFrameSnapshot?
     private var viewerMetricsSummary: String?
     private var isMetricsOverlayVisible = false
     private var hasPresentedFrame = false
@@ -458,7 +463,7 @@ final class SessionViewController: NSViewController {
         let nextSnapshot = RemoteSessionDiagnosticsSnapshot(
             title: draft.displayName,
             report: report,
-            previewFrame: previewFrame,
+            latestFrame: latestPresentedFrame.map(RDPFrameMetadata.init),
             renderMetrics: renderMetricsStore.metrics,
             framePacing: framePacing,
             sessionEndReason: sessionEndReason,
@@ -669,6 +674,7 @@ final class SessionViewController: NSViewController {
         report = nil
         liveCertificate = nil
         previewFrame = nil
+        latestPresentedFrame = nil
         viewerMetricsSummary = nil
         resetFramePresentationState()
         renderMetricsStore.reset()
@@ -1111,15 +1117,16 @@ final class SessionViewController: NSViewController {
     }
 
     /// Returns whether the canvas needs a render: on the first frame and
-    /// when the desktop size changes. AVC444 can alternate codec names frame
-    /// by frame, which updates the metadata but must not render each frame.
+    /// when the desktop size changes. Every frame is kept for Stats for
+    /// Nerds without a render; AVC444 can alternate codecs frame by frame.
     @discardableResult
     private func applyFramePresentation(_ presentation: RDPDecodedFramePresentation) -> Bool {
         let wasFirstPresentedFrame = hasPresentedFrame == false
         let frame = presentation.frame
         let sizeChanged = previewFrame?.width != frame.width || previewFrame?.height != frame.height
         remoteDesktopRenderer.present(presentation, id: renderMetricsStore.metrics.decodedFrameCount)
-        if shouldPublishFrameMetadata(frame) {
+        latestPresentedFrame = frame
+        if sizeChanged {
             previewFrame = RDPFrameMetadata(frame)
         }
         if wasFirstPresentedFrame {
@@ -1129,16 +1136,6 @@ final class SessionViewController: NSViewController {
             firstFrameWatchdogTask?.cancel()
         }
         return wasFirstPresentedFrame || sizeChanged
-    }
-
-    private func shouldPublishFrameMetadata(_ frame: RDPGraphicsFrameSnapshot) -> Bool {
-        guard let currentFrame = previewFrame else {
-            return true
-        }
-        return currentFrame.width != frame.width
-            || currentFrame.height != frame.height
-            || currentFrame.codecName != frame.codecName
-            || currentFrame.videoCodec != frame.videoCodec
     }
 
     @discardableResult
