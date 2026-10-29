@@ -103,7 +103,7 @@ enum CredentialPersistenceResult: Sendable {
 
 func persistCredentials(
     _ request: CredentialPersistenceRequest,
-    store: KeychainCredentialStore
+    store: any CredentialStoring
 ) -> Result<CredentialPersistenceResult, Error> {
     do {
         switch request {

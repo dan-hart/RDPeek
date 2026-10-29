@@ -10,7 +10,8 @@ import SwiftUI
 /// with a full-bleed canvas plus SwiftUI HUD overlays.
 @MainActor
 final class SessionViewController: NSViewController {
-    private let credentialStore = KeychainCredentialStore()
+    private let credentialStore: any CredentialStoring
+    private let credentialCache: InMemoryCredentialCache
     private let clientLicenseStore = ClientLicenseStore()
     private let trustedCertificateStore = TrustedCertificateStore()
     private let sessionID: UUID
@@ -100,11 +101,15 @@ final class SessionViewController: NSViewController {
     init(
         sessionID: UUID,
         draft: RDPConnectionDraft,
-        launchStore: SessionLaunchStore
+        launchStore: SessionLaunchStore,
+        credentialStore: any CredentialStoring = KeychainCredentialStore(),
+        credentialCache: InMemoryCredentialCache = .shared
     ) {
         self.sessionID = sessionID
         self.draft = draft
         self.launchStore = launchStore
+        self.credentialStore = credentialStore
+        self.credentialCache = credentialCache
         clipboard = SessionClipboard(isSharingEnabled: draft.clipboardSharingEnabled)
         audioPlaybackEnabled = draft.audioPlaybackEnabled
         super.init(nibName: nil, bundle: nil)
@@ -569,9 +574,9 @@ final class SessionViewController: NSViewController {
     /// on the next connect, from this app run's cache.
     private func forgetRejectedPassword() {
         if let account = draft.identity.credentialAccountName,
-           InMemoryCredentialCache.shared.password(for: account) == draft.password
+           SessionCredentialPolicy.forgetsCachedPassword(credentialCache.password(for: account), rejected: draft.password)
         {
-            InMemoryCredentialCache.shared.removePassword(for: account)
+            credentialCache.removePassword(for: account)
         }
         draft.password = ""
     }
@@ -592,9 +597,10 @@ final class SessionViewController: NSViewController {
         draft.domain = domain
         draft.password = password
         draft.rememberPassword = remember
-        // A password the Keychain held for the previous user is not this
-        // one's to delete.
-        if draft.identity.hasSameConnectionIdentity(as: previousIdentity) == false {
+        if SessionCredentialPolicy.keepsRememberedPassword(
+            signingInAs: draft.identity,
+            insteadOf: previousIdentity
+        ) == false {
             rememberedPassword = nil
         }
         isAwaitingCredentials = false
@@ -616,11 +622,7 @@ final class SessionViewController: NSViewController {
         isAutoRetryPending = false
         usesLegacyRSAKeyExchange = false
         autoRetryReason = nil
-        guard draft.password.isEmpty else {
-            startConnectionAttempt()
-            return
-        }
-        resolveStoredCredentialsAndConnect()
+        connect(using: credentialSource(remembersPassword: draft.rememberPassword))
     }
 
     /// Waits briefly, then connects again; the connecting overlay says why
@@ -1421,27 +1423,35 @@ final class SessionViewController: NSViewController {
 
     // MARK: - Credentials
 
-    /// Finds the password — in the Keychain when the device remembers it,
-    /// else among those kept for this app run — or asks the user to sign
-    /// in. The Keychain read can block on the access-approval dialog, so it
-    /// runs off the main actor while the connecting overlay is up.
-    private func resolveStoredCredentialsAndConnect() {
-        credentialResolutionTask?.cancel()
-        guard let key = KeychainCredentialKey(identity: draft.identity) else {
-            // Without a user name there is nothing stored. Connect without
-            // credentials once the user left the sign-in fields empty.
-            if didPromptForCredentials {
-                startConnectionAttempt()
-            } else {
-                promptForCredentials()
-            }
-            return
-        }
-        guard draft.rememberPassword else {
-            connectWithCachedPasswordOrPrompt()
-            return
-        }
+    private func credentialSource(remembersPassword: Bool) -> SessionCredentialPolicy.Source {
+        SessionCredentialPolicy.source(
+            sessionPassword: draft.password,
+            identity: draft.identity,
+            remembersPassword: remembersPassword,
+            didPromptForCredentials: didPromptForCredentials,
+            cachedPassword: credentialCache.password(for:)
+        )
+    }
 
+    /// Connects with the password the session found, or asks for one.
+    private func connect(using source: SessionCredentialPolicy.Source) {
+        credentialResolutionTask?.cancel()
+        switch source {
+        case .session, .noCredentials:
+            startConnectionAttempt()
+        case let .keychain(key):
+            readKeychainAndConnect(key)
+        case let .cache(password):
+            draft.password = password
+            startConnectionAttempt()
+        case .prompt:
+            promptForCredentials()
+        }
+    }
+
+    /// The Keychain read can block on the access-approval dialog, so it
+    /// runs off the main actor while the connecting overlay is up.
+    private func readKeychainAndConnect(_ key: KeychainCredentialKey) {
         isResolvingStoredCredentials = true
         render()
         let store = credentialStore
@@ -1462,50 +1472,39 @@ final class SessionViewController: NSViewController {
                 startConnectionAttempt()
             } else {
                 rememberedPassword = nil
-                connectWithCachedPasswordOrPrompt()
+                connect(using: credentialSource(remembersPassword: false))
             }
         }
-    }
-
-    private func connectWithCachedPasswordOrPrompt() {
-        guard let account = draft.identity.credentialAccountName,
-              let cachedPassword = InMemoryCredentialCache.shared.password(for: account)
-        else {
-            promptForCredentials()
-            return
-        }
-        draft.password = cachedPassword
-        startConnectionAttempt()
     }
 
     /// Keeps the password the server just accepted: in the Keychain when
     /// the user asked to remember it, else for this app run only. Turning
     /// Remember off deletes a password the Keychain held for this identity.
     private func keepAcceptedCredentials() {
-        guard let key = KeychainCredentialKey(identity: draft.identity),
-              draft.password.isEmpty == false
-        else {
+        let keep = SessionCredentialPolicy.keep(
+            password: draft.password,
+            identity: draft.identity,
+            remembersPassword: draft.rememberPassword,
+            rememberedPassword: rememberedPassword,
+            isRememberedByAnotherPC: launchStore?.isPasswordRemembered(
+                for: draft.identity,
+                byOtherThan: draft.deviceID
+            ) == true
+        )
+        guard let key = keep.key else {
             return
         }
-        // This app run's copy also serves other PCs with this sign-in that
-        // do not remember it.
-        InMemoryCredentialCache.shared.setPassword(draft.password, for: key.account)
-        if draft.rememberPassword {
-            // A password read from the Keychain is there already.
-            if draft.password != rememberedPassword {
-                persistAcceptedCredentials(.save(key: key, password: draft.password))
-            }
-            return
-        }
-        guard rememberedPassword != nil else {
-            return
-        }
-        // Another PC that remembers this sign-in still needs the item.
-        if launchStore?.isPasswordRemembered(for: draft.identity, byOtherThan: draft.deviceID) == true {
+        credentialCache.setPassword(draft.password, for: key.account)
+        switch keep {
+        case .nothing, .cacheOnly:
+            break
+        case .save:
+            persistAcceptedCredentials(.save(key: key, password: draft.password))
+        case .delete:
+            persistAcceptedCredentials(.delete(key: key))
+        case .stopRemembering:
             rememberedPassword = nil
             launchStore?.recordCredentialPersistence(for: draft.deviceID, identity: draft.identity, remembered: false)
-        } else {
-            persistAcceptedCredentials(.delete(key: key))
         }
     }
 
