@@ -35,18 +35,25 @@ final class RDPRemoteDesktopRenderer {
 }
 
 final class RemoteDesktopSampleBufferNSView: NSView {
-    private let displayLayer = AVSampleBufferDisplayLayer()
+    private let displayLayer: AVSampleBufferDisplayLayer
     private let sampleBufferFactory = RDPFrameSampleBufferFactory()
     private var lastPresentationID: Int?
     private var lastSampleBuffer: CMSampleBuffer?
     private var failureObserver: (any NSObjectProtocol)?
 
-    override init(frame frameRect: NSRect) {
+    override convenience init(frame frameRect: NSRect) {
+        self.init(frame: frameRect, displayLayer: AVSampleBufferDisplayLayer())
+    }
+
+    /// Tests pass a layer that can report a failure.
+    init(frame frameRect: NSRect, displayLayer: AVSampleBufferDisplayLayer) {
+        self.displayLayer = displayLayer
         super.init(frame: frameRect)
         configureLayers()
     }
 
     required init?(coder: NSCoder) {
+        displayLayer = AVSampleBufferDisplayLayer()
         super.init(coder: coder)
         configureLayers()
     }
