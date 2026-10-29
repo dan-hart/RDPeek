@@ -1235,7 +1235,9 @@ final class SessionViewController: NSViewController {
     }
 
     /// Windows and gnome-remote-desktop send no keyframe by themselves, but
-    /// answer the monitor layout sent again with one.
+    /// answer the monitor layout sent again with one. Before any layout was
+    /// sent, the server still has the desktop it connected with, at 100%
+    /// scale: send that, so a keyframe request never rescales the desktop.
     private func requestKeyframe(desktopSize: RDPDesktopSize) {
         guard let displayControlSession else {
             return
@@ -1243,7 +1245,7 @@ final class SessionViewController: NSViewController {
         let request = lastRequestedDisplayRequest ?? RDPDisplayRequest(
             width: UInt32(desktopSize.width),
             height: UInt32(desktopSize.height),
-            scaleFactors: RDPDisplayScaleFactors(backingScaleFactor: viewerPixelSize?.backingScaleFactor ?? 1)
+            scaleFactors: RDPDisplayScaleFactors(backingScaleFactor: 1)
         )
         displayControlSession.send(request)
     }
