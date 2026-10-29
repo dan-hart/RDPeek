@@ -115,11 +115,25 @@ final class SessionViewController: NSViewController {
         launchStore?.registerDiagnostics(diagnosticsModel, for: sessionID)
         startDiagnosticsLoop()
         startClipboardPollingLoop()
-        if shouldAutoConnect {
-            shouldAutoConnect = false
+        render()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        guard shouldAutoConnect else {
+            return
+        }
+        shouldAutoConnect = false
+        // The window controller settles the window's frame right after
+        // showing it. Connect once that is laid out, so the first desktop
+        // size is the canvas's rather than a guess from the screen.
+        Task { @MainActor [weak self] in
+            guard let self, didClose == false else {
+                return
+            }
+            view.layoutSubtreeIfNeeded()
             startConnection()
         }
-        render()
     }
 
     func closeSession() {
@@ -468,33 +482,23 @@ final class SessionViewController: NSViewController {
         diagnosticsModel.updateSnapshot(nextSnapshot)
     }
 
-    /// The user never picks a resolution: derive the initial remote desktop
-    /// size from the viewer surface, falling back to the window's screen.
+    /// The user never picks a resolution: the remote desktop starts at the
+    /// canvas size in points. Servers without Display Control keep it, at
+    /// 100% scale — a desktop of Retina pixels at 100% would be tiny. Display
+    /// Control servers get the pixel size and scale once their channel opens.
     private func initialDesktopSize() -> RDPDesktopSize {
-        if let viewerPixelSize {
-            let request = viewerPixelSize.displayRequest
-            if let size = try? RDPDesktopSize(
-                width: evenDesktopDimension(request.width, minimum: 640),
-                height: evenDesktopDimension(request.height, minimum: 480)
-            ) {
-                return size
-            }
+        var surface = canvasView.bounds.size
+        if surface.width <= 0 || surface.height <= 0 {
+            surface = (view.window?.screen ?? NSScreen.main)?.visibleFrame.size
+                ?? CGSize(width: 1280, height: 800)
         }
-
-        let screen = view.window?.screen ?? NSScreen.main
-        let scale = screen?.backingScaleFactor ?? 2
-        let surface = screen?.visibleFrame.size ?? CGSize(width: 1920, height: 1080)
-        if let size = try? RDPDesktopSize(
-            width: evenDesktopDimension(UInt32((surface.width * scale).rounded()), minimum: 640),
-            height: evenDesktopDimension(UInt32((surface.height * scale).rounded()), minimum: 480)
-        ) {
-            return size
+        guard let size = try? RDPDesktopSize(
+            width: evenDesktopDimension(UInt32(surface.width.rounded()), minimum: 640),
+            height: evenDesktopDimension(UInt32(surface.height.rounded()), minimum: 480)
+        ) else {
+            preconditionFailure("Clamped dimensions are always a valid desktop size")
         }
-
-        guard let fallback = try? RDPDesktopSize(width: 1920, height: 1080) else {
-            preconditionFailure("1920x1080 is always a valid desktop size")
-        }
-        return fallback
+        return size
     }
 
     private func evenDesktopDimension(_ value: UInt32, minimum: UInt16) -> UInt16 {
