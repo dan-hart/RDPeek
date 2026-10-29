@@ -101,9 +101,9 @@ struct HelpView: View {
                             "prompt on future connections."
                     )
                     HelpBody(
-                        "Sign-in fails — use “Use different credentials…” on the failure " +
-                            "screen. Note that some servers report a wrong password only " +
-                            "as a timeout."
+                        "Sign-in fails — RDPeek asks for the user name and password " +
+                            "again; on other failures, use “Use different credentials…”. " +
+                            "Note that some servers report a wrong password only as a timeout."
                     )
                     HelpBody(
                         "No sound — enable “Play remote audio” on the PC and reconnect; " +
