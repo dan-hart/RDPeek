@@ -255,7 +255,7 @@ final class DeviceListModel: ObservableObject {
         // when the profile remembers one, then this run's cache, then the
         // sign-in prompt — off the main thread, since the keychain read can
         // block on the access-approval dialog.
-        launchStore.openRemoteSession(RDPConnectionDraft(device: device, password: ""))
+        launchStore.openRemoteSession(RDPConnectionDraft(device: device))
     }
 
     func touchLastConnected(deviceID: UUID) {

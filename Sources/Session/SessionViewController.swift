@@ -29,6 +29,8 @@ final class SessionViewController: NSViewController {
     /// The attempt sent the draft's password, which is kept once the server
     /// accepts it.
     private var isAwaitingCredentialAcceptance = false
+    /// The password was kept for the connection the user started.
+    private var hasKeptCredentials = false
     private var isConnecting = false
     private var hasEverPresentedFrame = false
     private var autoRetryCount = 0
@@ -385,6 +387,11 @@ final class SessionViewController: NSViewController {
     /// Offers to trust a refused certificate. Certificates RDPeek lets
     /// through need no notice; their warnings stay in Diagnostics.
     private func certificateNoticeState() -> SessionCertificateNotice? {
+        // Trust and Connect would start a connection under the sign-in
+        // sheet, with the password it is replacing.
+        guard isAwaitingCredentials == false else {
+            return nil
+        }
         let canTrust = liveCertificate?.sha256 != nil
         switch certificateRefusal {
         case .changed:
@@ -549,6 +556,7 @@ final class SessionViewController: NSViewController {
     /// signing in, and trusting a certificate. Resets the automatic retries
     /// and finds the password first when the session has none.
     func startConnection() {
+        hasKeptCredentials = false
         autoRetryTask?.cancel()
         autoRetryTask = nil
         autoRetryCount = 0
@@ -905,7 +913,12 @@ final class SessionViewController: NSViewController {
         // the sign-in is kept only the first time.
         if isAwaitingCredentialAcceptance {
             isAwaitingCredentialAcceptance = false
-            keepAcceptedCredentials()
+            // An automatic retry signs in again with the same password,
+            // which was kept already.
+            if hasKeptCredentials == false {
+                hasKeptCredentials = true
+                keepAcceptedCredentials()
+            }
         }
         if hasPresentedFrame == false {
             startFirstFrameWatchdog()
@@ -952,7 +965,12 @@ final class SessionViewController: NSViewController {
             )
         case let .failure(error):
             finishedReport = RDPConnectionReport(connectionError: error, configuration: configuration)
-            outcome = .afterConnectionError(error, host: configuration.host, retriesSpent: autoRetryCount)
+            outcome = .afterConnectionError(
+                error,
+                host: configuration.host,
+                retriesSpent: autoRetryCount,
+                reachedServer: liveCertificate != nil
+            )
         }
         report = finishedReport
         certificateTrustedByApp = trustedCertificateStore.isTrusted(

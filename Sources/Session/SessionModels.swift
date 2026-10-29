@@ -23,14 +23,15 @@ struct RDPConnectionDraft: Equatable, Sendable {
     var audioPlaybackEnabled: Bool
     var rememberPassword: Bool
 
-    init(device: DeviceProfile, password: String) {
+    /// The password stays empty: the session finds it, or asks for it.
+    init(device: DeviceProfile) {
         deviceID = device.id
         name = device.displayName
         host = device.host
         port = device.port
         username = device.username
         domain = device.domain
-        self.password = password
+        password = ""
         hideCertificateWarnings = device.hideCertificateWarnings
         timeoutSeconds = device.timeoutSeconds
         clipboardSharingEnabled = device.clipboardSharingEnabled
@@ -235,11 +236,23 @@ enum SessionAttemptOutcome: Equatable {
 
     static let wrongCredentialsMessage = "The user name or password is incorrect."
 
-    /// After `RDPSessionClient.connect` threw: no RDP connection was set up,
-    /// so no credential was sent. Only an unreachable server is retried — a
-    /// host name that does not resolve stays wrong.
-    static func afterConnectionError(_ error: any Error, host: String, retriesSpent: Int) -> Self {
+    /// After `RDPSessionClient.connect` threw. Only an unreachable server is
+    /// retried — a host name that does not resolve stays wrong. `connect`
+    /// also throws when a server redirects to one it cannot reach, after
+    /// the sign-in; `reachedServer` (a certificate arrived) tells that
+    /// apart, and it is not retried, so the sign-in is not repeated.
+    static func afterConnectionError(
+        _ error: any Error,
+        host: String,
+        retriesSpent: Int,
+        reachedServer: Bool = false
+    ) -> Self {
         switch error as? RDPConnectionError {
+        case .connect? where reachedServer:
+            return .end(RDPSessionEndReason(
+                kind: .failed,
+                message: "“\(host)” redirected the connection to a server that could not be reached."
+            ))
         case .connect?:
             guard retriesSpent >= maximumUnreachableRetries else {
                 return .retry
@@ -281,10 +294,13 @@ enum SessionAttemptOutcome: Equatable {
                 if RDPLogonStatus.isWrongCredentials(status) {
                     return .promptForCredentials(message: wrongCredentialsMessage)
                 }
-            } else if report.stage == "credssp", error.contains("CredSSP server") == false {
+            } else if report.stage == "credssp",
+                      error.contains("connection closed before receiving CredSSP")
+                      || error.contains("connection lost before receiving CredSSP")
+            {
                 // Some servers close the connection on a rejected sign-in
-                // instead of naming the reason. A server that answered
-                // CredSSP wrongly is not a sign-in problem.
+                // instead of naming the reason. A timeout or a CredSSP
+                // protocol error is not a sign-in problem.
                 return .promptForCredentials(
                     message: "The remote computer did not accept the sign-in. Check the user name and password."
                 )

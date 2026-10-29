@@ -134,6 +134,20 @@ final class SessionModelsTests: XCTestCase {
         )
     }
 
+    func testUnreachableRedirectTargetIsNotRetried() {
+        let outcome = SessionAttemptOutcome.afterConnectionError(
+            RDPConnectionError.connect("Connection refused"),
+            host: "broker",
+            retriesSpent: 0,
+            reachedServer: true
+        )
+
+        XCTAssertEqual(outcome, .end(RDPSessionEndReason(
+            kind: .failed,
+            message: "“broker” redirected the connection to a server that could not be reached."
+        )))
+    }
+
     func testUnresolvableHostIsNeverRetried() {
         let outcome = SessionAttemptOutcome.afterConnectionError(
             RDPConnectionError.addressResolution("nodename nor servname provided"),
@@ -209,6 +223,20 @@ final class SessionModelsTests: XCTestCase {
             usedLegacyRSAKeyExchange: false
         ) else {
             return XCTFail("Expected the sign-in prompt")
+        }
+    }
+
+    func testSignInTimeoutOrNTLMErrorEndsInsteadOfAskingToSignIn() {
+        for error in [
+            "receive failed: CredSSP response timed out after 10 seconds",
+            "CredSSP NTLM failed: challenge message was truncated",
+        ] {
+            let report = makeReport(stage: "credssp", error: error)
+
+            XCTAssertEqual(
+                SessionAttemptOutcome.afterSession(report, presentedFrames: false, usedLegacyRSAKeyExchange: false),
+                .end(RDPSessionEndReason(kind: .failed, message: error))
+            )
         }
     }
 
