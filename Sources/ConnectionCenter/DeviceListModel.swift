@@ -158,12 +158,13 @@ final class DeviceListModel: ObservableObject {
     /// stale-keychain-entry cleanup compares against its original identity,
     /// and the Remember toggle counts as untouched while the edited flag
     /// still matches the snapshot's.
-    /// `hadRememberedPassword` says whether the editor found a saved
-    /// password for that identity.
+    /// `loadedPassword` is the saved password the editor loaded for that
+    /// identity, if any, and `hadRememberedPassword` whether it found one.
     func save(
         editor: DeviceEditorState,
         editedDevice: DeviceProfile,
         password: String,
+        loadedPassword: String?,
         hadRememberedPassword: Bool
     ) throws -> DeviceProfile {
         var device = editedDevice
@@ -193,6 +194,14 @@ final class DeviceListModel: ObservableObject {
                 && $0.rememberPassword != device.rememberPassword
                 && editor.device.identity.hasSameConnectionIdentity(as: device.identity)
         } ?? false
+        // Likewise, a session's sign-in may have saved a newer password over
+        // the one the sheet loaded. When Remember stays on for the same
+        // account and the user left the password as loaded, the keychain
+        // already holds it or a newer one: writing it back would revert.
+        let keepsSavedPassword = editor.device.rememberPassword
+            && device.rememberPassword
+            && password == loadedPassword
+            && editor.device.identity.credentialAccountName == device.identity.credentialAccountName
         if let current, keepsSessionRemember {
             device.rememberPassword = current.rememberPassword
         } else {
@@ -200,16 +209,19 @@ final class DeviceListModel: ObservableObject {
                 from: editor.device,
                 to: device,
                 password: password,
+                savesPassword: keepsSavedPassword == false,
                 hadRememberedPassword: hadRememberedPassword
             )
         }
 
         // Keep the password for this app run too, so this PC connects
         // without asking when it does not remember it, and so do others
-        // with the same sign-in that do not. One the sheet loaded from the
-        // keychain is older than the one a session that changed Remember
-        // since has kept.
+        // with the same sign-in that do not. Not one the sheet loaded and
+        // the user left as it was, which may be older than one a session
+        // accepted since, nor any once a session changed Remember after the
+        // sheet loaded a password: that session has kept a newer one.
         if password.isEmpty == false,
+           keepsSavedPassword == false,
            keepsSessionRemember == false || hadRememberedPassword == false,
            let account = device.identity.credentialAccountName
         {
@@ -221,11 +233,13 @@ final class DeviceListModel: ObservableObject {
     }
 
     /// Checks that the editor's Remember choice can be kept, then saves or
-    /// deletes keychain entries to match it.
+    /// deletes keychain entries to match it. `savesPassword` is false when
+    /// the entry for `device` must keep the password it has.
     private func applyKeychainChange(
         from snapshot: DeviceProfile,
         to device: DeviceProfile,
         password: String,
+        savesPassword: Bool,
         hadRememberedPassword: Bool
     ) throws {
         if device.rememberPassword, device.username.isEmpty {
@@ -237,7 +251,9 @@ final class DeviceListModel: ObservableObject {
 
         if let key = KeychainCredentialKey(identity: device.identity) {
             if device.rememberPassword {
-                try credentialStore.savePassword(password, for: key)
+                if savesPassword {
+                    try credentialStore.savePassword(password, for: key)
+                }
             } else if hadRememberedPassword,
                       rememberedPasswordIsShared(device.identity, excluding: device.id) == false
             {

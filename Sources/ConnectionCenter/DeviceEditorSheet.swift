@@ -21,6 +21,7 @@ struct DeviceEditorSheet: View {
     @State private var timeoutSeconds: Int
     @State private var validationMessage: String?
     @State private var isLoadingPassword: Bool
+    @State private var loadedPassword: String?
     @State private var hadRememberedPassword = false
 
     init(editorState: DeviceEditorState, onConnect: @escaping (DeviceProfile) -> Void) {
@@ -97,6 +98,7 @@ struct DeviceEditorSheet: View {
         }
         if let savedPassword = await deviceList.savedPassword(for: editorState.device) {
             password = savedPassword
+            loadedPassword = savedPassword
             hadRememberedPassword = true
         }
         isLoadingPassword = false
@@ -210,6 +212,7 @@ struct DeviceEditorSheet: View {
                 editor: editorState,
                 editedDevice: device,
                 password: password,
+                loadedPassword: loadedPassword,
                 hadRememberedPassword: hadRememberedPassword
             )
         } catch {
