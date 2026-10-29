@@ -34,7 +34,9 @@ export function InputSection() {
 
       <Reveal className="mx-auto mt-6 max-w-2xl text-center text-[15px] text-muted" delay={0.1}>
         <p>
-          ⌘ becomes ⊞ Win, ⌃ becomes Ctrl. Modifier state is reconciled on every
+          ⌘ becomes ⊞ Win, ⌃ becomes Ctrl, and left ⌥ becomes Alt, while right ⌥
+          still types the characters your Mac layout puts on it, like @ on a
+          German keyboard. Modifier state is reconciled on every
           event and released when the window loses focus, so nothing ever gets
           stuck down on the remote.
         </p>
