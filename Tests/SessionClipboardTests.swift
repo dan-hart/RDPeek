@@ -675,6 +675,55 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertTrue(session.publishedTexts.isEmpty)
     }
 
+    func testTwoRemoteFilesAreCopiedTogether() throws {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+
+        clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "first.txt"),
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "second.txt"),
+        ]))
+        XCTAssertEqual(toasts.last, "Downloading file 1 of 2")
+        for contents in [Data("first".utf8), Data("second".utf8)] {
+            try answerSizeRequest(UInt64(contents.count), to: clipboard, from: session)
+            XCTAssertEqual(session.rangeRequests.last?.streamID, session.sizeRequests.last)
+            try finishRemoteFileDownload(contents, to: clipboard, from: session)
+        }
+
+        XCTAssertEqual(session.sizeRequestFileIndexes, [0, 1])
+        XCTAssertEqual(Set(session.sizeRequests).count, 2, "Each file has its own stream")
+        let fileURLs = copiedFileURLs()
+        XCTAssertEqual(fileURLs.map(\.lastPathComponent), ["first.txt", "second.txt"])
+        XCTAssertEqual(try fileURLs.map { try Data(contentsOf: $0) }, [Data("first".utf8), Data("second".utf8)])
+        XCTAssertEqual(toasts.last, "2 remote files copied")
+    }
+
+    /// Each file fits, but not both.
+    func testRemoteFilesOverTheLimitTogetherFailTheDownload() throws {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+
+        clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "first.bin"),
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "second.bin"),
+        ]))
+        try answerSizeRequest(10, to: clipboard, from: session)
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        XCTAssertEqual(toasts.last, "Downloading file 2 of 2")
+        try answerSizeRequest(32 * 1024 * 1024, to: clipboard, from: session)
+
+        XCTAssertTrue(session.rangeRequests.isEmpty)
+        XCTAssertEqual(toasts.last, "Remote files exceed 32 MiB")
+        XCTAssertTrue(copiedFileURLs().isEmpty)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: downloadRoot.path), [])
+    }
+
     /// RDPKit leaves out the folders of a remote copy, so their files
     /// arrive side by side, which the toast says.
     func testRemoteFilesInFoldersAreCopiedWithoutThem() throws {
