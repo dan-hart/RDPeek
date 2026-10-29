@@ -37,7 +37,12 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         window.titlebarAppearsTransparent = true
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 760, height: 500)
+        // The content runs under the titlebar but the canvas starts below
+        // it. Keep the canvas at least 480 points tall, the smallest
+        // desktop the server is asked for, so a 1x display never has to
+        // shrink the desktop to fit.
+        let titlebarHeight = NSWindow.frameRect(forContentRect: .zero, styleMask: [.titled]).height
+        window.contentMinSize = NSSize(width: 760, height: 480 + titlebarHeight)
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = .black
         window.tabbingMode = .disallowed
