@@ -777,6 +777,90 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    func testCommandOrRightOptionTappedWhileTheOtherIsOnTheServerTapsNothing() {
+        // A click sent the other key down first; the one tapped after it is
+        // part of the same chord, so no lone Alt or Windows key reaches the
+        // server while the other is held there.
+        let harness = makeHarness()
+        let location = NSPoint(x: 100, y: 50)
+        let both = NSEvent.ModifierFlags.leftCommandDown.union(.rightOptionDown)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: location, flags: .leftCommandDown))
+        harness.view.mouseUp(with: mouseEvent(.leftMouseUp, location: location, flags: .leftCommandDown))
+        harness.recorder.events.removeAll()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: both))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftWindows, isReleased: true)])
+
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: location, flags: .rightOptionDown))
+        harness.view.mouseUp(with: mouseEvent(.leftMouseUp, location: location, flags: .rightOptionDown))
+        harness.recorder.events.removeAll()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: both))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .rightAlt, isReleased: true)])
+    }
+
+    func testChordWithCommandOrRightOptionAlreadyOnTheServerSendsTheOther() {
+        // With Win or Alt already down from a click, a key pressed in the
+        // chord still sends the held-back key down ahead of it.
+        let harness = makeHarness()
+        let location = NSPoint(x: 100, y: 50)
+        let rKey = RDPKeyboardScancode(code: 0x13)
+        let both = NSEvent.ModifierFlags.leftCommandDown.union(.rightOptionDown)
+        let typeCommandOptionR = {
+            XCTAssertTrue(harness.view.performKeyEquivalent(with: self.keyEvent(
+                .keyDown,
+                keyCode: UInt16(kVK_ANSI_R),
+                characters: "®",
+                charactersIgnoringModifiers: "r",
+                flags: both
+            )))
+            NSApplication.shared.sendEvent(self.keyEvent(
+                .keyUp,
+                keyCode: UInt16(kVK_ANSI_R),
+                characters: "®",
+                charactersIgnoringModifiers: "r",
+                flags: both,
+                window: harness.window
+            ))
+        }
+
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .leftCommandDown))
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: location, flags: .leftCommandDown))
+        harness.view.mouseUp(with: mouseEvent(.leftMouseUp, location: location, flags: .leftCommandDown))
+        harness.recorder.events.removeAll()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: both))
+        typeCommandOptionR()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .leftCommandDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .rightAlt, isReleased: false),
+            .keyboard(scancode: rKey, isReleased: false),
+            .keyboard(scancode: rKey, isReleased: true),
+            .keyboard(scancode: .rightAlt, isReleased: true),
+            .keyboard(scancode: .leftWindows, isReleased: true),
+        ])
+
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: location, flags: .rightOptionDown))
+        harness.view.mouseUp(with: mouseEvent(.leftMouseUp, location: location, flags: .rightOptionDown))
+        harness.recorder.events.removeAll()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: both))
+        typeCommandOptionR()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .leftWindows, isReleased: false),
+            .keyboard(scancode: rKey, isReleased: false),
+            .keyboard(scancode: rKey, isReleased: true),
+            .keyboard(scancode: .leftWindows, isReleased: true),
+            .keyboard(scancode: .rightAlt, isReleased: true),
+        ])
+    }
+
     // MARK: - Key equivalents while controlling the desktop
 
     func testPerformKeyEquivalentClaimsCommandChordForRemote() {

@@ -497,11 +497,15 @@ final class RemoteInputCaptureNSView: NSView {
         deferredRightAlt.noteChordedElsewhere()
     }
 
-    /// Command and right Option held back together make a chord of their own, so releasing
-    /// them taps neither the Windows key nor Alt. A key or button pressed with them still
-    /// sends both down first.
+    /// Command and right Option held together make a chord of their own, so releasing them taps
+    /// neither the Windows key nor Alt, whether both are held back or one is already on the
+    /// server, as the Windows key is after a Command-click. A key or button pressed with them
+    /// still sends the held-back keys down first.
     private func noteDeferredKeysChordedTogether() {
-        if deferredWindowsKey.isHoldingKeys, deferredRightAlt.isHoldingKeys {
+        let isWindowsKeyDown = deferredWindowsKey.isHoldingKeys
+            || MacRDPDeferredWindowsKey.windowsKeys.contains(where: inputState.isScancodePressed)
+        let isRightAltDown = deferredRightAlt.isHoldingKeys || inputState.isScancodePressed(Self.rightAlt)
+        if isWindowsKeyDown, isRightAltDown {
             noteDeferredKeysChordedElsewhere()
         }
     }
@@ -559,8 +563,13 @@ struct MacRDPDeferredWindowsKey {
     private var heldScancodes: [RDPKeyboardScancode] = []
     private var isChordedElsewhere = false
 
+    static let windowsKeys = [
+        RDPKeyboardScancode(code: 0x5B, isExtended: true),
+        RDPKeyboardScancode(code: 0x5C, isExtended: true),
+    ]
+
     static func isWindowsKey(_ scancode: RDPKeyboardScancode) -> Bool {
-        scancode.isExtended && (scancode.code == 0x5B || scancode.code == 0x5C)
+        windowsKeys.contains(scancode)
     }
 
     var isHoldingKeys: Bool {
