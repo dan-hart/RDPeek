@@ -202,6 +202,20 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertEqual(harness.recorder.events, [])
     }
 
+    func testF2SendsItsScancodeInsteadOfAFunctionKeyCharacter() {
+        // AppKit reports F2 as the private-use character NSF2FunctionKey,
+        // which used to go to the remote as Unicode.
+        let harness = makeHarness()
+        let f2 = RDPKeyboardScancode(code: 0x3C)
+        let functionKey = String(utf16CodeUnits: [0xF705], count: 1)
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_F2), characters: functionKey))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: UInt16(kVK_F2), characters: functionKey))
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: f2, isReleased: false),
+            .keyboard(scancode: f2, isReleased: true),
+        ])
+    }
+
     // MARK: - Helpers
 
     private func makeHarness() -> Harness {
