@@ -188,11 +188,12 @@ final class DeviceListModel: ObservableObject {
         // toggle alone and the identity is unchanged, that newer choice
         // stands and the keychain is already right: writing the snapshot's
         // flag back would orphan the item or re-save an old password.
-        if let current,
-           device.rememberPassword == editor.device.rememberPassword,
-           current.rememberPassword != device.rememberPassword,
-           editor.device.identity.hasSameConnectionIdentity(as: device.identity)
-        {
+        let keepsSessionRemember = current.map {
+            device.rememberPassword == editor.device.rememberPassword
+                && $0.rememberPassword != device.rememberPassword
+                && editor.device.identity.hasSameConnectionIdentity(as: device.identity)
+        } ?? false
+        if let current, keepsSessionRemember {
             device.rememberPassword = current.rememberPassword
         } else {
             try applyKeychainChange(
@@ -205,8 +206,13 @@ final class DeviceListModel: ObservableObject {
 
         // Keep the password for this app run too, so this PC connects
         // without asking when it does not remember it, and so do others
-        // with the same sign-in that do not.
-        if password.isEmpty == false, let account = device.identity.credentialAccountName {
+        // with the same sign-in that do not. One the sheet loaded from the
+        // keychain is older than the one a session that changed Remember
+        // since has kept.
+        if password.isEmpty == false,
+           keepsSessionRemember == false || hadRememberedPassword == false,
+           let account = device.identity.credentialAccountName
+        {
             credentialCache.setPassword(password, for: account)
         }
 

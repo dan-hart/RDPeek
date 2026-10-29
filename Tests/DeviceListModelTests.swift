@@ -368,6 +368,8 @@ final class DeviceListModelTests: XCTestCase {
         // After the sheet loaded the saved password, a session's sign-in
         // deleted it.
         harness.model.recordCredentialPersistence(deviceID: device.id, identity: device.identity, remembered: false)
+        let account = try account(for: device)
+        harness.cache.setPassword("new", for: account)
         var edited = device
         edited.name = "Renamed"
 
@@ -379,6 +381,7 @@ final class DeviceListModelTests: XCTestCase {
         )
 
         XCTAssertFalse(saved.rememberPassword)
+        XCTAssertEqual(harness.cache.password(for: account), "new", "The session's password is newer than the sheet's")
         XCTAssertEqual(try DeviceProfileStore(defaults: harness.defaults).devices().first?.rememberPassword, false)
         XCTAssertEqual(harness.credentials.savedAccounts, [])
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
