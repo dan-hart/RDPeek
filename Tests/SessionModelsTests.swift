@@ -45,6 +45,22 @@ final class SessionModelsTests: XCTestCase {
         XCTAssertEqual(reason.message, "Remote session disconnected.")
     }
 
+    func testKeyframeRequestsArePacedAndStopUntilVideoDecodesAgain() {
+        var throttle = RDPKeyframeRequestThrottle()
+        let start = Date()
+        func requests(atIntervals intervals: [Double]) -> [Bool] {
+            intervals.map {
+                throttle.shouldRequest(at: start.addingTimeInterval($0 * RDPKeyframeRequestThrottle.minimumInterval))
+            }
+        }
+
+        XCTAssertEqual(requests(atIntervals: [0, 0.5, 1, 2, 3]), [true, false, true, true, false])
+
+        throttle.recordDecodedVideo()
+
+        XCTAssertEqual(requests(atIntervals: [4]), [true])
+    }
+
     private func makeReport(
         status: String = "success",
         graphicsChannelName: String? = nil,

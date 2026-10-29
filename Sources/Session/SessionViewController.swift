@@ -701,6 +701,7 @@ final class SessionViewController: NSViewController {
         let sessionThread = Thread {
             var configuration = baseConfiguration
             configuration.storedClientLicense = try? clientLicenseStore.license(for: clientLicenseKey)
+            var keyframeRequests = RDPKeyframeRequestThrottle()
             let decodeQueue = RDPFrameDecodeQueue(
                 shouldCancel: {
                     cancellation.isCancelled
@@ -758,13 +759,28 @@ final class SessionViewController: NSViewController {
             let nextReport = RDPSessionClient().run(
                 configuration: configuration,
                 onGraphicsFrame: { frame in
-                    try decodeQueue.submitAndWait(
+                    let completion = decodeQueue.submitAndWait(
                         frame,
                         receivedAt: Date(),
                         shouldContinue: {
                             cancellation.isCancelled == false
                         }
-                    ).requireDecoded()
+                    )
+                    if frame.contentKind == .video, completion == .decoded {
+                        keyframeRequests.recordDecodedVideo()
+                    }
+                    // An update that fails to decode leaves stale pixels, not
+                    // a broken session. Failed video waits for a keyframe,
+                    // which the server is asked for.
+                    if case .failed = completion {
+                        if frame.contentKind == .video, keyframeRequests.shouldRequest(at: Date()) {
+                            sink.apply { controller in
+                                controller.requestKeyframe(desktopSize: requestedDesktopSize)
+                            }
+                        }
+                        return
+                    }
+                    try completion.requireDecoded()
                 },
                 onInputReady: { session in
                     // Keychain writes can block on the access-approval
@@ -1227,6 +1243,24 @@ final class SessionViewController: NSViewController {
         lastRequestedDisplayRequest = request
         requestedDesktopSizeLabel = request.label
         render()
+    }
+
+    /// Windows and gnome-remote-desktop send no keyframe by themselves, but
+    /// answer the monitor layout sent again with one.
+    private func requestKeyframe(desktopSize: RDPDesktopSize) {
+        guard let displayControlSession else {
+            return
+        }
+        let backingScaleFactor = viewerPixelSize?.backingScaleFactor
+            ?? framePacing.backingScaleFactor
+            ?? view.window?.backingScaleFactor
+            ?? 1
+        let request = lastRequestedDisplayRequest ?? RDPDisplayRequest(
+            width: UInt32(desktopSize.width),
+            height: UInt32(desktopSize.height),
+            scaleFactors: RDPDisplayScaleFactors(backingScaleFactor: backingScaleFactor)
+        )
+        displayControlSession.send(request)
     }
 
     private func cancelPendingDisplayResize(resetLastRequestedSize: Bool = false) {
