@@ -633,18 +633,14 @@ final class SessionViewController: NSViewController {
 
         let trimmedUsername = draft.username.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedDomain = draft.domain.trimmingCharacters(in: .whitespacesAndNewlines)
-        let credentialKey = makeCredentialKey(
+        let identity = RDPConnectionIdentity(
             host: target.host,
             port: target.port,
             username: trimmedUsername,
             domain: trimmedDomain
         )
-        let clientLicenseKey = ClientLicenseStoreKey(identity: RDPConnectionIdentity(
-            host: target.host,
-            port: target.port,
-            username: trimmedUsername,
-            domain: trimmedDomain
-        ))
+        let credentialKey = KeychainCredentialKey(identity: identity)
+        let clientLicenseKey = ClientLicenseStoreKey(identity: identity)
         let credentials: RDPCredentials?
         do {
             credentials = try RDPCredentials.validated(
@@ -1762,7 +1758,12 @@ final class SessionViewController: NSViewController {
             return
         }
 
-        guard let key = currentCredentialKey() else {
+        guard let key = KeychainCredentialKey(
+            host: draft.host,
+            portText: String(draft.port),
+            username: draft.username.trimmingCharacters(in: .whitespacesAndNewlines),
+            domain: draft.domain.trimmingCharacters(in: .whitespacesAndNewlines)
+        ) else {
             promptForCredentials()
             return
         }
@@ -1799,32 +1800,6 @@ final class SessionViewController: NSViewController {
 
             promptForCredentials()
         }
-    }
-
-    private func currentCredentialKey() -> KeychainCredentialKey? {
-        guard let target = try? RDPConnectionTarget(host: draft.host, portText: String(draft.port)) else {
-            return nil
-        }
-        return makeCredentialKey(
-            host: target.host,
-            port: target.port,
-            username: draft.username.trimmingCharacters(in: .whitespacesAndNewlines),
-            domain: draft.domain.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-    }
-
-    private func makeCredentialKey(
-        host: String,
-        port: UInt16,
-        username: String,
-        domain: String
-    ) -> KeychainCredentialKey? {
-        KeychainCredentialKey(identity: RDPConnectionIdentity(
-            host: host,
-            port: port,
-            username: username,
-            domain: domain
-        ))
     }
 
     private func credentialPersistenceRequest(
