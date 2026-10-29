@@ -93,6 +93,10 @@ final class RemoteInputMappingTests: XCTestCase {
         }
     }
 
+    func testKeypadClearDoesNotSendNumLock() {
+        XCTAssertNil(MacRDPKeyboardMapping.scancode(forKeyCode: UInt16(kVK_ANSI_KeypadClear)))
+    }
+
     func testFunctionKeysAlwaysSendScancodesWhileCharactersUseUnicode() {
         XCTAssertTrue(MacRDPKeyboardMapping.shouldSendScancode(forKeyCode: UInt16(kVK_F2), modifierFlags: []))
         XCTAssertTrue(MacRDPKeyboardMapping.shouldSendScancode(forKeyCode: UInt16(kVK_F4), modifierFlags: []))
