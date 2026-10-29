@@ -23,6 +23,8 @@ final class SessionViewController: NSViewController {
     /// The password the Keychain holds for the draft's identity, when known.
     private var rememberedPassword: String?
     private var isAwaitingCredentials = false
+    /// Why the sign-in overlay asks again, if it does.
+    private var credentialsErrorMessage: String?
     private var isResolvingStoredCredentials = false
     private var credentialResolutionTask: Task<Void, Never>?
     private var didPromptForCredentials = false
@@ -297,6 +299,14 @@ final class SessionViewController: NSViewController {
             inputSession: inputSession
         )
 
+        // The sign-in overlay copies the prefill as it appears, so it never
+        // overwrites what the user types; it is set before the phase that
+        // shows the overlay.
+        hudModel.update(\.prefillUsername, to: draft.username)
+        hudModel.update(\.prefillDomain, to: draft.domain)
+        hudModel.update(\.prefillRememberPassword, to: draft.rememberPassword)
+        hudModel.update(\.credentialsErrorMessage, to: credentialsErrorMessage)
+
         let nextPhase = currentPhase
         if hudModel.phase != nextPhase {
             hudModel.phase = nextPhase
@@ -500,10 +510,7 @@ final class SessionViewController: NSViewController {
     // MARK: - Credentials prompt
 
     private func promptForCredentials(errorMessage: String? = nil) {
-        hudModel.prefillUsername = draft.username
-        hudModel.prefillDomain = draft.domain
-        hudModel.prefillRememberPassword = draft.rememberPassword
-        hudModel.credentialsErrorMessage = errorMessage
+        credentialsErrorMessage = errorMessage
         didPromptForCredentials = true
         isAwaitingCredentials = true
         render()
@@ -542,7 +549,7 @@ final class SessionViewController: NSViewController {
             rememberedPassword = nil
         }
         isAwaitingCredentials = false
-        hudModel.credentialsErrorMessage = nil
+        credentialsErrorMessage = nil
         startConnection()
     }
 
