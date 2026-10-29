@@ -60,6 +60,21 @@ final class RemoteDesktopSampleBufferViewTests: XCTestCase {
         XCTAssertEqual(layer.flushCount, flushCount + 1, "The failed queue is flushed before the frame goes in again")
     }
 
+    func testLayerThatNeedsAFlushShowsTheLastFrameAgain() throws {
+        let layer = RecordingDisplayLayer()
+        let view = RemoteDesktopSampleBufferNSView(frame: .zero, displayLayer: layer)
+        view.present(try makePresentation(), id: 1)
+        let shownSample = try XCTUnwrap(layer.enqueuedSamples.last)
+        let flushCount = layer.flushCount
+
+        layer.requiresFlush = true
+        post(.AVSampleBufferDisplayLayerRequiresFlushToResumeDecodingDidChange, of: layer)
+
+        XCTAssertEqual(layer.enqueuedSamples.count, 2)
+        XCTAssertTrue(layer.enqueuedSamples.last === shownSample)
+        XCTAssertEqual(layer.flushCount, flushCount + 1)
+    }
+
     func testLayerThatKeepsFailingGetsEachFrameAgainOnlyOnce() throws {
         let layer = RecordingDisplayLayer()
         let view = RemoteDesktopSampleBufferNSView(frame: .zero, displayLayer: layer)
@@ -83,6 +98,7 @@ final class RemoteDesktopSampleBufferViewTests: XCTestCase {
         view.present(try makePresentation(), id: 1)
 
         postDecodeFailure(of: layer)
+        post(.AVSampleBufferDisplayLayerRequiresFlushToResumeDecodingDidChange, of: layer)
 
         XCTAssertEqual(layer.enqueuedSamples.count, 1)
     }
@@ -102,7 +118,24 @@ final class RemoteDesktopSampleBufferViewTests: XCTestCase {
     // MARK: - Helpers
 
     private func postDecodeFailure(of layer: AVSampleBufferDisplayLayer) {
-        NotificationCenter.default.post(name: .AVSampleBufferDisplayLayerFailedToDecode, object: layer)
+        post(.AVSampleBufferDisplayLayerFailedToDecode, of: layer)
+    }
+
+    /// Posts as AVFoundation would, then lets the main-queue recovery the
+    /// view schedules run.
+    private func post(_ name: Notification.Name, of layer: AVSampleBufferDisplayLayer) {
+        NotificationCenter.default.post(name: name, object: layer)
+        drainMainQueue()
+    }
+
+    /// Runs what is queued on the main queue so far: the main queue is
+    /// serial, so it has run once a block queued after it does.
+    private func drainMainQueue() {
+        let drained = expectation(description: "main queue drained")
+        DispatchQueue.main.async {
+            drained.fulfill()
+        }
+        wait(for: [drained], timeout: 5)
     }
 
     /// A composed BGRA frame, as RDPKit hands one over once decoded.
@@ -128,14 +161,19 @@ final class RemoteDesktopSampleBufferViewTests: XCTestCase {
 }
 
 /// Records what the view enqueues instead of decoding it, and reports a
-/// failure on demand.
+/// failure or a needed flush on demand.
 private final class RecordingDisplayLayer: AVSampleBufferDisplayLayer {
     var reportsFailure = false
+    var requiresFlush = false
     private(set) var enqueuedSamples: [CMSampleBuffer] = []
     private(set) var flushCount = 0
 
     override var status: AVQueuedSampleBufferRenderingStatus {
         reportsFailure ? .failed : .rendering
+    }
+
+    override var requiresFlushToResumeDecoding: Bool {
+        requiresFlush
     }
 
     override func enqueue(_ sampleBuffer: CMSampleBuffer) {

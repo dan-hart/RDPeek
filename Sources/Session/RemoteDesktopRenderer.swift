@@ -39,7 +39,7 @@ final class RemoteDesktopSampleBufferNSView: NSView {
     private let sampleBufferFactory = RDPFrameSampleBufferFactory()
     private var lastPresentationID: Int?
     private var lastSampleBuffer: CMSampleBuffer?
-    private var failureObserver: (any NSObjectProtocol)?
+    private var displayLayerObservers: [any NSObjectProtocol] = []
 
     override convenience init(frame frameRect: NSRect) {
         self.init(frame: frameRect, displayLayer: AVSampleBufferDisplayLayer())
@@ -61,9 +61,7 @@ final class RemoteDesktopSampleBufferNSView: NSView {
     deinit {
         MainActor.assumeIsolated {
             clear()
-            if let failureObserver {
-                NotificationCenter.default.removeObserver(failureObserver)
-            }
+            displayLayerObservers.forEach(NotificationCenter.default.removeObserver)
         }
     }
 
@@ -137,22 +135,35 @@ final class RemoteDesktopSampleBufferNSView: NSView {
         displayLayer.videoGravity = .resizeAspect
         layer?.addSublayer(displayLayer)
         updateContentsScale()
-        failureObserver = NotificationCenter.default.addObserver(
-            forName: .AVSampleBufferDisplayLayerFailedToDecode,
-            object: displayLayer,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.redisplayLastSampleAfterFailure()
+        observeDisplayLayer()
+    }
+
+    /// AVFoundation can post these on its own threads. The observer runs on
+    /// the posting thread and only schedules the recovery on the main
+    /// thread, so the post never waits for it.
+    private func observeDisplayLayer() {
+        displayLayerObservers = [
+            NSNotification.Name.AVSampleBufferDisplayLayerFailedToDecode,
+            .AVSampleBufferDisplayLayerRequiresFlushToResumeDecodingDidChange,
+        ].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: displayLayer, queue: nil) { [weak self] _ in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        self?.redisplayLastSampleIfNeeded()
+                    }
+                }
             }
         }
     }
 
-    /// A failed layer shows nothing until the next frame, which a still
-    /// remote desktop may not send for a long time, so show the last frame
-    /// again — once per frame, so a layer that keeps failing cannot loop.
-    private func redisplayLastSampleAfterFailure() {
-        guard displayLayer.status == .failed, let sampleBuffer = lastSampleBuffer else {
+    /// A layer that failed or needs a flush shows nothing until the next
+    /// frame, which a still remote desktop may not send for a long time, so
+    /// show the last frame again — once per frame, so a layer that keeps
+    /// failing cannot loop.
+    private func redisplayLastSampleIfNeeded() {
+        guard displayLayer.status == .failed || displayLayer.requiresFlushToResumeDecoding,
+              let sampleBuffer = lastSampleBuffer
+        else {
             return
         }
         lastSampleBuffer = nil
