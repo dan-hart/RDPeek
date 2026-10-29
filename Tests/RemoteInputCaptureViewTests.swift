@@ -528,6 +528,25 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertEqual(harness.recorder.events, [])
     }
 
+    func testKeypadEqualsGoesAsUnicodeWhereItsScancodeTypesSomethingElse() {
+        // PC keypads have no "=": keypad "=" goes as the main-row key US
+        // Windows types "=" with, which is a dead "´" on German.
+        let harness = makeHarness()
+        let mainRowEquals = RDPKeyboardScancode(code: 0x0D)
+        let keypadEquals = UInt16(kVK_ANSI_KeypadEquals)
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: keypadEquals, characters: "="))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: keypadEquals, characters: "="))
+        harness.view.keyboardLayout = RDPKeyboardLayout(rawValue: 0x0000_0407)
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: keypadEquals, characters: "="))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: mainRowEquals, isReleased: false),
+            .keyboard(scancode: mainRowEquals, isReleased: true),
+            .unicode(codeUnit: 0x3D, isReleased: false),
+            .unicode(codeUnit: 0x3D, isReleased: true),
+        ])
+    }
+
     func testF2SendsItsScancodeInsteadOfAFunctionKeyCharacter() {
         // AppKit reports F2 as the private-use character NSF2FunctionKey,
         // which used to go to the remote as Unicode.
