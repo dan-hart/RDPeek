@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import RDPKit
 import XCTest
 
@@ -20,6 +21,26 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         harness.recorder.events.removeAll()
         harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
         XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: .leftWindows, isReleased: true)])
+    }
+
+    func testModifierWithoutSideBitsFollowsSideIndependentFlag() {
+        // Some keyboards report only .shift, with no left/right device bit;
+        // the key code still names the side that changed.
+        let harness = makeHarness()
+        let leftShift = RDPKeyboardScancode(code: 0x2A)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: .shift))
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: leftShift, isReleased: false)])
+
+        harness.recorder.events.removeAll()
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_A), characters: "A", flags: .shift))
+        XCTAssertEqual(harness.recorder.events, [
+            .unicode(codeUnit: 0x41, isReleased: false),
+            .unicode(codeUnit: 0x41, isReleased: true),
+        ])
+
+        harness.recorder.events.removeAll()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: []))
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: leftShift, isReleased: true)])
     }
 
     func testRepeatedFlagsStateSendsNoDuplicateEvents() {

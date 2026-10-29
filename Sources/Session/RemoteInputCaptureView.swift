@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import RDPKit
 
 /// Destination for the input events the capture view emits. The live
@@ -219,30 +220,38 @@ final class RemoteInputCaptureNSView: NSView {
         {
             events += releaseEventsForPressedKeys()
         }
-        events += modifierSyncEvents(for: event)
+        // The key code names the side that changed, so on keyboards that
+        // report no side bits the side-independent flag tells its state.
+        if let modifier = MacRDPModifierKey(keyCode: event.keyCode) {
+            let isDown = modifier.isDown(in: event.modifierFlags)
+            if isDown != inputState.isScancodePressed(modifier.scancode) {
+                events.append(inputState.keyboard(scancode: modifier.scancode, isReleased: isDown == false))
+            }
+        }
+        events += modifierSyncEvents(for: event.modifierFlags)
         inputSession?.send(events)
     }
 
-    /// Reconciles every modifier key against the event's device-dependent
-    /// flag bits, so a modifier transition the view never saw (window was
-    /// not key at the time) cannot leave the remote state inverted.
-    private func modifierSyncEvents(for event: NSEvent) -> [RDPSlowPathInputEvent] {
-        MacRDPKeyboardMapping.modifierKeyCodes.compactMap { keyCode in
-            guard let scancode = MacRDPKeyboardMapping.modifierScancode(forKeyCode: keyCode),
-                  let deviceMask = MacRDPKeyboardMapping.deviceModifierMask(forKeyCode: keyCode)
-            else {
-                return nil
+    /// Reconciles every modifier key with the event's flags, so a modifier
+    /// transition the view never saw (window was not key at the time) cannot
+    /// leave the remote state inverted. A key the flags show up is released;
+    /// a key is pressed only when its own side bit shows it down, since a
+    /// keyboard that reports no side bits does not say which side is held.
+    private func modifierSyncEvents(for modifierFlags: NSEvent.ModifierFlags) -> [RDPSlowPathInputEvent] {
+        MacRDPModifierKey.all.compactMap { modifier in
+            let isPressed = inputState.isScancodePressed(modifier.scancode)
+            if isPressed, modifier.isDown(in: modifierFlags) == false {
+                return inputState.keyboard(scancode: modifier.scancode, isReleased: true)
             }
-            let isPressed = event.modifierFlags.rawValue & deviceMask != 0
-            guard isPressed != inputState.isScancodePressed(scancode) else {
-                return nil
+            if isPressed == false, modifier.isSideDown(in: modifierFlags) {
+                return inputState.keyboard(scancode: modifier.scancode, isReleased: false)
             }
-            return inputState.keyboard(scancode: scancode, isReleased: isPressed == false)
+            return nil
         }
     }
 
     private func syncModifierKeys(with event: NSEvent) {
-        inputSession?.send(modifierSyncEvents(for: event))
+        inputSession?.send(modifierSyncEvents(for: event.modifierFlags))
     }
 
     private func sendPointerMove(_ event: NSEvent) {
@@ -511,58 +520,8 @@ private enum MacRDPKeyboardMapping {
         }
     }
 
-    static let modifierKeyCodes: [UInt16] = [54, 55, 56, 58, 59, 60, 61, 62]
-
     static func isCommandKeyCode(_ keyCode: UInt16) -> Bool {
-        keyCode == 54 || keyCode == 55
-    }
-
-    /// Device-dependent NSEvent.ModifierFlags bit for each modifier key,
-    /// from the NX_DEVICE*KEYMASK constants in <IOKit/hidsystem/IOLLEvent.h>.
-    static func deviceModifierMask(forKeyCode keyCode: UInt16) -> UInt? {
-        switch keyCode {
-        case 54:
-            0x0000_0010 // NX_DEVICERCMDKEYMASK
-        case 55:
-            0x0000_0008 // NX_DEVICELCMDKEYMASK
-        case 56:
-            0x0000_0002 // NX_DEVICELSHIFTKEYMASK
-        case 58:
-            0x0000_0020 // NX_DEVICELALTKEYMASK
-        case 59:
-            0x0000_0001 // NX_DEVICELCTLKEYMASK
-        case 60:
-            0x0000_0004 // NX_DEVICERSHIFTKEYMASK
-        case 61:
-            0x0000_0040 // NX_DEVICERALTKEYMASK
-        case 62:
-            0x0000_2000 // NX_DEVICERCTLKEYMASK
-        default:
-            nil
-        }
-    }
-
-    static func modifierScancode(forKeyCode keyCode: UInt16) -> RDPKeyboardScancode? {
-        switch keyCode {
-        case 54:
-            RDPKeyboardScancode(code: 0x005C, isExtended: true)
-        case 55:
-            RDPKeyboardScancode(code: 0x005B, isExtended: true)
-        case 56:
-            RDPKeyboardScancode(code: 0x002A)
-        case 58:
-            RDPKeyboardScancode(code: 0x0038)
-        case 59:
-            RDPKeyboardScancode(code: 0x001D)
-        case 60:
-            RDPKeyboardScancode(code: 0x0036)
-        case 61:
-            RDPKeyboardScancode(code: 0x0038, isExtended: true)
-        case 62:
-            RDPKeyboardScancode(code: 0x001D, isExtended: true)
-        default:
-            nil
-        }
+        Int(keyCode) == kVK_Command || Int(keyCode) == kVK_RightCommand
     }
 
     private static func alwaysSendsScancode(forKeyCode keyCode: UInt16) -> Bool {
@@ -575,5 +534,74 @@ private enum MacRDPKeyboardMapping {
         default:
             false
         }
+    }
+}
+
+/// A modifier key: the scancode it is sent as, and how to read its state
+/// from an event's modifier flags.
+struct MacRDPModifierKey {
+    // Device-dependent modifier bits from IOKit's IOLLEvent.h (NX_DEVICE*KEYMASK).
+    private static let leftControl: UInt = 0x0000_0001
+    private static let leftShift: UInt = 0x0000_0002
+    private static let rightShift: UInt = 0x0000_0004
+    private static let leftCommand: UInt = 0x0000_0008
+    private static let rightCommand: UInt = 0x0000_0010
+    private static let leftOption: UInt = 0x0000_0020
+    private static let rightOption: UInt = 0x0000_0040
+    private static let rightControl: UInt = 0x0000_2000
+
+    static let all = [
+        kVK_Shift, kVK_RightShift, kVK_Control, kVK_RightControl,
+        kVK_Option, kVK_RightOption, kVK_Command, kVK_RightCommand,
+    ].compactMap { MacRDPModifierKey(keyCode: UInt16($0)) }
+
+    let scancode: RDPKeyboardScancode
+    private let flag: NSEvent.ModifierFlags
+    private let deviceMask: UInt
+    private let pairDeviceMask: UInt
+
+    init?(keyCode: UInt16) {
+        switch Int(keyCode) {
+        case kVK_Shift:
+            self.init(0x2A, flag: .shift, deviceMask: Self.leftShift, pair: Self.rightShift)
+        case kVK_RightShift:
+            self.init(0x36, flag: .shift, deviceMask: Self.rightShift, pair: Self.leftShift)
+        case kVK_Control:
+            self.init(0x1D, flag: .control, deviceMask: Self.leftControl, pair: Self.rightControl)
+        case kVK_RightControl:
+            self.init(0x1D, isExtended: true, flag: .control, deviceMask: Self.rightControl, pair: Self.leftControl)
+        case kVK_Option:
+            self.init(0x38, flag: .option, deviceMask: Self.leftOption, pair: Self.rightOption)
+        case kVK_RightOption:
+            self.init(0x38, isExtended: true, flag: .option, deviceMask: Self.rightOption, pair: Self.leftOption)
+        case kVK_Command:
+            self.init(0x5B, isExtended: true, flag: .command, deviceMask: Self.leftCommand, pair: Self.rightCommand)
+        case kVK_RightCommand:
+            self.init(0x5C, isExtended: true, flag: .command, deviceMask: Self.rightCommand, pair: Self.leftCommand)
+        default:
+            return nil
+        }
+    }
+
+    private init(_ code: UInt16, isExtended: Bool = false, flag: NSEvent.ModifierFlags, deviceMask: UInt, pair: UInt) {
+        scancode = RDPKeyboardScancode(code: code, isExtended: isExtended)
+        self.flag = flag
+        self.deviceMask = deviceMask
+        pairDeviceMask = deviceMask | pair
+    }
+
+    /// Reads this key's own side bit so left and right modifiers track independently, falling
+    /// back to the side-independent flag for keyboards that report no side bits.
+    func isDown(in modifierFlags: NSEvent.ModifierFlags) -> Bool {
+        let rawValue = modifierFlags.rawValue
+        if rawValue & pairDeviceMask != 0 {
+            return rawValue & deviceMask != 0
+        }
+        return modifierFlags.contains(flag)
+    }
+
+    /// Whether this key's own side bit, not only the side-independent flag, shows it down.
+    func isSideDown(in modifierFlags: NSEvent.ModifierFlags) -> Bool {
+        modifierFlags.contains(flag) && modifierFlags.rawValue & deviceMask != 0
     }
 }
