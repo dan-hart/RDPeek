@@ -552,9 +552,18 @@ final class SessionClipboard {
         return directory
     }
 
+    /// Writes a remote file quarantined, as a browser download is, so
+    /// Gatekeeper checks an app or script from the server before it runs.
+    /// Finder keeps the quarantine on the copy a paste makes.
     private func writeDownloadedFile(named fileName: String, contents: Data, in directory: URL) throws -> URL {
-        let fileURL = directory.appendingPathComponent(fileName, isDirectory: false)
+        var fileURL = directory.appendingPathComponent(fileName, isDirectory: false)
         try contents.write(to: fileURL, options: .atomic)
+        var resourceValues = URLResourceValues()
+        resourceValues.quarantineProperties = [
+            kLSQuarantineAgentNameKey as String: "RDPeek",
+            kLSQuarantineTypeKey as String: kLSQuarantineTypeOtherDownload as String,
+        ]
+        try fileURL.setResourceValues(resourceValues)
         return fileURL
     }
 

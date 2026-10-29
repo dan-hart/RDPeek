@@ -188,6 +188,8 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertTrue(session.rangeRequests.isEmpty)
         let fileURL = try XCTUnwrap(copiedFileURL())
         XCTAssertEqual(try Data(contentsOf: fileURL), contents)
+        let quarantine = try fileURL.resourceValues(forKeys: [.quarantinePropertiesKey]).quarantineProperties
+        XCTAssertEqual(quarantine?[kLSQuarantineAgentNameKey as String] as? String, "RDPeek")
     }
 
     func testEmptyRangeAnswerBeforeTheEndFailsTheDownload() throws {
