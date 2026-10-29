@@ -70,6 +70,11 @@ final class RemoteInputMappingTests: XCTestCase {
         XCTAssertTrue(MacRDPKeyboardMapping.shouldSendScancode(forKeyCode: UInt16(kVK_ANSI_A), modifierFlags: .option))
     }
 
+    func testFocusSynchronizationKeepsNumLockOnAndMirrorsCapsLock() {
+        XCTAssertEqual(MacRDPKeyboardMapping.toggleFlags(for: []), [.numLock])
+        XCTAssertEqual(MacRDPKeyboardMapping.toggleFlags(for: [.capsLock, .shift]), [.numLock, .capsLock])
+    }
+
     // MARK: - Scroll wheel
 
     func testScrollDeltasConvertToRDPRotationUnits() {

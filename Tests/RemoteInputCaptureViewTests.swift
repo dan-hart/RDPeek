@@ -111,6 +111,56 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertTrue(harness.recorder.events.contains(.keyboard(scancode: .leftWindows, isReleased: true)))
     }
 
+    // MARK: - Toggle-key synchronization
+
+    func testBecomingFirstResponderSynchronizesToggleKeys() {
+        let harness = makeHarness(isFirstResponder: false)
+        harness.window.makeFirstResponder(harness.view)
+        XCTAssertEqual(harness.recorder.events, [.synchronize(toggleFlags: currentToggleFlags)])
+    }
+
+    func testWindowBecomingKeySynchronizesToggleKeysForTheFocusedView() {
+        let harness = makeHarness()
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: harness.window)
+        XCTAssertEqual(harness.recorder.events, [.synchronize(toggleFlags: currentToggleFlags)])
+
+        let unfocused = makeHarness(isFirstResponder: false)
+        NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: unfocused.window)
+        XCTAssertEqual(unfocused.recorder.events, [])
+    }
+
+    func testNewInputSessionWhileFocusedIsSynchronized() {
+        let harness = makeHarness()
+        let nextSession = InputEventRecorder()
+        harness.view.inputSession = nextSession
+        XCTAssertEqual(nextSession.events, [.synchronize(toggleFlags: currentToggleFlags)])
+    }
+
+    func testCapsLockSynchronizesAndKeepsNumLockOnAndHeldKeysDown() {
+        // The synchronize resets the server's keys, so the held Shift is
+        // pressed again after it.
+        let harness = makeHarness()
+        let leftShift = RDPKeyboardScancode(code: 0x2A)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: .leftShiftDown))
+        harness.recorder.events.removeAll()
+
+        harness.view.flagsChanged(with: flagsEvent(
+            keyCode: UInt16(kVK_CapsLock),
+            flags: NSEvent.ModifierFlags.leftShiftDown.union(.capsLock)
+        ))
+        XCTAssertEqual(harness.recorder.events, [
+            .synchronize(toggleFlags: [.numLock, .capsLock]),
+            .keyboard(scancode: leftShift, isReleased: false),
+        ])
+
+        harness.recorder.events.removeAll()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_CapsLock), flags: .leftShiftDown))
+        XCTAssertEqual(harness.recorder.events, [
+            .synchronize(toggleFlags: [.numLock]),
+            .keyboard(scancode: leftShift, isReleased: false),
+        ])
+    }
+
     // MARK: - Swallowed keyUp while Command is held
 
     func testCommandReleaseFlushesSwallowedKeyUp() {
@@ -153,7 +203,6 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         // ⌘R must reach the remote as Win+R instead of triggering the
         // Session menu's Reconnect shortcut.
         let harness = makeHarness()
-        harness.window.makeFirstResponder(harness.view)
 
         let handled = harness.view.performKeyEquivalent(
             with: keyEvent(.keyDown, keyCode: 15, characters: "r", flags: .leftCommandDown)
@@ -167,7 +216,6 @@ final class RemoteInputCaptureViewTests: XCTestCase {
 
     func testPerformKeyEquivalentDefersWithoutInputSession() {
         let harness = makeHarness()
-        harness.window.makeFirstResponder(harness.view)
         harness.view.inputSession = nil
 
         let handled = harness.view.performKeyEquivalent(
@@ -177,7 +225,7 @@ final class RemoteInputCaptureViewTests: XCTestCase {
     }
 
     func testPerformKeyEquivalentDefersWhenNotFirstResponder() {
-        let harness = makeHarness()
+        let harness = makeHarness(isFirstResponder: false)
         XCTAssertNotIdentical(harness.window.firstResponder, harness.view)
 
         let handled = harness.view.performKeyEquivalent(
@@ -218,7 +266,9 @@ final class RemoteInputCaptureViewTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func makeHarness() -> Harness {
+    /// The view starts as first responder, as it is while the user controls
+    /// the desktop; the synchronize that focus sends is cleared.
+    private func makeHarness(isFirstResponder: Bool = true) -> Harness {
         let recorder = InputEventRecorder()
         let view = RemoteInputCaptureNSView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
         view.rdpFrame = makeFrameMetadata(width: 200, height: 100)
@@ -231,7 +281,16 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = view
         view.inputSession = recorder
+        if isFirstResponder {
+            window.makeFirstResponder(view)
+            recorder.events.removeAll()
+        }
         return Harness(window: window, view: view, recorder: recorder)
+    }
+
+    /// What focus synchronization sends for the keyboard's current lock state.
+    private var currentToggleFlags: RDPToggleKeyFlags {
+        MacRDPKeyboardMapping.toggleFlags(for: NSEvent.modifierFlags)
     }
 
     private func resignKey(_ harness: Harness) {
@@ -334,6 +393,11 @@ private extension NSEvent.ModifierFlags {
     /// `.command` plus the NX_DEVICELCMDKEYMASK device-dependent bit.
     static let leftCommandDown = NSEvent.ModifierFlags(
         rawValue: NSEvent.ModifierFlags.command.rawValue | 0x0000_0008
+    )
+
+    /// `.shift` plus the NX_DEVICELSHIFTKEYMASK device-dependent bit.
+    static let leftShiftDown = NSEvent.ModifierFlags(
+        rawValue: NSEvent.ModifierFlags.shift.rawValue | 0x0000_0002
     )
 }
 

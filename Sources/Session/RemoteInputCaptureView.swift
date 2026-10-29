@@ -24,6 +24,11 @@ final class RemoteInputCaptureNSView: NSView {
                 releasePressedInputs()
             }
         }
+        didSet {
+            if inputSession != nil, inputSession !== oldValue, window?.firstResponder === self {
+                synchronizeToggleKeys(NSEvent.modifierFlags)
+            }
+        }
     }
 
     private var trackingArea: NSTrackingArea?
@@ -64,6 +69,11 @@ final class RemoteInputCaptureNSView: NSView {
                 name: NSWindow.didResignKeyNotification,
                 object: window
             )
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSWindow.didBecomeKeyNotification,
+                object: window
+            )
         }
         if let newWindow {
             NotificationCenter.default.addObserver(
@@ -72,12 +82,32 @@ final class RemoteInputCaptureNSView: NSView {
                 name: NSWindow.didResignKeyNotification,
                 object: newWindow
             )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidBecomeKey),
+                name: NSWindow.didBecomeKeyNotification,
+                object: newWindow
+            )
         }
         super.viewWillMove(toWindow: newWindow)
     }
 
     @objc private func windowDidResignKey() {
         releasePressedInputs()
+    }
+
+    @objc private func windowDidBecomeKey() {
+        if window?.firstResponder === self {
+            synchronizeToggleKeys(NSEvent.modifierFlags)
+        }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let didBecomeFirstResponder = super.becomeFirstResponder()
+        if didBecomeFirstResponder {
+            synchronizeToggleKeys(NSEvent.modifierFlags)
+        }
+        return didBecomeFirstResponder
     }
 
     override func resignFirstResponder() -> Bool {
@@ -212,9 +242,11 @@ final class RemoteInputCaptureNSView: NSView {
         {
             events += releaseEventsForPressedKeys()
         }
-        // The key code names the side that changed, so on keyboards that
-        // report no side bits the side-independent flag tells its state.
-        if let modifier = MacRDPModifierKey(keyCode: event.keyCode) {
+        if Int(event.keyCode) == kVK_CapsLock {
+            events += toggleKeySynchronizationEvents(event.modifierFlags)
+        } else if let modifier = MacRDPModifierKey(keyCode: event.keyCode) {
+            // The key code names the side that changed, so on keyboards that
+            // report no side bits the side-independent flag tells its state.
             let isDown = modifier.isDown(in: event.modifierFlags)
             if isDown != inputState.isScancodePressed(modifier.scancode) {
                 events.append(inputState.keyboard(scancode: modifier.scancode, isReleased: isDown == false))
@@ -244,6 +276,16 @@ final class RemoteInputCaptureNSView: NSView {
 
     private func syncModifierKeys(with event: NSEvent) {
         inputSession?.send(modifierSyncEvents(for: event.modifierFlags))
+    }
+
+    /// MS-RDPBCGR 2.2.8.1.1.3.1.1.5: on focus gain, send the toggle-key state followed by the
+    /// keys still held, since the server's state may have changed while focus was elsewhere.
+    private func synchronizeToggleKeys(_ modifierFlags: NSEvent.ModifierFlags) {
+        inputSession?.send(toggleKeySynchronizationEvents(modifierFlags))
+    }
+
+    private func toggleKeySynchronizationEvents(_ modifierFlags: NSEvent.ModifierFlags) -> [RDPSlowPathInputEvent] {
+        inputState.synchronizationEvents(toggleFlags: MacRDPKeyboardMapping.toggleFlags(for: modifierFlags))
     }
 
     private func sendPointerMove(_ event: NSEvent) {
@@ -331,6 +373,11 @@ enum MacRDPScrollWheel {
 }
 
 enum MacRDPKeyboardMapping {
+    /// Mac keypads always type digits, so the server's Num Lock is kept on for the keypad scancodes.
+    static func toggleFlags(for modifierFlags: NSEvent.ModifierFlags) -> RDPToggleKeyFlags {
+        modifierFlags.contains(.capsLock) ? [.numLock, .capsLock] : [.numLock]
+    }
+
     static func scancode(forKeyCode keyCode: UInt16) -> RDPKeyboardScancode? {
         scancodes[Int(keyCode)]
     }
