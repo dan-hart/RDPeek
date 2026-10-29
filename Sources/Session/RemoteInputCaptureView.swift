@@ -709,7 +709,12 @@ enum MacRDPKeyboardMapping {
         modifierFlags: NSEvent.ModifierFlags,
         layout: RDPKeyboardLayout
     ) -> Bool {
-        guard let characters, characters == charactersIgnoringModifiers else {
+        // Caps Lock may be left out of `charactersIgnoringModifiers`, as other modifiers are, so
+        // a letter it capitalized still counts as the key's own.
+        guard let characters, let charactersIgnoringModifiers,
+              characters == charactersIgnoringModifiers
+              || modifierFlags.contains(.capsLock) && characters == charactersIgnoringModifiers.uppercased()
+        else {
             return false
         }
         if scancode == spaceScancode {

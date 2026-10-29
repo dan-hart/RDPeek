@@ -233,6 +233,9 @@ final class RemoteInputMappingTests: XCTestCase {
         XCTAssertTrue(windowsTypes("A", scancode: 0x1E, .capsLock))
         XCTAssertTrue(windowsTypes("1", scancode: 0x02, .capsLock))
         XCTAssertTrue(windowsTypes("a", scancode: 0x1E, [.capsLock, .shift]))
+        // AppKit may report the letter Caps Lock did not capitalize as the key's own.
+        XCTAssertTrue(windowsTypes("A", ignoringModifiers: "a", scancode: 0x1E, .capsLock))
+        XCTAssertFalse(windowsTypes("É", ignoringModifiers: "e", scancode: 0x12, .capsLock))
     }
 
     func testCharactersWindowsTypesDifferentlyGoAsUnicode() {
