@@ -358,6 +358,19 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertEqual(try DeviceProfileStore(defaults: harness.defaults).devices(), persistedBefore)
     }
 
+    // MARK: - addNewDevice
+
+    func testAddNewDeviceKeepsAnEditorThatIsAlreadyOpen() throws {
+        let device = makeDevice()
+        let harness = try makeHarness(devices: [device])
+        harness.model.edit(device)
+
+        harness.model.addNewDevice()
+
+        XCTAssertEqual(harness.model.editorState?.id, device.id)
+        XCTAssertEqual(harness.model.editorState?.isNew, false)
+    }
+
     // MARK: - edit
 
     func testEditOpensEditorWithoutReadingCredentialStore() throws {

@@ -99,6 +99,11 @@ final class DeviceListModel: ObservableObject {
     // MARK: - Editing
 
     func addNewDevice() {
+        // ⌘N stays enabled while the editor is open; replacing the state
+        // would dismiss the sheet and discard the edit in progress.
+        guard editorState == nil else {
+            return
+        }
         editorState = DeviceEditorState(device: .makeNew(defaults: defaults), isNew: true)
     }
 
