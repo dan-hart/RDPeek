@@ -85,6 +85,8 @@ final class SessionViewController: NSViewController {
     private var viewerMetricsSummary: String?
     private var isMetricsOverlayVisible = false
     private var hasPresentedFrame = false
+    /// Numbers the frames handed to the display.
+    private var presentedFrameCount = 0
     private var framePresentationBuffer = RDPFramePresentationBuffer()
     private var framePacing = RDPFramePacingState()
     private var remoteDesktopRenderer = RDPRemoteDesktopRenderer()
@@ -822,6 +824,7 @@ final class SessionViewController: NSViewController {
         liveCertificate = nil
         previewFrame = nil
         latestPresentedFrame = nil
+        presentedFrameCount = 0
         viewerMetricsSummary = nil
         resetFramePresentationState()
         renderMetricsStore.reset()
@@ -1300,7 +1303,8 @@ final class SessionViewController: NSViewController {
         let wasFirstPresentedFrame = hasPresentedFrame == false
         let frame = presentation.frame
         let sizeChanged = previewFrame?.width != frame.width || previewFrame?.height != frame.height
-        remoteDesktopRenderer.present(presentation, id: renderMetricsStore.metrics.decodedFrameCount)
+        presentedFrameCount += 1
+        remoteDesktopRenderer.present(presentation, id: presentedFrameCount)
         latestPresentedFrame = frame
         if sizeChanged {
             previewFrame = RDPFrameMetadata(frame)
