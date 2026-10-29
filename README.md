@@ -13,15 +13,15 @@ lightweight, and Mac-first.
   recent use
 - **Full-bleed sessions** — edge-to-edge video under a transparent titlebar,
   with an animated connecting overlay, a status pill, and a session menu
-- **Hardware-decoded video** — H.264 (AVC420/AVC444) and HEVC via
-  VideoToolbox, presented on the display link for smooth pacing
+- **Hardware-decoded video** — H.264 (AVC420/AVC444) via VideoToolbox,
+  presented on the display link for smooth pacing
 - **No resolution fiddling** — the remote desktop starts at your screen's
   size and follows the window as you resize, HiDPI aware
 - **Your keyboard, their shortcuts** — while a session has focus, ⌘ and ⌃
   chords go to the remote desktop (⌘ maps to the Windows key, so ⌘R is
   Win+R), and modifier state survives focus changes without sticking
-- **Clipboard both ways** — text and files (up to 32 MiB), always-on,
-  one-shot sync, or time-boxed 30-second sharing
+- **Clipboard both ways** — text and files (up to 32 MiB), shared for the
+  whole session or for 30 seconds at a time
 - **Remote audio** — optional RDPSND playback
 - **Credentials done right** — passwords live in your Keychain (or in
   memory for the current run only), and sessions that need a password
@@ -51,7 +51,7 @@ Press **⌘?** in the app for the full shortcut list and usage details.
 
 ## Building from Source
 
-Requirements: Xcode 16+ (Swift 6) and
+Requirements: Xcode 26+ (Swift 6.2) and
 [XcodeGen](https://github.com/yonaskolb/XcodeGen) to generate the project
 (the `.xcodeproj` is not committed, except its `Package.resolved`).
 
@@ -85,7 +85,7 @@ website/                  rdpeek.com (Next.js, deployed on Vercel)
 
 The connection, clipboard, display-control, audio, and credential logic in
 `Sources/Session` is adapted from RDPKit's example client, which is the
-reference implementation for driving `RDPPreflightClient`.
+reference implementation for driving `RDPSessionClient`.
 
 Contributing? [AGENTS.md](AGENTS.md) documents the conventions this repo
 holds itself to — layer boundaries, build and lint gates, and commit style.

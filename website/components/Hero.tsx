@@ -93,8 +93,7 @@ export function Hero() {
           </WindowFrame>
         </div>
         <p className="mt-4 text-center text-[13px] text-muted">
-          A live session: edge-to-edge video, glass titlebar, and the certificate
-          trust banner doing its job.
+          A live session: edge-to-edge video under a glass titlebar.
         </p>
       </div>
     </section>

@@ -8,11 +8,11 @@ const clipboardModes = [
   },
   {
     name: "Sync Clipboard Now",
-    detail: "A one-shot push of whatever you just copied.",
+    detail: "Sends what you copied again, while sharing is on.",
   },
   {
     name: "Share for 30 Seconds",
-    detail: "Time-boxed sharing that turns itself off. Paste the thing, and sharing stops.",
+    detail: "Time-boxed sharing for a PC that keeps it off. Thirty seconds later, sharing stops.",
   },
   {
     name: "Or keep it off",
@@ -33,7 +33,7 @@ const securityPoints = [
   {
     title: "Certificates are pinned per host",
     detail:
-      "TLS evaluation is surfaced live at handshake time as a banner. Trusting pins that certificate's SHA-256 for that host and port; later connections must match it.",
+      "A certificate your Mac doesn't trust stops the connection before any credential is sent. Trusting pins its SHA-256 for that host and port, and a different untrusted certificate from that host is refused.",
   },
 ];
 

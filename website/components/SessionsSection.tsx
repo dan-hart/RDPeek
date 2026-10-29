@@ -7,7 +7,7 @@ import { WindowFrame } from "./WindowFrame";
 const features = [
   {
     title: "Hardware-decoded video",
-    body: "AVC420, AVC444, H.264, and HEVC are decoded by VideoToolbox — on the media engine, not the CPU.",
+    body: "H.264 video, AVC420 and AVC444, is decoded by VideoToolbox — on the media engine, not the CPU.",
   },
   {
     title: "Paced on the display link",

@@ -7,12 +7,11 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
 
 ### Security
 
-- A server certificate that neither this Mac nor RDPeek trusts, or one
-  that differs from the certificate trusted for that host, now stops the
-  connection before any credential is sent. The certificate banner
+- A server certificate that neither this Mac nor RDPeek trusts now stops
+  the connection before any credential is sent. The certificate banner
   offers Trust and Connect. Profiles set to accept untrusted
-  certificates still connect, except to a certificate that replaced a
-  trusted one.
+  certificates still connect, except when such a certificate replaced
+  the one trusted for that host.
 - Trusting a certificate for a host replaces the one trusted before,
   and a server redirection's certificate is pinned under its own host.
 - “Hide certificate warnings” is now “Accept untrusted certificates”,
@@ -21,7 +20,8 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   downloads, so Gatekeeper checks them before they open.
 - A password is kept only after the server accepts it, the Keychain is
   read only for a PC that remembers its password, and a password the
-  server rejected is not sent again.
+  server rejected is no longer kept in memory or offered again in that
+  window.
 
 ### Connecting
 
@@ -29,9 +29,9 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   disabled, or expired accounts, idle timeouts, another connection
   taking over, administrator disconnects, and licensing failures are
   explained in plain words; Stats for Nerds keeps the details.
-- Only a server that could not be reached is retried automatically, so
-  a failed sign-in is not repeated and a mistyped host name is reported
-  at once.
+- When a connection fails, only a server that could not be reached is
+  retried automatically, so a failed sign-in is not repeated and a
+  mistyped host name is reported at once.
 - Servers whose RSA certificate does not allow digital signatures
   connect, using the RSA key exchange for that connection.
 - “DOMAIN\user” user names sign in to that domain.
@@ -75,16 +75,16 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
 ### Clipboard
 
 - Clipboard sharing can be turned on during a session for PCs that
-  start with it off, and Share for 30 Seconds is offered while sharing
-  is off and no longer turns sharing off when it ends. To allow this,
-  RDPeek always joins the remote clipboard, which makes Windows empty
-  its clipboard at connect even with sharing off.
+  start with it off, and Share for 30 Seconds is offered only while
+  sharing is off, so it no longer turns off sharing you turned on. To
+  allow this, RDPeek always joins the remote clipboard, which makes
+  Windows empty its clipboard at connect even with sharing off.
 - Copied files are read off the main thread, so a large or iCloud file
   no longer freezes the window.
 - Remote files download in 1 MiB ranges, so pasting large files from
   Windows and gnome-remote-desktop no longer fails. A download gives
   way to a newer copy, stops when the server stops answering, and its
-  files are deleted once they leave the clipboard.
+  files are deleted once they leave the clipboard, or at a later launch.
 - Copied files whose names Windows rejects are renamed, and files with
   the same name are numbered.
 - “Clipboard synced” appears only after Sync Now.
