@@ -198,16 +198,11 @@ final class DeviceListModel: ObservableObject {
             }
         }
 
-        if let account = device.identity.credentialAccountName {
-            if device.rememberPassword {
-                // The keychain holds the password now; drop a cached copy
-                // that could go stale.
-                credentialCache.removePassword(for: account)
-            } else if password.isEmpty == false {
-                // Keep a typed-but-not-remembered password for this app
-                // run, so connecting works without asking again.
-                credentialCache.setPassword(password, for: account)
-            }
+        // Keep the password for this app run too, so this PC connects
+        // without asking when it does not remember it, and so do others
+        // with the same sign-in that do not.
+        if password.isEmpty == false, let account = device.identity.credentialAccountName {
+            credentialCache.setPassword(password, for: account)
         }
 
         devices = try store.save(device)
@@ -245,7 +240,7 @@ final class DeviceListModel: ObservableObject {
     /// Whether another profile remembers its password under `identity`, and
     /// so still needs the keychain entry. Profiles that don't remember their
     /// password never read it.
-    private func rememberedPasswordIsShared(_ identity: RDPConnectionIdentity, excluding deviceID: UUID) -> Bool {
+    func rememberedPasswordIsShared(_ identity: RDPConnectionIdentity, excluding deviceID: UUID) -> Bool {
         devices.contains { other in
             other.id != deviceID
                 && other.rememberPassword

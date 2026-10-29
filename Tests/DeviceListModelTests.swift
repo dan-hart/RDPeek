@@ -232,7 +232,7 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
     }
 
-    func testSaveWithRememberDropsCachedPassword() throws {
+    func testSaveWithRememberReplacesCachedPassword() throws {
         let device = makeDevice()
         let harness = try makeHarness(devices: [device])
         let account = try account(for: device)
@@ -249,7 +249,7 @@ final class DeviceListModelTests: XCTestCase {
         )
 
         XCTAssertEqual(harness.credentials.passwords[account], "new")
-        XCTAssertNil(harness.cache.password(for: account))
+        XCTAssertEqual(harness.cache.password(for: account), "new")
     }
 
     func testSaveKeepsStoreLastConnectedAtOverEditorSnapshot() throws {

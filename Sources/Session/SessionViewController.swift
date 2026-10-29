@@ -1404,6 +1404,9 @@ final class SessionViewController: NSViewController {
         else {
             return
         }
+        // This app run's copy also serves other PCs with this sign-in that
+        // do not remember it.
+        InMemoryCredentialCache.shared.setPassword(draft.password, for: key.account)
         if draft.rememberPassword {
             // A password read from the Keychain is there already.
             if draft.password != rememberedPassword {
@@ -1411,8 +1414,14 @@ final class SessionViewController: NSViewController {
             }
             return
         }
-        InMemoryCredentialCache.shared.setPassword(draft.password, for: key.account)
-        if rememberedPassword != nil {
+        guard rememberedPassword != nil else {
+            return
+        }
+        // Another PC that remembers this sign-in still needs the item.
+        if launchStore?.isPasswordRemembered(for: draft.identity, byOtherThan: draft.deviceID) == true {
+            rememberedPassword = nil
+            launchStore?.recordCredentialPersistence(for: draft.deviceID, identity: draft.identity, remembered: false)
+        } else {
             persistAcceptedCredentials(.delete(key: key))
         }
     }
@@ -1429,18 +1438,12 @@ final class SessionViewController: NSViewController {
                 persistCredentials(request, store: store)
             }.value
             let identity = request.key.identity
-            switch (request, result) {
-            case (_, .success(.saved)):
-                // The Keychain has it now; the copy for this app run would
-                // outlive turning Remember off.
-                InMemoryCredentialCache.shared.removePassword(for: request.key.account)
+            switch result {
+            case .success(.saved):
                 launchStore?.recordCredentialPersistence(for: deviceID, identity: identity, remembered: true)
-            case (_, .success(.deleted)):
+            case .success(.deleted):
                 launchStore?.recordCredentialPersistence(for: deviceID, identity: identity, remembered: false)
-            case let (.save(key, password), .failure):
-                // Keep the password for this app run at least.
-                InMemoryCredentialCache.shared.setPassword(password, for: key.account)
-            case (.delete, .failure):
+            case .failure:
                 break
             }
             self?.applyCredentialPersistenceResult(result, request: request)

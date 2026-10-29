@@ -22,6 +22,9 @@ struct RDPeekApp: App {
                 remembered: remembered
             )
         }
+        launchStore.passwordRememberedElsewhere = { [weak deviceList] identity, deviceID in
+            deviceList?.rememberedPasswordIsShared(identity, excluding: deviceID) ?? false
+        }
         _launchStore = StateObject(wrappedValue: launchStore)
         _deviceList = StateObject(wrappedValue: deviceList)
     }

@@ -35,6 +35,10 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
     /// have its flag updated.
     var onCredentialPersistence: ((UUID, RDPConnectionIdentity, _ remembered: Bool) -> Void)?
 
+    /// Whether a profile other than the given one remembers its password
+    /// under the identity, so the Keychain item must stay.
+    var passwordRememberedElsewhere: ((RDPConnectionIdentity, _ excludingDeviceID: UUID) -> Bool)?
+
     /// Opens a session window for the draft, or focuses the existing window if
     /// this device already has one.
     func openRemoteSession(_ draft: RDPConnectionDraft) {
@@ -60,6 +64,10 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
 
     func recordConnectionStart(for deviceID: UUID) {
         onConnectionStart?(deviceID)
+    }
+
+    func isPasswordRemembered(for identity: RDPConnectionIdentity, byOtherThan deviceID: UUID) -> Bool {
+        passwordRememberedElsewhere?(identity, deviceID) ?? false
     }
 
     func recordCredentialPersistence(for deviceID: UUID, identity: RDPConnectionIdentity, remembered: Bool) {
