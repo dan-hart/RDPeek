@@ -765,12 +765,12 @@ final class SessionViewController: NSViewController {
         let credentials: RDPCredentials?
         do {
             target = try RDPConnectionTarget(host: draft.host, port: draft.port)
-            // RDPKit signs in with a "DOMAIN\user" name split in two; the
-            // draft keeps the name as typed for its Keychain entry.
-            let logonName = RDPLogonName(username: draft.identity.username, domain: draft.identity.domain ?? "")
+            // RDPKit splits a "DOMAIN\user" name typed with no domain, as
+            // Windows clients do; the draft keeps the name as typed for its
+            // Keychain entry.
             credentials = try RDPCredentials.validated(
-                username: logonName.username,
-                domain: logonName.domain,
+                username: draft.username,
+                domain: draft.domain,
                 password: draft.password
             )
         } catch {

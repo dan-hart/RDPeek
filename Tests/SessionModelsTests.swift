@@ -400,28 +400,15 @@ final class SessionModelsTests: XCTestCase {
         XCTAssertNil(RDPLogonStatus.code(in: "receive failed: connection closed (0x1)"))
     }
 
-    func testDomainQualifiedUserNameSplitsWhenNoDomainIsGiven() {
-        XCTAssertEqual(
-            RDPLogonName(username: "CORP\\anees", domain: ""),
-            RDPLogonName(username: "anees", domain: "CORP")
-        )
-        XCTAssertEqual(
-            RDPLogonName(username: ".\\admin", domain: ""),
-            RDPLogonName(username: "admin", domain: ".")
-        )
-    }
+    func testDomainQualifiedUserNameSignsInSplitAndKeepsItsKeychainAccount() throws {
+        // RDPeek hands RDPKit the user name as typed: RDPKit signs in with
+        // it split, and the Keychain account keeps it whole.
+        let credentials = try XCTUnwrap(RDPCredentials.validated(username: "CORP\\anees", domain: "", password: "pw"))
+        XCTAssertEqual(credentials.username, "anees")
+        XCTAssertEqual(credentials.domain, "CORP")
 
-    func testLogonNameIsKeptWhenSplittingWouldNotHelp() {
-        let explicitDomain = RDPLogonName(username: "CORP\\anees", domain: "OTHER")
-        XCTAssertEqual(explicitDomain.username, "CORP\\anees")
-        XCTAssertEqual(explicitDomain.domain, "OTHER")
-
-        let principal = RDPLogonName(username: "anees@corp.example", domain: "")
-        XCTAssertEqual(principal.username, "anees@corp.example")
-        XCTAssertEqual(principal.domain, "")
-
-        XCTAssertEqual(RDPLogonName(username: "\\anees", domain: "").username, "\\anees")
-        XCTAssertEqual(RDPLogonName(username: "CORP\\", domain: "").username, "CORP\\")
+        let identity = RDPConnectionIdentity(host: "winbox", username: "CORP\\anees", domain: "")
+        XCTAssertEqual(identity.credentialAccountName, "CORP\\anees@winbox:3389")
     }
 
     // MARK: - Keyframe requests

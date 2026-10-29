@@ -438,28 +438,6 @@ enum RDPLogonStatus {
     }
 }
 
-/// The user name and domain RDPKit signs in with. A "DOMAIN\user" user
-/// name with no domain of its own splits into both, as Windows clients do;
-/// the device keeps the name as typed, so its Keychain entry is unchanged.
-struct RDPLogonName: Equatable {
-    var username: String
-    var domain: String
-
-    init(username: String, domain: String) {
-        if domain.isEmpty, let separator = username.firstIndex(of: "\\") {
-            let qualifier = username[..<separator]
-            let name = username[username.index(after: separator)...]
-            if qualifier.isEmpty == false, name.isEmpty == false {
-                self.username = String(name)
-                self.domain = String(qualifier)
-                return
-            }
-        }
-        self.username = username
-        self.domain = domain
-    }
-}
-
 extension RDPDesktopSize {
     /// The desktop a connection asks for on a canvas of `pointSize`: the
     /// canvas in points, at 100% scale. It is rounded as Display Control
