@@ -63,6 +63,42 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertEqual(harness.model.unreadableDeviceCount, 0)
     }
 
+    // MARK: - filteredDevices
+
+    func testFilteredDevicesMatchNameHostAndUserIgnoringCase() throws {
+        let build = makeDevice(name: "Build Server", host: "ci.example", username: "alice")
+        let desk = makeDevice(name: "Desk", host: "desk.corp.example", username: "bob")
+        let lab = makeDevice(name: "Lab", host: "lab.example", username: "carol")
+        let harness = try makeHarness(devices: [build, desk, lab])
+
+        func matches(_ query: String) -> Set<UUID> {
+            harness.model.searchText = query
+            return Set(harness.model.filteredDevices.map(\.id))
+        }
+
+        XCTAssertEqual(matches(""), [build.id, desk.id, lab.id])
+        XCTAssertEqual(matches("build"), [build.id], "Name")
+        XCTAssertEqual(matches("CORP"), [desk.id], "Host")
+        XCTAssertEqual(matches("Carol"), [lab.id], "User")
+        XCTAssertEqual(matches("  lab \n"), [lab.id], "Surrounding whitespace is ignored")
+        XCTAssertEqual(matches(".example"), [build.id, desk.id, lab.id])
+        XCTAssertEqual(matches("nobody"), [])
+    }
+
+    func testFilteredDevicesByRecentPutNewestFirstThenTheRestByName() throws {
+        var older = makeDevice(name: "Older")
+        older.lastConnectedAt = Date(timeIntervalSinceReferenceDate: 100)
+        var newest = makeDevice(name: "Newest")
+        newest.lastConnectedAt = Date(timeIntervalSinceReferenceDate: 300)
+        let zulu = makeDevice(name: "zulu")
+        let alpha = makeDevice(name: "Alpha")
+        let harness = try makeHarness(devices: [zulu, older, alpha, newest])
+
+        harness.model.sortOrder = .byRecent
+
+        XCTAssertEqual(harness.model.filteredDevices.map(\.id), [newest.id, older.id, alpha.id, zulu.id])
+    }
+
     // MARK: - confirmDeletion
 
     func testConfirmDeletionKeepsCredentialSharedWithRememberingProfile() throws {
