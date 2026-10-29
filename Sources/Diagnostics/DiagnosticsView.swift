@@ -277,9 +277,11 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                     DiagnosticRow("Clipboard", clipboardState(snapshot))
                     DiagnosticRow("Clipboard Channel ID", optionalValue(snapshot.report?.rdpClipboardChannelID))
                     DiagnosticRow("Clipboard Messages", messageTypes(snapshot.report?.rdpClipboardMessages, \.typeName))
+                    // The frame presented at the latest size or codec
+                    // change, or the server's first frame if none was.
                     DiagnosticRow(
-                        "First Frame",
-                        firstFrameSummary(
+                        "Frame",
+                        frameSummary(
                             snapshot.previewFrame
                                 ?? snapshot.report?.rdpGraphicsFirstFrame.map(RDPFrameMetadata.init)
                         )
@@ -652,7 +654,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
         return snapshot.clipboardReady ? "ready" : "not ready"
     }
 
-    private func firstFrameSummary(_ frame: RDPFrameMetadata?) -> String {
+    private func frameSummary(_ frame: RDPFrameMetadata?) -> String {
         guard let frame else {
             return "none"
         }
