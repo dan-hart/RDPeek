@@ -3,7 +3,7 @@
 ## Unreleased
 
 Security, input, clipboard, and session fixes from the RDPKit example
-client and from a full review of RDPeek, on RDPKit 0.4.0.
+client and from a full review of RDPeek, on RDPKit's next release.
 
 ### Security
 
@@ -28,17 +28,24 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
 
 - A wrong user name or password reopens the sign-in sheet. Locked,
   disabled, or expired accounts, idle timeouts, another connection
-  taking over, administrator disconnects, and licensing failures are
-  explained in plain words; Stats for Nerds keeps the details.
+  taking over, administrator disconnects, a server shutting down or
+  restarting, and licensing failures are explained in plain words from
+  RDPKit's typed result, not its error text; Stats for Nerds keeps the
+  details.
 - When a connection fails, only a server that could not be reached is
-  retried automatically, so a failed sign-in is not repeated and a
-  mistyped host name is reported at once.
+  retried automatically, so a failed sign-in is not repeated, and a
+  mistyped host name, a refused connection, or one macOS blocked is
+  reported at once. The message says which it was, and for an
+  unreachable host on the local network points to the Local Network
+  privacy setting.
 - Servers whose RSA certificate does not allow digital signatures
   connect, using the RSA key exchange for that connection. It is never
   used to reconnect to a server that passed the session on, so a
   sign-in that server took is not sent again without forward secrecy.
 - When a server passes the session on to one that cannot be found or
-  reached, the message says so instead of blaming the host typed in.
+  reached, the message names that server instead of blaming the host
+  typed in.
+- A server that requires a client certificate says so.
 - Signing in with every field empty to a server that needs a sign-in
   asks for a user name and password again.
 - “DOMAIN\user” user names sign in to that domain.
@@ -47,6 +54,9 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   that do not no longer show a tiny desktop.
 - A session that signs in but never shows the desktop reconnects once,
   then says so, instead of showing Connecting forever.
+- Servers list RDPeek's sessions under the Mac's name, and when
+  licensing fails with a stored client license, RDPeek connects once
+  more without it, so the server can issue a new one.
 - macOS's local network prompt now says why RDPeek asks.
 
 ### Remote input
@@ -57,7 +67,11 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   Caps Lock included.
 - Right ⌥ types the character it gives on the Mac, such as @ with ⌥L on
   a German layout, and its dead keys compose accents without sending
-  Alt; left ⌥ stays Alt.
+  Alt; left ⌥ stays Alt. This also works when ⌥ was held before the
+  window became key, and right ⌥ then ⌘ reach the remote in that order.
+- On a server that takes no Unicode input, typing no longer
+  disappears: keys go as their scancodes for the server's own layout,
+  with right ⌥ as AltGr.
 - ⌘ reaches the remote as the Windows key only together with another
   key or click, or when tapped alone, so ⌘-Tab and Spotlight no longer
   open the remote Start menu; neither do ⌘-clicking a background
@@ -93,13 +107,13 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   Windows empty its clipboard at connect even with sharing off.
 - Copied files are read off the main thread, so a large or iCloud file
   no longer freezes the window.
-- Remote files download in 1 MiB ranges, so pasting large files from
-  Windows and gnome-remote-desktop no longer fails. A download gives
+- Remote files download in 512 KiB ranges, so pasting large files from
+  Windows and gnome-remote-desktop no longer fails, even on slow links. A download gives
   way to a newer copy, stops when the server stops answering, and its
   files are deleted once they leave the clipboard, or at a later launch.
-- Copied files whose names Windows rejects are renamed, and files with
-  the same name are numbered. Names keep zero-width joiners, soft
-  hyphens, and direction marks.
+- Copied files whose names Windows rejects, or finds too long, are
+  renamed, and files with the same name are numbered. Names keep
+  zero-width joiners, soft hyphens, and direction marks.
 - Files copied from folders on Windows arrive without their folders,
   and RDPeek says so.
 - Sync Now sends the Mac clipboard again only when the server does not
@@ -110,6 +124,13 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
 - Turning sharing off, or a 30-second share ending, takes back the
   Mac's copy only while the server still holds it, so a copy made on
   the server since is kept.
+- With sharing off, nothing of the server's clipboard is fetched. Once
+  on, the server's copy at connect reaches the Mac, and files copied on
+  the Mac are sent rather than an older server copy.
+- When the server empties its clipboard, as a password manager does,
+  the Mac clipboard is cleared too while it still holds what came from
+  that server. A server copy RDPeek cannot take, such as an image, or
+  one that fails to arrive, says so.
 
 ### Sessions
 
@@ -138,13 +159,16 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   and other settings apply from the next connection. Connect on a PC
   whose session ended connects that window again, and a window whose
   PC was deleted keeps no password.
-- The performance overlay shows only over the live desktop and says
-  idle when the desktop is still.
+- The performance overlay shows only over the live desktop, and its
+  rates fall to zero within seconds of the desktop going still, as do
+  those in Stats for Nerds.
 - Stats for Nerds shows the server's warnings and whether the RSA key
   exchange, without forward secrecy, was used. It shows connection
-  details once the session ends instead of placeholders, counts frame
-  acknowledgements past the 8 RDPKit records as “8+”, and updates only
-  while it is open.
+  details while the session runs and keeps them after Disconnect, counts
+  every frame acknowledgement, shows how the server ended a session, the
+  client name, redirections, an issued license, the scale sent, and
+  whether the server takes Unicode input, and updates only while it is
+  open.
 - The overlays respect Reduce Motion, and VoiceOver announces session
   messages.
 
@@ -171,14 +195,18 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
 - Duplicating a PC keeps Remember Password, and deleting one keeps a
   password that another PC still remembers, including one that writes
   the same sign-in as “CORP\bob” instead of “bob” in domain “CORP”.
+- A password saved by RDPeek 1.0 under the host name as typed moves to
+  its current name in one step, so a deleted one no longer comes back
+  and a newer one is not overwritten.
 
 ### Under the hood
 
-- Updated to RDPKit 0.4.0: timeouts bound every step before the first
-  frame, errors name their reason, and Windows, KRdp and
+- Updated to RDPKit's next release: timeouts bound every step before
+  the first frame, failures are typed, and Windows, KRdp and
   gnome-remote-desktop video and bitmap codecs are faster and more
-  correct. Servers now see the client name RDPKIT instead of
-  KRDPSWIFT.
+  correct. RDPeek's own workarounds for what RDPKit now does (error
+  text matching, DOMAIN\user splitting, Windows file names, legacy
+  Keychain names, the first-frame timer) are gone.
 - Package versions are pinned in Package.resolved, CI builds with a
   pinned Xcode, SwiftLint checks the tests too, and its analyzer guards
   against unused code.
