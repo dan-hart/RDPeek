@@ -163,6 +163,22 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertTrue(isPointerButton(harness.recorder.events.last, button: .left, isDown: false))
     }
 
+    // MARK: - Pointer
+
+    func testADragPastTheDesktopStopsOnItsEdge() {
+        // A 100x100 desktop letterboxed in the 200x100 view spans x 50-150.
+        // A drag that leaves it holds the pointer on its edge; a plain move
+        // there sends nothing.
+        let harness = makeHarness()
+        harness.view.rdpFrame = makeFrameMetadata(width: 100, height: 100)
+
+        harness.view.mouseMoved(with: mouseEvent(.mouseMoved, location: NSPoint(x: 180, y: 50)))
+        XCTAssertEqual(harness.recorder.events, [])
+        harness.view.mouseDragged(with: mouseEvent(.leftMouseDragged, location: NSPoint(x: 180, y: 50)))
+        harness.view.mouseDragged(with: mouseEvent(.leftMouseDragged, location: NSPoint(x: 10, y: -20)))
+        XCTAssertEqual(harness.recorder.events, [.pointerMove(x: 99, y: 50), .pointerMove(x: 0, y: 99)])
+    }
+
     // MARK: - Command as the Windows key
 
     func testCommandReleasedAloneTapsTheWindowsKey() {
