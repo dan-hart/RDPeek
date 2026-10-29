@@ -958,6 +958,77 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertEqual(harness.recorder.events, [])
     }
 
+    func testADeadKeysAccentGoesAheadOfAKeySentAsItsScancode() {
+        // macOS types "´" and a newline for Return after a dead "´", and Return
+        // goes as its scancode, so the accent goes first, as text. A repeat
+        // of the held key, even one reporting the accent again, and its
+        // release send the key alone.
+        let harness = makeHarness()
+        let returnKey = UInt16(kVK_Return)
+        let returnScancode = RDPKeyboardScancode(code: 0x1C)
+        let tab = RDPKeyboardScancode(code: 0x0F)
+        let escape = RDPKeyboardScancode(code: 0x01)
+        for isARepeat in [false, true] {
+            harness.view.keyDown(with: keyEvent(
+                .keyDown,
+                keyCode: returnKey,
+                characters: "´\r",
+                charactersIgnoringModifiers: "\r",
+                isARepeat: isARepeat
+            ))
+        }
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: returnKey, characters: "´\r", charactersIgnoringModifiers: "\r"))
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_Tab), characters: "^\t", charactersIgnoringModifiers: "\t"))
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_Escape),
+            characters: "`\u{1B}",
+            charactersIgnoringModifiers: "\u{1B}"
+        ))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .unicode(codeUnit: 0xB4, isReleased: false),
+            .unicode(codeUnit: 0xB4, isReleased: true),
+            .keyboard(scancode: returnScancode, isReleased: false),
+            .keyboard(scancode: returnScancode, isReleased: false, wasDown: true),
+            .keyboard(scancode: returnScancode, isReleased: true),
+            .unicode(codeUnit: 0x5E, isReleased: false),
+            .unicode(codeUnit: 0x5E, isReleased: true),
+            .keyboard(scancode: tab, isReleased: false),
+            .unicode(codeUnit: 0x60, isReleased: false),
+            .unicode(codeUnit: 0x60, isReleased: true),
+            .keyboard(scancode: escape, isReleased: false),
+        ])
+    }
+
+    func testADeadKeysAccentGoesAheadOfTheAltRightOptionSendsWithTheKey() {
+        // US Option-E, then Option-Return with right Option still held: the
+        // accent belongs to the dead key, so it goes before Alt-Return.
+        let harness = makeHarness()
+        let returnScancode = RDPKeyboardScancode(code: 0x1C)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_ANSI_E),
+            charactersIgnoringModifiers: "e",
+            flags: .rightOptionDown
+        ))
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_Return),
+            characters: "´\r",
+            charactersIgnoringModifiers: "\r",
+            flags: .rightOptionDown
+        ))
+
+        XCTAssertEqual(harness.recorder.events, [
+            .unicode(codeUnit: 0xB4, isReleased: false),
+            .unicode(codeUnit: 0xB4, isReleased: true),
+            .keyboard(scancode: .rightAlt, isReleased: false),
+            .keyboard(scancode: returnScancode, isReleased: false),
+        ])
+    }
+
     func testKeypadEqualsGoesAsUnicodeWhereItsScancodeTypesSomethingElse() {
         // PC keypads have no "=": keypad "=" goes as the main-row key US
         // Windows types "=" with, which is a dead "´" on German.

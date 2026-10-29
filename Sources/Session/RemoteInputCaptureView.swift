@@ -223,7 +223,13 @@ final class RemoteInputCaptureNSView: NSView {
                layout: keyboardLayout
            )
         {
-            sendKeyboardScancode(scancode, isReleased: false)
+            // A dead key typed before a key it does not compose with, such as Return, types its
+            // accent ahead of the key. A repeat of the held key types the accent no more.
+            let prefix = isHeldAsScancode ? "" : MacRDPKeyboardMapping.deadKeyPrefix(
+                event.characters,
+                charactersIgnoringModifiers: event.charactersIgnoringModifiers
+            )
+            sendKeyboardScancode(scancode, isReleased: false, after: MacRDPKeyboardMapping.unicodeEvents(for: prefix))
             return
         }
         guard event.modifierFlags.isDisjoint(with: [.command, .control]) else {
@@ -482,9 +488,14 @@ final class RemoteInputCaptureNSView: NSView {
         }
     }
 
-    private func sendKeyboardScancode(_ scancode: RDPKeyboardScancode, isReleased: Bool) {
+    /// `textEvents` go first, ahead of the held-back keys a press sends down.
+    private func sendKeyboardScancode(
+        _ scancode: RDPKeyboardScancode,
+        isReleased: Bool,
+        after textEvents: [RDPSlowPathInputEvent] = []
+    ) {
         let deferredKeyEvents = isReleased ? [] : flushDeferredKeys()
-        inputSession?.send(deferredKeyEvents + [inputState.keyboard(scancode: scancode, isReleased: isReleased)])
+        inputSession?.send(textEvents + deferredKeyEvents + [inputState.keyboard(scancode: scancode, isReleased: isReleased)])
     }
 
     /// Sends the held-back Windows key and right Alt down, ahead of another key or button.
@@ -707,7 +718,29 @@ enum MacRDPKeyboardMapping {
         else {
             return false
         }
-        return characters.unicodeScalars.allSatisfy { scalar in
+        return isPrintable(characters)
+    }
+
+    /// What a dead key left ahead of the output of a key it does not compose with: macOS types
+    /// "´" and then a newline for Return after Option-E on US, so `characters` is the key's own
+    /// output (`charactersIgnoringModifiers`) after printable characters. Empty for any other
+    /// key. AppKit reports Delete, the arrows and other function keys as their own characters
+    /// alone, so of the keys that go as scancodes, Return, Tab, Esc and Enter carry a prefix.
+    static func deadKeyPrefix(_ characters: String?, charactersIgnoringModifiers: String?) -> String {
+        guard let characters, let output = charactersIgnoringModifiers?.unicodeScalars, output.isEmpty == false else {
+            return ""
+        }
+        let scalars = characters.unicodeScalars
+        guard scalars.count > output.count, scalars.suffix(output.count).elementsEqual(output) else {
+            return ""
+        }
+        let prefix = String(scalars.dropLast(output.count))
+        return isPrintable(prefix) ? prefix : ""
+    }
+
+    /// Control and function-key (private-use) characters are not text.
+    private static func isPrintable(_ characters: String) -> Bool {
+        characters.unicodeScalars.allSatisfy { scalar in
             scalar.properties.generalCategory != .control && scalar.properties.generalCategory != .privateUse
         }
     }

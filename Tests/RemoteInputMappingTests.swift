@@ -159,6 +159,28 @@ final class RemoteInputMappingTests: XCTestCase {
         XCTAssertFalse(optionTypes("@", ignoringModifiers: "l", [.option, .control]))
     }
 
+    // MARK: - A dead key's accent ahead of a key it does not compose with
+
+    func testDeadKeyPrefixIsWhatADeadKeyLeftAheadOfTheKeysOutput() {
+        func prefix(_ characters: String, ignoringModifiers: String?) -> String {
+            MacRDPKeyboardMapping.deadKeyPrefix(characters, charactersIgnoringModifiers: ignoringModifiers)
+        }
+        // Return, Tab and Esc after US Option-E, keypad Enter after German "^".
+        XCTAssertEqual(prefix("´\r", ignoringModifiers: "\r"), "´")
+        XCTAssertEqual(prefix("´\t", ignoringModifiers: "\t"), "´")
+        XCTAssertEqual(prefix("´\u{1B}", ignoringModifiers: "\u{1B}"), "´")
+        XCTAssertEqual(prefix("^\u{03}", ignoringModifiers: "\u{03}"), "^")
+        // No dead key before the key, or one that composed with it.
+        XCTAssertEqual(prefix("\r", ignoringModifiers: "\r"), "")
+        XCTAssertEqual(prefix("é", ignoringModifiers: "e"), "")
+        XCTAssertEqual(prefix("^", ignoringModifiers: " "), "")
+        // Nothing printable ahead of the key's output, or no output to find.
+        XCTAssertEqual(prefix("\u{1B}\r", ignoringModifiers: "\r"), "")
+        XCTAssertEqual(prefix("\u{F702}\r", ignoringModifiers: "\r"), "")
+        XCTAssertEqual(prefix("´", ignoringModifiers: ""), "")
+        XCTAssertEqual(prefix("´\r", ignoringModifiers: nil), "")
+    }
+
     // MARK: - Characters the announced layout types
 
     /// A remote IME commits its candidate with Space, so it goes as its scancode on every layout,
