@@ -18,8 +18,8 @@ Layer boundaries:
   controller, canvas, input capture, SwiftUI HUD overlays.
 - `Sources/Diagnostics` — the Stats for Nerds window.
 - `Sources/Storage` — device profiles (UserDefaults), credentials and
-  client licenses (Keychain), the in-memory credential cache for
-  passwords that are not remembered, trusted certificates (UserDefaults).
+  client licenses (Keychain), the in-memory cache of passwords signed
+  in with or saved this app run, trusted certificates (UserDefaults).
 
 The session core (`SessionViewController`, renderer, input capture, frame
 clock) is adapted from RDPKit's example client. When changing connection,
