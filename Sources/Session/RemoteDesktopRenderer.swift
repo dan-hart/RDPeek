@@ -38,6 +38,8 @@ final class RemoteDesktopSampleBufferNSView: NSView {
     private let displayLayer = AVSampleBufferDisplayLayer()
     private let sampleBufferFactory = RDPFrameSampleBufferFactory()
     private var lastPresentationID: Int?
+    private var lastSampleBuffer: CMSampleBuffer?
+    private var failureObserver: (any NSObjectProtocol)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -52,6 +54,9 @@ final class RemoteDesktopSampleBufferNSView: NSView {
     deinit {
         MainActor.assumeIsolated {
             clear()
+            if let failureObserver {
+                NotificationCenter.default.removeObserver(failureObserver)
+            }
         }
     }
 
@@ -102,14 +107,18 @@ final class RemoteDesktopSampleBufferNSView: NSView {
             let sampleBuffer = try sampleBufferFactory.makeSampleBuffer(for: presentation)
             displayLayer.enqueue(sampleBuffer)
             lastPresentationID = id
+            lastSampleBuffer = sampleBuffer
         } catch {
             flushQueuedSamples()
         }
     }
 
+    /// Also removes the shown image, so a later session never flashes the
+    /// last one's desktop and its pixel buffer is released.
     func clear() {
-        flushQueuedSamples()
+        displayLayer.flushAndRemoveImage()
         lastPresentationID = nil
+        lastSampleBuffer = nil
         sampleBufferFactory.reset()
     }
 
@@ -121,6 +130,27 @@ final class RemoteDesktopSampleBufferNSView: NSView {
         displayLayer.videoGravity = .resizeAspect
         layer?.addSublayer(displayLayer)
         updateContentsScale()
+        failureObserver = NotificationCenter.default.addObserver(
+            forName: .AVSampleBufferDisplayLayerFailedToDecode,
+            object: displayLayer,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.redisplayLastSampleAfterFailure()
+            }
+        }
+    }
+
+    /// A failed layer shows nothing until the next frame, which a still
+    /// remote desktop may not send for a long time, so show the last frame
+    /// again — once per frame, so a layer that keeps failing cannot loop.
+    private func redisplayLastSampleAfterFailure() {
+        guard displayLayer.status == .failed, let sampleBuffer = lastSampleBuffer else {
+            return
+        }
+        lastSampleBuffer = nil
+        flushQueuedSamples()
+        displayLayer.enqueue(sampleBuffer)
     }
 
     private func updateContentsScale() {
