@@ -27,6 +27,9 @@ struct RDPeekApp: App {
         launchStore.passwordRememberedElsewhere = { [weak deviceList] identity, deviceID in
             deviceList?.rememberedPasswordIsShared(identity, excluding: deviceID) ?? false
         }
+        // Open session windows follow edits to their PC from the next
+        // connection, and keep no password for a PC that was deleted.
+        launchStore.followSavedDevices(deviceList.$devices)
         _launchStore = StateObject(wrappedValue: launchStore)
         _deviceList = StateObject(wrappedValue: deviceList)
     }

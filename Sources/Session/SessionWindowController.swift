@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// The remote desktop window: full-bleed canvas under a transparent titlebar,
@@ -7,9 +8,11 @@ import SwiftUI
 final class SessionWindowController: NSWindowController, NSWindowDelegate {
     let sessionID: UUID
     let deviceID: UUID
+    let sessionController: SessionViewController
     var onClose: ((UUID) -> Void)?
     private weak var launchStore: SessionLaunchStore?
     private var firstShowGuard = SessionWindowFirstShowGuard()
+    private var titleSubscription: AnyCancellable?
 
     init(
         sessionID: UUID,
@@ -21,7 +24,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         deviceID = draft.deviceID
         self.launchStore = launchStore
 
-        let sessionController = SessionViewController(
+        sessionController = SessionViewController(
             sessionID: sessionID,
             draft: draft,
             launchStore: launchStore
@@ -61,6 +64,12 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
 
         super.init(window: window)
         window.delegate = self
+        // The title follows the PC's name when the PC is renamed.
+        titleSubscription = sessionController.hudModel.$deviceName
+            .dropFirst()
+            .sink { [weak window] name in
+                window?.title = name
+            }
     }
 
     @available(*, unavailable)
@@ -80,7 +89,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowDidBecomeKey(_: Notification) {
-        (contentViewController as? SessionViewController)?.publishSessionCommandStateIfKey()
+        sessionController.publishSessionCommandStateIfKey()
     }
 
     func windowDidResignKey(_: Notification) {
@@ -88,7 +97,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_: Notification) {
-        (contentViewController as? SessionViewController)?.closeSession()
+        sessionController.closeSession()
         if SessionWindowKeyFlagPolicy.shouldClearOnClose(of: window) {
             launchStore?.updateKeySessionCommands(nil)
         }

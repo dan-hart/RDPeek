@@ -59,6 +59,12 @@ final class SessionCredentialPolicyTests: XCTestCase {
         XCTAssertNil(SessionCredentialPolicy.Keep.nothing.key)
     }
 
+    func testAWindowWhosePCWasDeletedKeepsNothing() {
+        // No profile owns a Keychain item saved for a deleted PC.
+        XCTAssertEqual(keep(remembersPassword: true, isPCDeleted: true), .nothing)
+        XCTAssertEqual(keep(rememberedPassword: "secret", isPCDeleted: true), .nothing)
+    }
+
     func testARememberedPasswordIsSavedOnlyWhenTheKeychainDoesNotHoldItAlready() throws {
         let key = try XCTUnwrap(KeychainCredentialKey(identity: alice))
 
@@ -172,14 +178,16 @@ final class SessionCredentialPolicyTests: XCTestCase {
         identity: RDPConnectionIdentity? = nil,
         remembersPassword: Bool = false,
         rememberedPassword: String? = nil,
-        isRememberedByAnotherPC: Bool = false
+        isRememberedByAnotherPC: Bool = false,
+        isPCDeleted: Bool = false
     ) -> SessionCredentialPolicy.Keep {
         SessionCredentialPolicy.keep(
             password: password,
             identity: identity ?? alice,
             remembersPassword: remembersPassword,
             rememberedPassword: rememberedPassword,
-            isRememberedByAnotherPC: isRememberedByAnotherPC
+            isRememberedByAnotherPC: isRememberedByAnotherPC,
+            isPCDeleted: isPCDeleted
         )
     }
 }

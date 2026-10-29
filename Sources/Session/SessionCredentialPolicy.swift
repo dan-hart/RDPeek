@@ -48,7 +48,8 @@ enum SessionCredentialPolicy {
     /// case but `nothing` also keeps it for this app run, under `key`: the
     /// cache serves other PCs with this sign-in that do not remember it.
     enum Keep: Equatable {
-        /// There is no user name or password to keep.
+        /// There is no user name or password to keep, or the PC was
+        /// deleted: its window may go on, but keeps nothing for it.
         case nothing
         /// The Keychain is right as it is.
         case cacheOnly(KeychainCredentialKey)
@@ -77,9 +78,13 @@ enum SessionCredentialPolicy {
         identity: RDPConnectionIdentity,
         remembersPassword: Bool,
         rememberedPassword: String?,
-        isRememberedByAnotherPC: Bool
+        isRememberedByAnotherPC: Bool,
+        isPCDeleted: Bool
     ) -> Keep {
-        guard let key = KeychainCredentialKey(identity: identity), password.isEmpty == false else {
+        guard isPCDeleted == false,
+              let key = KeychainCredentialKey(identity: identity),
+              password.isEmpty == false
+        else {
             return .nothing
         }
         if remembersPassword {

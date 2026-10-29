@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import RDPKit
 
@@ -21,6 +22,7 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
     }
 
     private var sessionWindowControllers: [UUID: SessionWindowController] = [:]
+    private var savedDevicesSubscription: AnyCancellable?
     private var diagnosticsWindowControllers: [UUID: DiagnosticsWindowController] = [:]
     private var diagnosticsModels: [UUID: RemoteSessionDiagnosticsModel] = [:]
 
@@ -40,10 +42,13 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
     var passwordRememberedElsewhere: ((RDPConnectionIdentity, _ excludingDeviceID: UUID) -> Bool)?
 
     /// Opens a session window for the draft, or focuses the existing window if
-    /// this device already has one.
+    /// this device already has one; that window connects again, with the
+    /// PC as saved, when its session ended.
     func openRemoteSession(_ draft: RDPConnectionDraft) {
         if let existing = sessionWindowControllers.values.first(where: { $0.deviceID == draft.deviceID }) {
+            existing.sessionController.followSavedDevice(draft)
             existing.showWindow(nil)
+            existing.sessionController.connectFromSavedDevice()
             return
         }
 
@@ -60,6 +65,25 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
         }
         sessionWindowControllers[id] = controller
         controller.showWindow(nil)
+    }
+
+    /// Keeps open session windows in step with the saved PCs: each follows
+    /// its PC's saved settings, and one whose PC was deleted keeps no
+    /// password for it.
+    func followSavedDevices(_ devices: some Publisher<[DeviceProfile], Never>) {
+        savedDevicesSubscription = devices.sink { [weak self] devices in
+            self?.savedDevicesChanged(devices)
+        }
+    }
+
+    private func savedDevicesChanged(_ devices: [DeviceProfile]) {
+        for controller in sessionWindowControllers.values {
+            if let device = devices.first(where: { $0.id == controller.deviceID }) {
+                controller.sessionController.followSavedDevice(RDPConnectionDraft(device: device))
+            } else {
+                controller.sessionController.savedDeviceWasDeleted()
+            }
+        }
     }
 
     func recordConnectionStart(for deviceID: UUID) {

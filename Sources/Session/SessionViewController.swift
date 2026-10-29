@@ -19,6 +19,12 @@ final class SessionViewController: NSViewController {
 
     let hudModel = SessionHUDModel()
     private(set) var draft: RDPConnectionDraft
+    /// The PC as last saved, and as the draft last followed it: the draft
+    /// takes saved changes from the next connection the user starts.
+    private var savedDraft: RDPConnectionDraft
+    private var followedSavedDraft: RDPConnectionDraft
+    /// The PC was deleted. The session may go on, but keeps no password.
+    private var isPCDeleted = false
 
     private var requestedDesktopSizeLabel = "auto"
     /// The password the Keychain holds for the draft's identity, when known.
@@ -107,6 +113,8 @@ final class SessionViewController: NSViewController {
     ) {
         self.sessionID = sessionID
         self.draft = draft
+        savedDraft = draft
+        followedSavedDraft = draft
         self.launchStore = launchStore
         self.credentialStore = credentialStore
         self.credentialCache = credentialCache
@@ -268,9 +276,6 @@ final class SessionViewController: NSViewController {
     }
 
     private func configureHUDModel() {
-        hudModel.deviceName = draft.displayName
-        hudModel.hostLabel = draft.port == 3389 ? draft.host : "\(draft.host):\(draft.port)"
-
         hudModel.onReconnect = { [weak self] in self?.startConnection() }
         hudModel.onCancel = { [weak self] in self?.cancelConnection() }
         hudModel.onClose = { [weak self] in self?.view.window?.close() }
@@ -308,6 +313,8 @@ final class SessionViewController: NSViewController {
             inputSession: inputSession
         )
 
+        hudModel.update(\.deviceName, to: draft.displayName)
+        hudModel.update(\.hostLabel, to: draft.hostLabel)
         // The sign-in overlay copies the prefill as it appears, so it never
         // overwrites what the user types; it is set before the phase that
         // shows the overlay.
@@ -592,6 +599,8 @@ final class SessionViewController: NSViewController {
             promptForCredentials(errorMessage: "Enter both a user name and a password.")
             return
         }
+        // What the user typed applies over the PC's saved changes.
+        followSavedDraft()
         let previousIdentity = draft.identity
         draft.username = username
         draft.domain = domain
@@ -608,12 +617,67 @@ final class SessionViewController: NSViewController {
         startConnection()
     }
 
+    // MARK: - Saved PC
+
+    /// The PC was saved, maybe changed. Its name shows at once; the rest
+    /// applies from the next connection the user starts, so automatic
+    /// retries of this one keep the settings it started with.
+    func followSavedDevice(_ saved: RDPConnectionDraft) {
+        guard saved != savedDraft else {
+            return
+        }
+        if saved.name != savedDraft.name {
+            draft.name = saved.name
+            render()
+        }
+        savedDraft = saved
+    }
+
+    /// The PC was deleted: the session may go on, but no password it signs
+    /// in with is kept for a PC that is gone.
+    func savedDeviceWasDeleted() {
+        isPCDeleted = true
+    }
+
+    /// Connect on the PC in the Connection Center: a session that ended or
+    /// failed connects again, as Reconnect would. One that is connecting,
+    /// showing the desktop, or asking to sign in goes on as it is.
+    func connectFromSavedDevice() {
+        guard sessionCommandState.canStart, report != nil || sessionEndReason != nil else {
+            return
+        }
+        startConnection()
+    }
+
+    private func followSavedDraft() {
+        guard followedSavedDraft != savedDraft else {
+            return
+        }
+        let previous = draft
+        draft = draft.following(savedDraft, previouslySaved: followedSavedDraft)
+        followedSavedDraft = savedDraft
+        if SessionCredentialPolicy.keepsRememberedPassword(
+            signingInAs: draft.identity,
+            insteadOf: previous.identity
+        ) == false {
+            rememberedPassword = nil
+        }
+        if draft.clipboardSharingEnabled != previous.clipboardSharingEnabled {
+            setClipboardSharing(draft.clipboardSharingEnabled)
+        }
+        if draft.audioPlaybackEnabled != previous.audioPlaybackEnabled {
+            setAudioPlayback(draft.audioPlaybackEnabled)
+        }
+    }
+
     // MARK: - Connection lifecycle
 
     /// The one way a connection starts: the window opening, Reconnect, ⌘R,
-    /// signing in, and trusting a certificate. Resets the automatic retries
-    /// and finds the password first when the session has none.
+    /// Connect on the PC, signing in, and trusting a certificate. Takes the
+    /// PC's saved changes, resets the automatic retries, and finds the
+    /// password first when the session has none.
     func startConnection() {
+        followSavedDraft()
         hasKeptCredentials = false
         autoRetryTask?.cancel()
         autoRetryTask = nil
@@ -1489,7 +1553,8 @@ final class SessionViewController: NSViewController {
             isRememberedByAnotherPC: launchStore?.isPasswordRemembered(
                 for: draft.identity,
                 byOtherThan: draft.deviceID
-            ) == true
+            ) == true,
+            isPCDeleted: isPCDeleted
         )
         guard let key = keep.key else {
             return

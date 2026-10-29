@@ -2,6 +2,97 @@ import RDPKit
 import XCTest
 
 final class SessionModelsTests: XCTestCase {
+    // MARK: - Following the saved PC
+
+    func testAnUnchangedPCLeavesTheDraftAsTheSessionMadeIt() {
+        let saved = makeDraft()
+        var draft = saved
+        // Signed in at the sign-in sheet as someone else.
+        draft.username = "bob"
+        draft.password = "secret"
+        draft.rememberPassword = true
+
+        XCTAssertEqual(draft.following(saved, previouslySaved: saved), draft)
+    }
+
+    func testSettingsChangedInTheEditorFollowAndKeepThePassword() {
+        let previous = makeDraft()
+        var saved = previous
+        saved.name = "Office"
+        saved.hideCertificateWarnings = false
+        saved.timeoutSeconds = 30
+        var draft = previous
+        draft.password = "secret"
+
+        let next = draft.following(saved, previouslySaved: previous)
+
+        XCTAssertEqual(next.name, "Office")
+        XCTAssertFalse(next.hideCertificateWarnings)
+        XCTAssertEqual(next.timeoutSeconds, 30)
+        XCTAssertEqual(next.password, "secret")
+    }
+
+    func testANewHostDropsThePassword() {
+        let previous = makeDraft()
+        var saved = previous
+        saved.host = "10.0.0.6"
+        var draft = previous
+        draft.password = "secret"
+
+        let next = draft.following(saved, previouslySaved: previous)
+
+        XCTAssertEqual(next.host, "10.0.0.6")
+        XCTAssertEqual(next.password, "")
+    }
+
+    func testAHostChangedOnlyInCaseKeepsThePassword() {
+        let previous = makeDraft()
+        var saved = previous
+        saved.host = "WINBOX"
+        var draft = previous
+        draft.password = "secret"
+
+        XCTAssertEqual(draft.following(saved, previouslySaved: previous).password, "secret")
+    }
+
+    func testOnlyChangedSettingsReplaceWhatTheSessionTyped() {
+        let previous = makeDraft()
+        var draft = previous
+        draft.username = "bob"
+        draft.password = "secret"
+
+        var renamed = previous
+        renamed.name = "Office"
+        let afterRename = draft.following(renamed, previouslySaved: previous)
+        XCTAssertEqual(afterRename.username, "bob")
+        XCTAssertEqual(afterRename.password, "secret")
+
+        var newUser = previous
+        newUser.username = "carol"
+        let afterNewUser = draft.following(newUser, previouslySaved: previous)
+        XCTAssertEqual(afterNewUser.username, "carol")
+        XCTAssertEqual(afterNewUser.password, "")
+    }
+
+    func testEverySavedSettingFollows() {
+        let previous = makeDraft()
+        var saved = previous
+        saved.name = "Office"
+        saved.host = "office.example"
+        saved.port = 3390
+        saved.username = "carol"
+        saved.domain = "CORP"
+        saved.hideCertificateWarnings.toggle()
+        saved.timeoutSeconds = 45
+        saved.clipboardSharingEnabled.toggle()
+        saved.audioPlaybackEnabled.toggle()
+        saved.rememberPassword.toggle()
+        var draft = previous
+        draft.password = "secret"
+
+        XCTAssertEqual(draft.following(saved, previouslySaved: previous), saved)
+    }
+
     // MARK: - End reasons
 
     func testUnclassifiedFailureKeepsReportedError() {
@@ -379,6 +470,26 @@ final class SessionModelsTests: XCTestCase {
             RDPDesktopSize.initial(canvasPointSize: CGSize(width: 9001, height: 9001)),
             try RDPDesktopSize(width: 8192, height: 8192)
         )
+    }
+
+    private func makeDraft() -> RDPConnectionDraft {
+        RDPConnectionDraft(device: DeviceProfile(
+            id: UUID(),
+            name: "Desk",
+            host: "winbox",
+            port: 3389,
+            username: "alice",
+            domain: "",
+            hideCertificateWarnings: true,
+            timeoutSeconds: 10,
+            clipboardSharingEnabled: true,
+            audioPlaybackEnabled: false,
+            rememberPassword: false,
+            accentHue: 0.5,
+            createdAt: Date(timeIntervalSinceReferenceDate: 0),
+            updatedAt: Date(timeIntervalSinceReferenceDate: 0),
+            lastConnectedAt: nil
+        ))
     }
 
     private let keyUsageError =

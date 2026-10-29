@@ -28,7 +28,9 @@ struct HelpView: View {
                     HelpBody(
                         "Transient network failures — like the first-time local-network " +
                             "permission prompt — retry automatically. Connecting to a PC " +
-                            "that already has a session focuses its window."
+                            "that already has a session focuses its window, and connects " +
+                            "again if that session ended. Changes saved to a PC apply to " +
+                            "its open window from the next connection."
                     )
                 }
 

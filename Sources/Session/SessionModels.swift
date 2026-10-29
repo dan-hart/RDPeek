@@ -52,6 +52,38 @@ struct RDPConnectionDraft: Equatable, Sendable {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedName.isEmpty ? identity.displayName : trimmedName
     }
+
+    /// The host and, when not the default, the port.
+    var hostLabel: String {
+        port == 3389 ? host : "\(host):\(port)"
+    }
+
+    /// The draft once its saved PC changed from `previous` to `saved`: each
+    /// setting changed in the editor takes the saved value, and the rest —
+    /// such as a user name typed at sign-in — stay. A password belongs to
+    /// the sign-in it was entered for, so a different sign-in drops it.
+    func following(_ saved: RDPConnectionDraft, previouslySaved previous: RDPConnectionDraft) -> RDPConnectionDraft {
+        var next = self
+        func follow<Value: Equatable>(_ setting: WritableKeyPath<RDPConnectionDraft, Value>) {
+            if saved[keyPath: setting] != previous[keyPath: setting] {
+                next[keyPath: setting] = saved[keyPath: setting]
+            }
+        }
+        follow(\.name)
+        follow(\.host)
+        follow(\.port)
+        follow(\.username)
+        follow(\.domain)
+        follow(\.hideCertificateWarnings)
+        follow(\.timeoutSeconds)
+        follow(\.clipboardSharingEnabled)
+        follow(\.audioPlaybackEnabled)
+        follow(\.rememberPassword)
+        if next.identity.hasSameConnectionIdentity(as: identity) == false {
+            next.password = ""
+        }
+        return next
+    }
 }
 
 struct RDPSessionEndReason: Equatable {
