@@ -11,7 +11,7 @@
     no padding. macOS Tahoe re-masks compliant icons into its system
     squircle; non-conforming artwork would be shrunk onto a gray
     backplate ("squircle jail"), and padded artwork renders small.
-    Render with scripts/build-app-icon.sh.
+    Render with Sources/Resources/build-app-icon.sh.
   -->
   <defs>
     <linearGradient id="backdrop" x1="0" y1="0" x2="0" y2="1">

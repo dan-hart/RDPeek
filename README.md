@@ -65,7 +65,8 @@ open "DerivedData/Build/Products/Debug/RDPeek.app"
 Or open `RDPeek.xcodeproj` in Xcode after generating and run the `RDPeek`
 scheme. Run the test suite with `xcodebuild test` using the same flags;
 warnings are errors, and `swiftlint lint --strict` must stay clean. CI runs
-lint, an unsigned build, and the tests on every push and pull request.
+lint, an unsigned build, and the tests on pushes to `main` and on pull
+requests.
 
 ## Project Layout
 
@@ -75,7 +76,8 @@ Sources/App/              App entry, scenes, commands, settings, theme
 Sources/ConnectionCenter/ Device grid, cards, editor sheet, list model
 Sources/Session/          Session window, view controller, canvas, input, HUD
 Sources/Diagnostics/      Stats for Nerds window
-Sources/Storage/          Device profiles, Keychain, trusted certificates
+Sources/Storage/          Device profiles, Keychain passwords and client
+                          licenses, in-memory password cache, trusted certs
 Sources/Resources/        Asset catalog and the app-icon pipeline
 Tests/                    Unit tests (input state, stores, session gating)
 website/                  rdpeek.com (Next.js, deployed on Vercel)

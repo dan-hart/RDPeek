@@ -12,12 +12,14 @@ layers; this app provides the experience around them.
 Layer boundaries:
 
 - `Sources/App` — app entry point, scenes, menu commands, settings, theme.
-- `Sources/ConnectionCenter` — the Devices window: grid, cards, editor.
+- `Sources/ConnectionCenter` — the Connection Center window: device grid,
+  cards, editor.
 - `Sources/Session` — one remote session: window controller, view
   controller, canvas, input capture, SwiftUI HUD overlays.
 - `Sources/Diagnostics` — the Stats for Nerds window.
-- `Sources/Storage` — device profiles (UserDefaults), credentials
-  (Keychain), trusted certificates (UserDefaults).
+- `Sources/Storage` — device profiles (UserDefaults), credentials and
+  client licenses (Keychain), the in-memory credential cache for
+  passwords that are not remembered, trusted certificates (UserDefaults).
 
 The session core (`SessionViewController`, renderer, input capture, frame
 clock) is adapted from RDPKit's example client. When changing connection,
@@ -45,6 +47,8 @@ implementation.
   committed).
 - Build: `xcodebuild -project RDPeek.xcodeproj -scheme RDPeek
   -destination 'platform=macOS' -derivedDataPath DerivedData build`
+- Test: `xcodebuild -project RDPeek.xcodeproj -scheme RDPeek
+  -destination 'platform=macOS' -derivedDataPath DerivedData test`
 - Warnings are errors; keep the build clean.
 - Swift style gate: `swiftlint lint --strict` must pass.
 - App icon: the master artwork is `Sources/Resources/AppIcon.svg`
@@ -53,13 +57,18 @@ implementation.
   purpose — SF Symbols must not be used as app icons (license).
 - Gather context before implementing: read the code you change and its
   callers, and confirm RDPKit API names against the package source.
-- Verify by building (and running, when behavior changed) before every
-  commit. Live behavior should be validated against a real RDP server
-  when touching session logic.
+- Verify by building and testing (and running, when behavior changed)
+  before every commit. Live behavior should be validated against a real
+  RDP server when touching session logic.
 - RDPKit is pinned by exact version in `project.yml`; bump it consciously
-  and re-validate the vendored session logic when you do.
-- CI (`.github/workflows/ci.yml`) runs the lint gate and an unsigned
-  build on every push and pull request. Releases are produced through
+  and re-validate the vendored session logic when you do. Its dependencies
+  are pinned by the committed
+  `RDPeek.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`
+  (the only tracked file in the generated project); commit the file Xcode
+  updates when you bump or resolve packages.
+- CI (`.github/workflows/ci.yml`) runs the lint gate, an unsigned build,
+  and the tests on pushes to `main` and on pull requests, using only the
+  package versions in `Package.resolved`. Releases are produced through
   Xcode's Archive and notarization flow — signing and notarization are
   intentionally not done in CI or scripts.
 
