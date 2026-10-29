@@ -1,10 +1,28 @@
 import Foundation
 import Security
 
+/// Generic-password items addressed by account, as a seam so tests can
+/// substitute a fake for the real Keychain.
+protocol KeychainItems: Sendable {
+    func data(account: String) throws -> Data?
+    func save(_ data: Data, account: String) throws
+    func rename(account: String, to newAccount: String) throws -> KeychainRename
+    func delete(account: String) throws
+}
+
+/// What renaming a Keychain item did.
+enum KeychainRename {
+    case renamed
+    /// No item has the account.
+    case notFound
+    /// An item already has the new account; neither item changed.
+    case newNameTaken
+}
+
 /// The generic-password items under one Keychain service, addressed by
 /// account. The credential and client-license stores both go through here,
 /// so their queries stay identical.
-struct KeychainService: Sendable {
+struct KeychainService: KeychainItems {
     let name: String
 
     /// The item's data, or nil when there is no item for `account`.
@@ -55,6 +73,26 @@ struct KeychainService: Sendable {
             }
         } else if addStatus != errSecSuccess {
             throw KeychainError.unexpectedStatus(addStatus)
+        }
+    }
+
+    /// Moves the item to `newAccount` in one step: an item deleted
+    /// meanwhile is not brought back, and one already under `newAccount`
+    /// is not replaced.
+    func rename(account: String, to newAccount: String) throws -> KeychainRename {
+        let attributes: [String: Any] = [
+            kSecAttrAccount as String: newAccount,
+        ]
+        let status = SecItemUpdate(baseQuery(account: account) as CFDictionary, attributes as CFDictionary)
+        switch status {
+        case errSecSuccess:
+            return .renamed
+        case errSecItemNotFound:
+            return .notFound
+        case errSecDuplicateItem:
+            return .newNameTaken
+        default:
+            throw KeychainError.unexpectedStatus(status)
         }
     }
 

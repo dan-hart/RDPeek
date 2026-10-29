@@ -14,18 +14,6 @@ final class KeychainCredentialKeyTests: XCTestCase {
         XCTAssertEqual(upper.account, "anees@winbox:3389")
     }
 
-    func testLegacyAccountOnlyExistsWhenHostCaseDiffers() throws {
-        let mixedCase = try XCTUnwrap(KeychainCredentialKey(identity: RDPConnectionIdentity(
-            host: "WinBox", port: 3389, username: "anees", domain: "corp"
-        )))
-        XCTAssertEqual(mixedCase.legacyAccount, "corp\\anees@WinBox:3389")
-
-        let lowerCase = try XCTUnwrap(KeychainCredentialKey(identity: RDPConnectionIdentity(
-            host: "winbox", port: 3389, username: "anees", domain: "corp"
-        )))
-        XCTAssertNil(lowerCase.legacyAccount)
-    }
-
     func testKeyRequiresUsername() {
         XCTAssertNil(KeychainCredentialKey(identity: RDPConnectionIdentity(
             host: "winbox", port: 3389, username: "", domain: ""

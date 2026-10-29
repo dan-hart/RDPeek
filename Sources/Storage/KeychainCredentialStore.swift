@@ -20,16 +20,6 @@ struct KeychainCredentialKey: Equatable, Sendable {
         }
         return account
     }
-
-    /// The pre-normalization account name older installs stored items under,
-    /// with the host as typed.
-    var legacyAccount: String? {
-        guard let qualifiedUsername = identity.qualifiedUsername else {
-            return nil
-        }
-        let legacy = "\(qualifiedUsername)@\(identity.host):\(identity.port)"
-        return legacy == account ? nil : legacy
-    }
 }
 
 extension RDPConnectionIdentity {
@@ -55,33 +45,53 @@ protocol CredentialStoring: Sendable {
 }
 
 struct KeychainCredentialStore: CredentialStoring {
-    private let keychain = KeychainService(name: "ai.aneesiqbal.rdpeek.credentials")
+    private let keychain: any KeychainItems
+
+    init(keychain: any KeychainItems = KeychainService(name: "ai.aneesiqbal.rdpeek.credentials")) {
+        self.keychain = keychain
+    }
 
     func password(for key: KeychainCredentialKey) throws -> String? {
         if let password = try password(account: key.account) {
             return password
         }
-        // Fall back to the raw-case account older installs wrote, and
-        // migrate the item to the normalized account on a hit.
-        guard let legacyAccount = key.legacyAccount,
-              let password = try password(account: legacyAccount)
-        else {
-            return nil
+        // A password saved under the name an older install gave the
+        // account, with the host as typed, moves to the current name. It
+        // is renamed in one step rather than saved again, so one deleted
+        // meanwhile, with its PC say, stays deleted, and one saved under
+        // the current name meanwhile, which is newer, stays.
+        for legacyAccount in key.identity.legacyCredentialAccountNames {
+            guard let password = try password(account: legacyAccount) else {
+                continue
+            }
+            let rename = try? keychain.rename(account: legacyAccount, to: key.account)
+            switch rename {
+            case .renamed, nil:
+                // A rename that failed leaves the item to the next read.
+                return password
+            case .notFound:
+                // Deleted, or moved by another read, meanwhile.
+                return try self.password(account: key.account)
+            case .newNameTaken:
+                try? keychain.delete(account: legacyAccount)
+                return try self.password(account: key.account)
+            }
         }
-        try? savePassword(password, for: key)
-        return password
+        return nil
     }
 
     func savePassword(_ password: String, for key: KeychainCredentialKey) throws {
         try keychain.save(Data(password.utf8), account: key.account)
-        if let legacyAccount = key.legacyAccount {
+        // An older password left under an earlier name could come back once
+        // this one is deleted through another spelling of the host.
+        for legacyAccount in key.identity.legacyCredentialAccountNames {
             try? keychain.delete(account: legacyAccount)
         }
     }
 
     func deletePassword(for key: KeychainCredentialKey) throws {
         try keychain.delete(account: key.account)
-        if let legacyAccount = key.legacyAccount {
+        for legacyAccount in key.identity.legacyCredentialAccountNames {
             try keychain.delete(account: legacyAccount)
         }
     }
