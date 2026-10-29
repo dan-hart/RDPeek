@@ -554,7 +554,7 @@ final class SessionClipboard {
         // A local copy made since the remote one, which the poll has not
         // seen yet, is newer than the download, so it stays.
         guard pasteboard.changeCount == pasteboardChangeCount else {
-            removeDownloadDirectory(transfer.downloadDirectory)
+            failFileTransfer(transfer, message: "Clipboard changed; remote files were not copied")
             return
         }
         cancelLocalFileRead()

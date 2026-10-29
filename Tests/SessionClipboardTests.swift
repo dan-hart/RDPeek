@@ -451,6 +451,7 @@ final class SessionClipboardTests: XCTestCase {
             pasteboard.setString("local", forType: .string)
         }
         XCTAssertEqual(pasteboard.string(forType: .string), "local")
+        XCTAssertEqual(toasts.last, "Clipboard changed; remote files were not copied")
 
         // So does one the poll has published.
         try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
