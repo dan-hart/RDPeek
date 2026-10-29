@@ -50,7 +50,6 @@ final class SessionViewController: NSViewController {
     private var autoApplyViewerSize = true
     private var pendingDisplayResizeTask: Task<Void, Never>?
     private var lastRequestedDisplayRequest: RDPDisplayRequest?
-    private var viewerPointSize: CGSize = .zero
     private var viewerPixelSize: RDPViewerPixelSize?
     private let clipboard: SessionClipboard
     private var audioPlaybackEnabled: Bool
@@ -68,7 +67,6 @@ final class SessionViewController: NSViewController {
     private let diagnosticsModel = RemoteSessionDiagnosticsModel()
     private var certificateTrustedByApp = false
     private var certificateRefusal: CertificateRefusal?
-    private var certificateTrustMessage: String?
     private var shouldAutoConnect = true
     private var diagnosticsTask: Task<Void, Never>?
     private var clipboardPollingTask: Task<Void, Never>?
@@ -407,10 +405,6 @@ final class SessionViewController: NSViewController {
 
     fileprivate func acceptsConnectionEvent(id: UUID) -> Bool {
         activeConnectionID == id
-    }
-
-    fileprivate var isClosed: Bool {
-        didClose
     }
 
     private func startDiagnosticsLoop() {
@@ -1175,7 +1169,6 @@ final class SessionViewController: NSViewController {
     /// The canvas reports its size and backing scale together, so the
     /// remote desktop follows the window across displays of other scales.
     private func updateViewerSurface(pointSize: CGSize, backingScaleFactor: CGFloat) {
-        viewerPointSize = pointSize
         let nextSize = RDPViewerPixelSize(pointSize: pointSize, backingScaleFactor: backingScaleFactor)
         if viewerPixelSize != nextSize {
             viewerPixelSize = nextSize
@@ -1492,22 +1485,6 @@ private final class SessionMainActorSink: @unchecked Sendable {
             MainActor.assumeIsolated {
                 guard let controller = self.controller,
                       controller.acceptsConnectionEvent(id: self.connectionID)
-                else {
-                    return
-                }
-                operation(controller)
-            }
-        }
-    }
-
-    /// Applies even after the connection has ended — for outcomes that are
-    /// not connection-scoped, like a keychain write that finished after the
-    /// session dropped and must still be reflected in tracked state.
-    func applyIgnoringConnectionState(_ operation: @escaping @MainActor (SessionViewController) -> Void) {
-        DispatchQueue.main.async {
-            MainActor.assumeIsolated {
-                guard let controller = self.controller,
-                      controller.isClosed == false
                 else {
                     return
                 }

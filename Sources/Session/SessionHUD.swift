@@ -17,14 +17,6 @@ struct SessionCertificateNotice: Equatable {
     var title: String
     var message: String
     var canTrust: Bool
-
-    var systemImage: String {
-        "lock.trianglebadge.exclamationmark.fill"
-    }
-
-    var trustActionTitle: String {
-        "Trust and Connect"
-    }
 }
 
 struct SessionToast: Equatable, Identifiable {
@@ -462,9 +454,9 @@ private struct SessionCertificateBanner: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: notice.systemImage)
+            Image(systemName: "lock.trianglebadge.exclamationmark.fill")
                 .font(.title3)
-                .foregroundStyle(notice.canTrust ? Color.yellow : Color.green)
+                .foregroundStyle(.yellow)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: notice.title)
@@ -478,7 +470,7 @@ private struct SessionCertificateBanner: View {
             }
 
             if notice.canTrust {
-                Button(notice.trustActionTitle) {
+                Button("Trust and Connect") {
                     model.onTrustCertificate()
                 }
                 .buttonStyle(.borderedProminent)
