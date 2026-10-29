@@ -53,7 +53,10 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
 - ⌘ reaches the remote as the Windows key only together with another
   key or click, or when tapped alone, so ⌘-Tab and Spotlight no longer
   open the remote Start menu; neither do ⌘-clicking a background
-  session window or scrolling with ⌘ held.
+  session window, scrolling with ⌘ held, pressing both ⌘ keys, or
+  tapping ⌘ or right ⌥ while the other is already held on the remote.
+- A dead key's accent is no longer lost when Return, Tab, or Esc
+  follows it.
 - Keys pressed with ⌘ are released on the remote as soon as they go up,
   so pressing ⌘W twice quickly works.
 - Modifiers whose release the window never saw, for example with a
