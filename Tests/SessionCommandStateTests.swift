@@ -64,7 +64,7 @@ final class SessionCommandStateTests: XCTestCase {
 
     // MARK: - Invariant
 
-    func testEveryPhaseOffersStartOrCancelUnlessIdleWithEmptyHost() {
+    func testEveryPhaseOffersAWayForward() {
         // The user must never be stuck with both Connect and Cancel disabled
         // unless the session is idle and has no host to connect to, or the
         // sign-in overlay offers its own way forward.

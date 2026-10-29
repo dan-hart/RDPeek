@@ -114,7 +114,7 @@ final class RemoteInputMappingTests: XCTestCase {
         XCTAssertNil(MacRDPKeyboardMapping.scancode(forKeyCode: UInt16(kVK_ANSI_KeypadClear)))
     }
 
-    func testFunctionKeysAndModifiedKeysAlwaysSendScancodes() {
+    func testScancodeRuleCoversFunctionKeysAndModifiedKeys() {
         func sendsScancode(_ keyCode: Int, _ modifierFlags: NSEvent.ModifierFlags) -> Bool {
             MacRDPKeyboardMapping.shouldSendScancode(
                 forKeyCode: UInt16(keyCode),

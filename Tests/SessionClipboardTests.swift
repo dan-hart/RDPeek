@@ -161,7 +161,7 @@ final class SessionClipboardTests: XCTestCase {
 
     // MARK: - Local files
 
-    func testCopiedLocalFilesAreReadOffTheMainThread() async throws {
+    func testCopiedLocalFilesPublishAfterAttachAndANewerCopyWins() async throws {
         let fileURL = try makeLocalFile(named: "notes.txt", contents: Data("hello".utf8))
         pasteboard.clearContents()
         pasteboard.writeObjects([fileURL as NSURL])

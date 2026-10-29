@@ -40,7 +40,7 @@ final class TrustedCertificateStoreTests: XCTestCase {
         XCTAssertEqual(store.refusal(of: certificate("aa"), port: 3389, acceptsUntrusted: false), .untrusted)
         XCTAssertEqual(store.refusal(of: certificate(nil), port: 3389, acceptsUntrusted: false), .untrusted)
         XCTAssertNil(store.refusal(of: certificate("aa", trusted: true), port: 3389, acceptsUntrusted: false))
-        // Hide certificate warnings lets an untrusted certificate through.
+        // Accept untrusted certificates lets an untrusted certificate through.
         XCTAssertNil(store.refusal(of: certificate("aa"), port: 3389, acceptsUntrusted: true))
 
         try store.trust(XCTUnwrap(RDPServerCertificateTrustKey(host: "desktop.example", port: 3389, sha256: "aa")))
