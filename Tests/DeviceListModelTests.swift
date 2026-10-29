@@ -25,6 +25,42 @@ final class DeviceListModelTests: XCTestCase {
 
         XCTAssertEqual(model.devices, [])
         XCTAssertNotNil(model.errorMessage)
+        XCTAssertEqual(model.unreadableDeviceCount, 0)
+    }
+
+    func testInitCountsSavedPCsItCannotReadUntilNoticeIsDismissed() throws {
+        let defaults = try makeIsolatedDefaults()
+        let readableID = UUID()
+        defaults.set(Data("""
+        [{"id": "\(readableID.uuidString)", "host": "desk.example"},
+         {"id": "not-a-uuid", "host": "damaged.example"},
+         {"host": "no-id.example"}]
+        """.utf8), forKey: "device-profiles.v1")
+
+        let model = DeviceListModel(
+            credentialStore: CredentialStoreRecorder(),
+            credentialCache: InMemoryCredentialCache(),
+            defaults: defaults
+        )
+
+        XCTAssertEqual(model.devices.map(\.id), [readableID])
+        XCTAssertEqual(model.unreadableDeviceCount, 2)
+        XCTAssertNil(model.errorMessage)
+
+        model.dismissUnreadableDeviceNotice()
+
+        XCTAssertEqual(model.unreadableDeviceCount, 0)
+        XCTAssertEqual(
+            try DeviceProfileStore(defaults: defaults).load().unreadableCount,
+            2,
+            "Dismissing the notice must leave the unreadable PCs stored"
+        )
+    }
+
+    func testInitWithReadableStoreCountsNoUnreadablePCs() throws {
+        let harness = try makeHarness(devices: [makeDevice()])
+
+        XCTAssertEqual(harness.model.unreadableDeviceCount, 0)
     }
 
     // MARK: - confirmDeletion

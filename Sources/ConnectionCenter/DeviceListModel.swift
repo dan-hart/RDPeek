@@ -41,6 +41,10 @@ final class DeviceListModel: ObservableObject {
     @Published var editorState: DeviceEditorState?
     @Published var devicePendingDeletion: DeviceProfile?
     @Published var errorMessage: String?
+    /// How many saved PCs this version cannot read, counted at launch. They
+    /// stay in storage unchanged; the Connection Center says so until the
+    /// notice is dismissed, which zeroes this for the rest of the run.
+    @Published private(set) var unreadableDeviceCount = 0
     @Published var sortOrder: DeviceSortOrder {
         didSet {
             defaults.set(sortOrder.rawValue, forKey: "device-sort-order")
@@ -59,10 +63,16 @@ final class DeviceListModel: ObservableObject {
         let storedSortOrder = defaults.string(forKey: "device-sort-order")
         sortOrder = storedSortOrder.flatMap(DeviceSortOrder.init(rawValue:)) ?? .byName
         do {
-            devices = try store.devices()
+            let stored = try store.load()
+            devices = stored.devices
+            unreadableDeviceCount = stored.unreadableCount
         } catch {
             errorMessage = String(describing: error)
         }
+    }
+
+    func dismissUnreadableDeviceNotice() {
+        unreadableDeviceCount = 0
     }
 
     var filteredDevices: [DeviceProfile] {

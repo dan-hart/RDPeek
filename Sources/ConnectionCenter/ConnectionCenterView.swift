@@ -23,6 +23,16 @@ struct ConnectionCenterView: View {
                 deviceGrid(deviceList.filteredDevices)
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if deviceList.unreadableDeviceCount > 0 {
+                UnreadableDevicesNotice(count: deviceList.unreadableDeviceCount) {
+                    withAnimation(.spring(duration: 0.35, bounce: 0.15)) {
+                        deviceList.dismissUnreadableDeviceNotice()
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
         .frame(minWidth: 740, minHeight: 480)
         .navigationTitle("RDPeek")
         .toolbar {
@@ -177,6 +187,49 @@ struct ConnectionCenterView: View {
                 }
             }
         )
+    }
+}
+
+/// Says that saved PCs this version cannot read — damaged, or from a newer
+/// RDPeek — are left out of the grid but kept, so none seems lost.
+private struct UnreadableDevicesNotice: View {
+    let count: Int
+    var onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Label {
+                Text(verbatim: message)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+            }
+            .font(.callout)
+
+            Spacer(minLength: 0)
+
+            Button {
+                onDismiss()
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+
+    private var message: String {
+        count == 1
+            ? "1 saved PC can't be read by this version of RDPeek and is kept unchanged."
+            : "\(count) saved PCs can't be read by this version of RDPeek and are kept unchanged."
     }
 }
 

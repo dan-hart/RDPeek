@@ -138,10 +138,19 @@ struct DeviceProfileStore {
         self.defaults = defaults
     }
 
-    /// The saved profiles, sorted by name. Throws when the stored list
-    /// cannot be read at all, rather than reporting no PCs.
+    /// The saved profiles, sorted by name, and how many stored elements
+    /// this version cannot read: those are kept unchanged but not listed.
+    /// Throws when the stored list cannot be read at all, rather than
+    /// reporting no PCs.
+    func load() throws -> (devices: [DeviceProfile], unreadableCount: Int) {
+        let stored = try loadStoredDevices()
+        let devices = stored.compactMap(\.device)
+        return (sorted(devices), stored.count - devices.count)
+    }
+
+    /// The saved profiles, sorted by name.
     func devices() throws -> [DeviceProfile] {
-        try sorted(loadStoredDevices().compactMap(\.device))
+        try load().devices
     }
 
     @discardableResult
