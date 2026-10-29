@@ -20,6 +20,10 @@ protocol SessionClipboardSending: AnyObject {
     var fetchesRemoteCopies: Bool { get set }
     /// Whether a copy the server announced is being fetched.
     var isAwaitingRemoteCopy: Bool { get }
+    /// Whether a publish since replaced, on the server, the remote copy
+    /// numbered `remoteCopyNumber`: the session's
+    /// `deliveredRemoteCopyNumber` in its handler.
+    func hasPublished(since remoteCopyNumber: Int) -> Bool
     func publishLocalUnicodeText(_ text: String?)
     func publishLocalFiles(_ files: [RDPClipboardLocalFile])
     func requestRemoteFileSize(streamID: UInt32, fileIndex: Int32) throws
@@ -235,7 +239,12 @@ final class SessionClipboard {
         }
     }
 
-    func receiveText(_ text: String) {
+    func receiveText(_ text: String, copyNumber: Int) {
+        // A copy a publish here replaced on the server is no news, and
+        // the server holds the Mac's copy again.
+        guard isUnreplaced(copyNumber) else {
+            return
+        }
         serverHoldsLocalCopy = false
         guard isSharingEnabled else {
             return
@@ -260,7 +269,12 @@ final class SessionClipboard {
     /// List replace the receiver's clipboard: a password a password manager
     /// cleared there does not stay on the Mac. A local copy made since is
     /// kept.
-    func receiveRemoteCopyUnavailable(isEmpty: Bool) {
+    func receiveRemoteCopyUnavailable(isEmpty: Bool, copyNumber: Int) {
+        // A copy a publish here replaced on the server is no news, and
+        // the server holds the Mac's copy again.
+        guard isUnreplaced(copyNumber) else {
+            return
+        }
         serverHoldsLocalCopy = false
         guard isSharingEnabled else {
             return
@@ -279,7 +293,12 @@ final class SessionClipboard {
         removeCopiedDownloadIfReplaced()
     }
 
-    func receiveFileList(_ descriptorList: RDPClipboardFileGroupDescriptorW) {
+    func receiveFileList(_ descriptorList: RDPClipboardFileGroupDescriptorW, copyNumber: Int) {
+        // A copy a publish here replaced on the server is no news, and
+        // the server holds the Mac's copy again.
+        guard isUnreplaced(copyNumber) else {
+            return
+        }
         serverHoldsLocalCopy = false
         guard isSharingEnabled else {
             return
@@ -356,6 +375,13 @@ final class SessionClipboard {
         }
         transfer.receivedData.append(response.data)
         continueFileTransfer(transfer)
+    }
+
+    /// Whether no publish has replaced remote copy `copyNumber` on the
+    /// server: one the session handed over before a publish here can still
+    /// reach the main thread after it.
+    private func isUnreplaced(_ copyNumber: Int) -> Bool {
+        session?.hasPublished(since: copyNumber) == false
     }
 
     // MARK: - Local pasteboard

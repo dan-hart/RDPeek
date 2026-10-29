@@ -29,15 +29,35 @@ private final class RecordedClipboard: SessionClipboardSending {
     var sizeRequests: [UInt32] = []
     var sizeRequestFileIndexes: [Int32] = []
     var rangeRequests: [RangeRequest] = []
+    /// Copies, remote and published, are numbered in the order they come,
+    /// as RDPClipboardSession numbers them.
+    private var lastCopyNumber = 0
+    private var publishedCopyNumber = 0
+
+    /// A copy the server announces, and the number its handler gets.
+    func announceRemoteCopy() -> Int {
+        lastCopyNumber += 1
+        return lastCopyNumber
+    }
+
+    func hasPublished(since remoteCopyNumber: Int) -> Bool {
+        publishedCopyNumber > remoteCopyNumber
+    }
 
     func publishLocalUnicodeText(_ text: String?) {
-        unfetchedRemoteCopy = false
+        recordPublish()
         publishedTexts.append(text)
     }
 
     func publishLocalFiles(_ files: [RDPClipboardLocalFile]) {
-        unfetchedRemoteCopy = false
+        recordPublish()
         publishedFiles.append(files)
+    }
+
+    private func recordPublish() {
+        unfetchedRemoteCopy = false
+        lastCopyNumber += 1
+        publishedCopyNumber = lastCopyNumber
     }
 
     func requestRemoteFileSize(streamID: UInt32, fileIndex: Int32) throws {
@@ -145,7 +165,7 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.startTemporarySharing()
         XCTAssertEqual(session.publishedTexts, [nil, "local"])
 
-        clipboard.receiveText("remote paragraph")
+        clipboard.receiveText("remote paragraph", copyNumber: session.announceRemoteCopy())
         clipboard.poll(now: Date().addingTimeInterval(31))
         XCTAssertFalse(clipboard.isSharingEnabled)
         XCTAssertEqual(session.publishedTexts, [nil, "local"])
@@ -155,7 +175,7 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(session.publishedTexts.last, "remote paragraph")
         clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 1, fileName: "remote.txt"),
-        ]))
+        ]), copyNumber: session.announceRemoteCopy())
         clipboard.setSharingEnabled(false)
         XCTAssertEqual(session.publishedTexts, [nil, "local", "remote paragraph"])
     }
@@ -170,11 +190,47 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.attach(session)
         for isEmpty in [false, true] {
             clipboard.startTemporarySharing()
-            clipboard.receiveRemoteCopyUnavailable(isEmpty: isEmpty)
+            clipboard.receiveRemoteCopyUnavailable(isEmpty: isEmpty, copyNumber: session.announceRemoteCopy())
             clipboard.poll(now: Date().addingTimeInterval(31))
             XCTAssertFalse(clipboard.isSharingEnabled)
         }
         XCTAssertEqual(session.publishedTexts, [nil, "local", "local"])
+    }
+
+    /// A remote copy can reach the main thread after the bridge published
+    /// there, though the server announced it before: that publish replaced
+    /// it on the server, so it is dropped. Here the server's clipboard,
+    /// emptied before the bridge attached, is reported once attaching turns
+    /// fetching on, and ending sharing still takes back the Mac's copy. A
+    /// remote copy announced after the publish is newer and arrives.
+    func testARemoteCopyAPublishReplacedOnTheWayIsDropped() {
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+
+        let emptied = session.announceRemoteCopy()
+        clipboard.attach(session)
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true, copyNumber: emptied)
+        XCTAssertEqual(pasteboard.string(forType: .string), "local")
+
+        let remoteText = session.announceRemoteCopy()
+        let remoteFiles = session.announceRemoteCopy()
+        pasteboard.clearContents()
+        pasteboard.setString("newer local", forType: .string)
+        clipboard.poll()
+        clipboard.receiveText("older remote", copyNumber: remoteText)
+        clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 1, fileName: "remote.txt"),
+        ]), copyNumber: remoteFiles)
+        XCTAssertEqual(pasteboard.string(forType: .string), "newer local")
+        XCTAssertTrue(session.sizeRequests.isEmpty)
+        clipboard.setSharingEnabled(false)
+        XCTAssertEqual(session.publishedTexts, ["local", "newer local", nil])
+
+        clipboard.setSharingEnabled(true)
+        clipboard.receiveText("newer remote", copyNumber: session.announceRemoteCopy())
+        XCTAssertEqual(pasteboard.string(forType: .string), "newer remote")
     }
 
     /// A server whose clipboard is emptied, as a password manager clears a
@@ -188,8 +244,8 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.attach(session)
         session.publishedTexts.removeAll()
 
-        clipboard.receiveText("password")
-        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
+        clipboard.receiveText("password", copyNumber: session.announceRemoteCopy())
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true, copyNumber: session.announceRemoteCopy())
         XCTAssertNil(pasteboard.string(forType: .string))
         XCTAssertEqual(toasts.last, "Remote clipboard emptied; cleared on this Mac too")
         // The emptied pasteboard is not sent back.
@@ -201,31 +257,31 @@ final class SessionClipboardTests: XCTestCase {
         try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
         try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
         let fileURL = try XCTUnwrap(copiedFileURL())
-        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true, copyNumber: session.announceRemoteCopy())
         XCTAssertNil(copiedFileURL())
         XCTAssertFalse(fileExists(fileURL))
 
         // A local copy since stays, whether or not the poll has seen it.
         toasts.removeAll()
-        clipboard.receiveText("remote")
+        clipboard.receiveText("remote", copyNumber: session.announceRemoteCopy())
         pasteboard.clearContents()
         pasteboard.setString("local", forType: .string)
-        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
-        clipboard.receiveText("remote")
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true, copyNumber: session.announceRemoteCopy())
+        clipboard.receiveText("remote", copyNumber: session.announceRemoteCopy())
         pasteboard.clearContents()
         pasteboard.setString("newer local", forType: .string)
         clipboard.poll()
-        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true, copyNumber: session.announceRemoteCopy())
         XCTAssertEqual(pasteboard.string(forType: .string), "newer local")
         XCTAssertEqual(toasts, ["Remote text copied", "Remote text copied"])
         // That from before the remote copy is older, so it is not sent.
         XCTAssertEqual(session.publishedTexts, ["newer local"])
 
         // Nor is a remote copy from an earlier session cleared.
-        clipboard.receiveText("remote")
+        clipboard.receiveText("remote", copyNumber: session.announceRemoteCopy())
         clipboard.detach()
         clipboard.attach(session)
-        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true, copyNumber: session.announceRemoteCopy())
         XCTAssertEqual(pasteboard.string(forType: .string), "remote")
     }
 
@@ -239,9 +295,9 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.onToast = { text, _ in toasts.append(text) }
         clipboard.attach(session)
 
-        clipboard.receiveText("remote text")
+        clipboard.receiveText("remote text", copyNumber: session.announceRemoteCopy())
         try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
-        clipboard.receiveRemoteCopyUnavailable(isEmpty: false)
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: false, copyNumber: session.announceRemoteCopy())
         XCTAssertEqual(toasts.last, "Remote copy could not be shared")
         try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
         XCTAssertNil(copiedFileURL())
@@ -253,7 +309,7 @@ final class SessionClipboardTests: XCTestCase {
         pasteboard.writeObjects([fileURL as NSURL])
         clipboard.syncNow()
         let staleRead = try XCTUnwrap(clipboard.localFileRead)
-        clipboard.receiveRemoteCopyUnavailable(isEmpty: false)
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: false, copyNumber: session.announceRemoteCopy())
         await staleRead.value
         XCTAssertTrue(session.publishedFiles.isEmpty)
     }
@@ -277,11 +333,11 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertTrue(session.publishedFiles.isEmpty)
 
         // Copies the session handed over before sharing ended are dropped.
-        clipboard.receiveText("remote")
+        clipboard.receiveText("remote", copyNumber: session.announceRemoteCopy())
         clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 1, fileName: "remote.txt"),
-        ]))
-        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
+        ]), copyNumber: session.announceRemoteCopy())
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true, copyNumber: session.announceRemoteCopy())
         XCTAssertEqual(pasteboard.string(forType: .string), "newer local")
         XCTAssertTrue(session.sizeRequests.isEmpty)
 
@@ -326,7 +382,7 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.attach(session)
         XCTAssertTrue(session.isAwaitingRemoteCopy)
         XCTAssertTrue(session.publishedTexts.isEmpty)
-        clipboard.receiveText("remote")
+        clipboard.receiveText("remote", copyNumber: session.announceRemoteCopy())
         clipboard.poll()
         clipboard.syncNow()
         XCTAssertEqual(pasteboard.string(forType: .string), "remote")
@@ -426,7 +482,7 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.startTemporarySharing()
         XCTAssertEqual(session.publishedTexts, [nil, "local"])
 
-        clipboard.receiveText("remote cells")
+        clipboard.receiveText("remote cells", copyNumber: session.announceRemoteCopy())
         clipboard.syncNow()
         XCTAssertEqual(toasts.last, "Clipboard is up to date")
         clipboard.startTemporarySharing()
@@ -519,7 +575,7 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.poll()
         try await XCTUnwrap(clipboard.localFileRead).value
         try Data("third".utf8).write(to: fileURL)
-        clipboard.receiveText("remote")
+        clipboard.receiveText("remote", copyNumber: session.announceRemoteCopy())
         clipboard.syncNow()
         clipboard.startTemporarySharing()
         XCTAssertNil(clipboard.localFileRead)
@@ -610,7 +666,7 @@ final class SessionClipboardTests: XCTestCase {
         pasteboard.writeObjects([fileURL as NSURL])
         clipboard.syncNow()
         var staleRead = try XCTUnwrap(clipboard.localFileRead)
-        clipboard.receiveText("remote")
+        clipboard.receiveText("remote", copyNumber: session.announceRemoteCopy())
         await staleRead.value
         XCTAssertTrue(session.publishedFiles.isEmpty)
         XCTAssertEqual(pasteboard.string(forType: .string), "remote")
@@ -823,7 +879,7 @@ final class SessionClipboardTests: XCTestCase {
         // And a remote copy of text.
         try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
         try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session) {
-            clipboard.receiveText("remote")
+            clipboard.receiveText("remote", copyNumber: session.announceRemoteCopy())
         }
         XCTAssertEqual(pasteboard.string(forType: .string), "remote")
         XCTAssertFalse(toasts.contains { $0.hasPrefix("Remote file copied") })
@@ -864,7 +920,7 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "first.txt"),
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "second.txt"),
-        ]))
+        ]), copyNumber: session.announceRemoteCopy())
         XCTAssertEqual(toasts.last, "Downloading file 1 of 2")
         for contents in [Data("first".utf8), Data("second".utf8)] {
             try answerSizeRequest(UInt64(contents.count), to: clipboard, from: session)
@@ -891,7 +947,7 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "first.bin"),
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "second.bin"),
-        ]))
+        ]), copyNumber: session.announceRemoteCopy())
         try answerSizeRequest(10, to: clipboard, from: session)
         try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
         XCTAssertEqual(toasts.last, "Downloading file 2 of 2")
@@ -918,7 +974,7 @@ final class SessionClipboardTests: XCTestCase {
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "Docs\\a.txt"),
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: folder, fileSize: 0, fileName: "Docs\\sub"),
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "Docs\\sub\\a.txt"),
-        ]))
+        ]), copyNumber: session.announceRemoteCopy())
         for _ in 0 ..< 2 {
             try answerSizeRequest(1, to: clipboard, from: session)
             try finishRemoteFileDownload(Data(count: 1), to: clipboard, from: session)
@@ -930,14 +986,14 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: folder, fileSize: 0, fileName: "Docs"),
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "Docs\\a.txt"),
-        ]))
+        ]), copyNumber: session.announceRemoteCopy())
         try answerSizeRequest(1, to: clipboard, from: session)
         try finishRemoteFileDownload(Data(count: 1), to: clipboard, from: session)
         XCTAssertEqual(toasts.last, "Remote file copied without its folder: a.txt")
 
         clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: folder, fileSize: 0, fileName: "Empty"),
-        ]))
+        ]), copyNumber: session.announceRemoteCopy())
         XCTAssertEqual(toasts.last, "Remote folders have no files")
     }
 
@@ -974,7 +1030,7 @@ final class SessionClipboardTests: XCTestCase {
         var fileURL = try XCTUnwrap(copiedFileURL())
         clipboard.poll()
         XCTAssertTrue(fileExists(fileURL))
-        clipboard.receiveText("remote")
+        clipboard.receiveText("remote", copyNumber: session.announceRemoteCopy())
         XCTAssertFalse(fileExists(fileURL))
 
         try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
@@ -994,7 +1050,7 @@ final class SessionClipboardTests: XCTestCase {
         pasteboard.setString("local", forType: .string)
         clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 1, fileName: "next.bin"),
-        ]))
+        ]), copyNumber: session.announceRemoteCopy())
         XCTAssertFalse(fileExists(fileURL))
     }
 
@@ -1046,7 +1102,7 @@ final class SessionClipboardTests: XCTestCase {
                 fileSize: UInt64(contents.count),
                 fileName: "big.bin"
             ),
-        ]))
+        ]), copyNumber: session.announceRemoteCopy())
         try answerSizeRequest(UInt64(contents.count), to: clipboard, from: session)
     }
 
