@@ -667,7 +667,7 @@ final class SessionClipboardTests: XCTestCase {
             let request = try XCTUnwrap(session.rangeRequests.last)
             session.rangeRequests.removeAll()
             XCTAssertEqual(request.position, UInt64(received))
-            XCTAssertLessThanOrEqual(request.requestedByteCount, 1024 * 1024)
+            XCTAssertLessThanOrEqual(request.requestedByteCount, 512 * 1024)
             // Windows caps how much one answer carries.
             let end = received + min(Int(request.requestedByteCount), 700_000)
             clipboard.receiveFileContents(RDPClipboardFileContentsResponse(

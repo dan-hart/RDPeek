@@ -3,11 +3,12 @@ import RDPKit
 
 private let sessionMaximumLocalClipboardFileBytes = 32 * 1024 * 1024
 /// The most asked for in one FILECONTENTS_RANGE request; servers may send
-/// less anyway.
-private let sessionMaximumFileRangeByteCount: UInt64 = 1024 * 1024
+/// less anyway. Half a MiB arrives within the timeout down to about 4 KB/s,
+/// and costs a round trip per range: 64 for the 32 MiB limit.
+private let sessionMaximumFileRangeByteCount: UInt64 = 512 * 1024
 /// How long a FILECONTENTS request may go unanswered before the download
-/// fails. The server answers a whole range at once, so this allows a full
-/// range over a link of about 9 KB/s.
+/// fails: long enough for a range on a slow link, or for a server that
+/// fetches a cloud file first.
 private let sessionFileContentsRequestTimeout: TimeInterval = 120
 
 /// Where the clipboard bridge sends: the session's `RDPClipboardSession`, or
