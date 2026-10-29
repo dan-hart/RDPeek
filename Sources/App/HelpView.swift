@@ -39,9 +39,12 @@ struct HelpView: View {
                             "primary full-screen window."
                     )
                     HelpBody(
-                        "The ⋯ menu in the titlebar holds clipboard sharing (always-on, " +
-                            "one-shot sync, or 30-second time-boxed), remote audio, window " +
-                            "size matching, the performance overlay, and Stats for Nerds."
+                        "The ⋯ menu in the titlebar holds Disconnect, clipboard sharing " +
+                            "(always-on, one-shot sync, or 30-second time-boxed), remote " +
+                            "audio, window size matching, the performance overlay, and " +
+                            "Stats for Nerds. While the remote desktop has your keyboard, " +
+                            "RDPeek's own ⌘ shortcuts go to it too, so use this menu or the " +
+                            "Session menu in the menu bar instead."
                     )
                     HelpBody(
                         "A certificate this Mac does not trust stops the connection " +
@@ -56,9 +59,8 @@ struct HelpView: View {
                         HelpShortcutRow("⌘N", "Add PC")
                         HelpShortcutRow("Return", "Connect to the selected PC")
                         HelpShortcutRow("Delete", "Delete the selected PC")
-                        HelpShortcutRow("⌘R", "Reconnect (in a session)")
-                        HelpShortcutRow("⌘.", "Disconnect / cancel connecting")
-                        HelpShortcutRow("⇧⌘D", "Stats for Nerds")
+                        HelpShortcutRow("⌘R", "Reconnect a session that ended")
+                        HelpShortcutRow("⌘.", "Cancel connecting")
                         HelpShortcutRow("⌘,", "Settings")
                     }
                     HelpBody(
@@ -101,8 +103,8 @@ struct HelpView: View {
                             "audio is negotiated when the connection starts."
                     )
                     HelpBody(
-                        "Choppy video — open Stats for Nerds (⇧⌘D) or the performance " +
-                            "overlay to see fps, decode times, and bandwidth."
+                        "Choppy video — open Stats for Nerds or the performance overlay " +
+                            "from the ⋯ menu to see fps, decode times, and bandwidth."
                     )
                 }
 
