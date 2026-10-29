@@ -1194,12 +1194,15 @@ final class SessionViewController: NSViewController {
             return
         }
 
+        // Cancel first: a window resized away and back within the delay
+        // must not leave the remote at the size in between.
+        pendingDisplayResizeTask?.cancel()
         let displayRequest = viewerPixelSize.displayRequest
         guard lastRequestedDisplayRequest != displayRequest else {
+            pendingDisplayResizeTask = nil
             return
         }
 
-        pendingDisplayResizeTask?.cancel()
         pendingDisplayResizeTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard Task.isCancelled == false else {
