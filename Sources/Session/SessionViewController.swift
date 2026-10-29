@@ -3,8 +3,6 @@ import QuartzCore
 import RDPKit
 import SwiftUI
 
-private let sessionMaximumLocalClipboardFileBytes = 32 * 1024 * 1024
-
 /// Owns one remote desktop connection and the views that present it.
 ///
 /// The connection, clipboard, display-control, audio, and credential logic is
@@ -44,13 +42,7 @@ final class SessionViewController: NSViewController {
     private var lastRequestedDisplayRequest: RDPDisplayRequest?
     private var viewerPointSize: CGSize = .zero
     private var viewerPixelSize: RDPViewerPixelSize?
-    private var clipboardSession: RDPClipboardSession?
-    private var clipboardSharingEnabled: Bool
-    private var pasteboardChangeCount = NSPasteboard.general.changeCount
-    private var temporaryClipboardSharingExpiresAt: Date?
-    private var remoteClipboardFileTransfer: SessionRemoteClipboardFileTransfer?
-    private var remoteClipboardDownloadDirectory: URL?
-    private var nextRemoteClipboardStreamID: UInt32 = 1
+    private let clipboard: SessionClipboard
     private var audioPlaybackEnabled: Bool
     private var remoteAudioPlayer = RDPAudioPlayer()
     private var report: RDPConnectionReport?
@@ -91,9 +83,12 @@ final class SessionViewController: NSViewController {
         self.draft = draft
         self.launchStore = launchStore
         rememberPassword = draft.rememberPassword
-        clipboardSharingEnabled = draft.clipboardSharingEnabled
+        clipboard = SessionClipboard(isSharingEnabled: draft.clipboardSharingEnabled)
         audioPlaybackEnabled = draft.audioPlaybackEnabled
         super.init(nibName: nil, bundle: nil)
+        clipboard.onToast = { [weak self] text, systemImage in
+            self?.toast(text, systemImage: systemImage)
+        }
     }
 
     @available(*, unavailable)
@@ -228,7 +223,7 @@ final class SessionViewController: NSViewController {
     private func configureHUDModel() {
         hudModel.deviceName = draft.displayName
         hudModel.hostLabel = draft.port == 3389 ? draft.host : "\(draft.host):\(draft.port)"
-        hudModel.isClipboardSharingEnabled = clipboardSharingEnabled
+        hudModel.isClipboardSharingEnabled = clipboard.isSharingEnabled
         hudModel.isAudioPlaybackEnabled = audioPlaybackEnabled
         hudModel.isFollowWindowSizeEnabled = autoApplyViewerSize
 
@@ -271,12 +266,12 @@ final class SessionViewController: NSViewController {
         }
         hudModel.certificateNotice = certificateNoticeState()
         hudModel.metricsSummary = viewerMetricsSummary
-        hudModel.isClipboardSharingEnabled = clipboardSharingEnabled
+        hudModel.isClipboardSharingEnabled = clipboard.isSharingEnabled
         hudModel.isAudioPlaybackEnabled = audioPlaybackEnabled
         hudModel.isFollowWindowSizeEnabled = autoApplyViewerSize
-        hudModel.canSyncClipboard = clipboardSharingEnabled && clipboardSession != nil
-        hudModel.canShareClipboardTemporarily = clipboardSession != nil
-        hudModel.temporaryClipboardSecondsRemaining = temporaryClipboardSharingRemainingSeconds
+        hudModel.canSyncClipboard = clipboard.canSync
+        hudModel.canShareClipboardTemporarily = clipboard.session != nil
+        hudModel.temporaryClipboardSecondsRemaining = clipboard.temporarySharingSecondsRemaining
         hudModel.canReconnect = canStartConnection
         hudModel.canCancel = isConnecting || isResolvingStoredCredentials || isAutoRetryPending
 
@@ -302,8 +297,8 @@ final class SessionViewController: NSViewController {
             isAutoRetryPending: isAutoRetryPending,
             hasFrame: previewFrame != nil,
             hasReport: report != nil,
-            hasClipboardSession: clipboardSession != nil,
-            clipboardSharingEnabled: clipboardSharingEnabled,
+            hasClipboardSession: clipboard.session != nil,
+            clipboardSharingEnabled: clipboard.isSharingEnabled,
             hostIsEmpty: draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
     }
@@ -427,12 +422,7 @@ final class SessionViewController: NSViewController {
                     return
                 }
 
-                if temporaryClipboardSharingExpiresAt != nil {
-                    expireTemporaryClipboardSharingIfNeeded()
-                }
-                if clipboardSharingEnabled, clipboardSession != nil {
-                    publishPasteboardIfChanged()
-                }
+                clipboard.poll()
                 render()
             }
         }
@@ -458,8 +448,8 @@ final class SessionViewController: NSViewController {
             requestedDesktopSize: requestedDesktopSizeLabel,
             inputReady: inputSession != nil,
             displayControlReady: displayControlSession != nil,
-            clipboardReady: clipboardSession != nil,
-            clipboardSharingEnabled: clipboardSharingEnabled,
+            clipboardReady: clipboard.session != nil,
+            clipboardSharingEnabled: clipboard.isSharingEnabled,
             audioPlaybackEnabled: audioPlaybackEnabled,
             certificateTrustedByApp: certificateTrustedByApp,
             certificateTrustMessage: certificateTrustMessage,
@@ -666,7 +656,7 @@ final class SessionViewController: NSViewController {
             hideCertificateWarnings: draft.hideCertificateWarnings,
             graphicsFrameCaptureLimit: nil,
             desktopSize: requestedDesktopSize,
-            clipboardEnabled: clipboardSharingEnabled,
+            clipboardEnabled: clipboard.isSharingEnabled,
             audioPlaybackEnabled: audioPlaybackEnabled,
             // RDPeek never exposes a graphics-profile picker: automatic lets
             // RDPKit negotiate the best path per host (Windows included).
@@ -824,41 +814,25 @@ final class SessionViewController: NSViewController {
                 },
                 onClipboardReady: { session in
                     sink.apply { controller in
-                        guard controller.clipboardSharingEnabled else {
-                            session.publishLocalUnicodeText(nil)
-                            controller.clipboardSession = session
-                            controller.render()
-                            return
-                        }
-                        controller.clipboardSession = session
-                        controller.publishPasteboardIfChanged(force: true)
+                        controller.clipboard.attach(session)
                         controller.render()
                     }
                 },
                 onClipboardText: { text in
                     sink.apply { controller in
-                        guard controller.clipboardSharingEnabled else {
-                            return
-                        }
-                        controller.applyRemoteClipboardText(text)
+                        controller.clipboard.receiveText(text)
                         controller.render()
                     }
                 },
                 onClipboardFileGroupDescriptor: { descriptorList in
                     sink.apply { controller in
-                        guard controller.clipboardSharingEnabled else {
-                            return
-                        }
-                        controller.applyRemoteClipboardFileList(descriptorList)
+                        controller.clipboard.receiveFileList(descriptorList)
                         controller.render()
                     }
                 },
                 onClipboardFileContents: { response in
                     sink.apply { controller in
-                        guard controller.clipboardSharingEnabled else {
-                            return
-                        }
-                        controller.applyRemoteClipboardFileContentsResponse(response)
+                        controller.clipboard.receiveFileContents(response)
                         controller.render()
                     }
                 },
@@ -1037,9 +1011,7 @@ final class SessionViewController: NSViewController {
         cancelPendingDisplayResize(resetLastRequestedSize: true)
         inputSession = nil
         displayControlSession = nil
-        clipboardSession = nil
-        discardRemoteClipboardFileTransfer()
-        pasteboardChangeCount = NSPasteboard.general.changeCount
+        clipboard.detach()
         remoteAudioPlayer.reset()
         audioMessage = nil
     }
@@ -1280,43 +1252,17 @@ final class SessionViewController: NSViewController {
     // MARK: - Clipboard
 
     func syncClipboardNow() {
-        publishPasteboardIfChanged(force: true)
+        clipboard.syncNow()
         render()
     }
 
     func startTemporaryClipboardSharing() {
-        guard clipboardSession != nil else {
-            return
-        }
-
-        temporaryClipboardSharingExpiresAt = Date().addingTimeInterval(30)
-        clipboardSharingEnabled = true
-        updateClipboardSharing(enabled: true)
-        toast("Sharing clipboard for 30 seconds", systemImage: "clock")
+        clipboard.startTemporarySharing()
         render()
     }
 
-    private func expireTemporaryClipboardSharingIfNeeded(now: Date = Date()) {
-        guard let temporaryClipboardSharingExpiresAt,
-              now >= temporaryClipboardSharingExpiresAt
-        else {
-            return
-        }
-
-        self.temporaryClipboardSharingExpiresAt = nil
-        guard clipboardSharingEnabled else {
-            return
-        }
-
-        clipboardSharingEnabled = false
-        updateClipboardSharing(enabled: false)
-        toast("Clipboard sharing ended", systemImage: "doc.on.clipboard")
-    }
-
     private func setClipboardSharing(_ enabled: Bool) {
-        clipboardSharingEnabled = enabled
-        temporaryClipboardSharingExpiresAt = nil
-        updateClipboardSharing(enabled: enabled)
+        clipboard.setSharingEnabled(enabled)
         render()
     }
 
@@ -1340,376 +1286,6 @@ final class SessionViewController: NSViewController {
             toast("Audio starts on the next connection", systemImage: "speaker.wave.2")
         }
         render()
-    }
-
-    private func publishPasteboardIfChanged(force: Bool = false) {
-        guard clipboardSharingEnabled else {
-            pasteboardChangeCount = NSPasteboard.general.changeCount
-            return
-        }
-        guard let clipboardSession else {
-            pasteboardChangeCount = NSPasteboard.general.changeCount
-            return
-        }
-
-        let pasteboard = NSPasteboard.general
-        let nextChangeCount = pasteboard.changeCount
-        guard force || nextChangeCount != pasteboardChangeCount else {
-            return
-        }
-
-        pasteboardChangeCount = nextChangeCount
-        switch localClipboardPayload(from: pasteboard) {
-        case let .text(text):
-            clipboardSession.publishLocalUnicodeText(text)
-            if force {
-                toast("Clipboard synced", systemImage: "doc.on.clipboard.fill")
-            }
-        case let .files(files):
-            clipboardSession.publishLocalFiles(files)
-            let message = files.count == 1 ? "1 file shared to remote" : "\(files.count) files shared to remote"
-            toast(message, systemImage: "doc.on.clipboard.fill")
-        case .empty:
-            clipboardSession.publishLocalUnicodeText(nil)
-        case let .unsupported(message):
-            clipboardSession.publishLocalUnicodeText(nil)
-            toast(message, systemImage: "exclamationmark.triangle")
-        case let .ignored(message):
-            toast(message, systemImage: "exclamationmark.triangle")
-        }
-    }
-
-    private func localClipboardPayload(from pasteboard: NSPasteboard) -> SessionLocalClipboardPayload {
-        let fileURLs = pasteboardFileURLs(from: pasteboard)
-        if fileURLs.isEmpty == false {
-            return localClipboardFiles(from: fileURLs)
-        }
-        if let text = pasteboard.string(forType: .string) {
-            guard RDPClipboardLimits.canPublishUnicodeText(text) else {
-                return .ignored("Local text is too large to sync.")
-            }
-            return .text(text)
-        }
-        return .empty
-    }
-
-    private func pasteboardFileURLs(from pasteboard: NSPasteboard) -> [URL] {
-        var urls: [URL] = []
-        if let pasteboardItems = pasteboard.pasteboardItems {
-            for item in pasteboardItems {
-                appendPasteboardFileURL(item.string(forType: .fileURL), to: &urls)
-            }
-        }
-        if urls.isEmpty, pasteboard.types?.contains(.fileURL) == true {
-            appendPasteboardFileURL(pasteboard.string(forType: .fileURL), to: &urls)
-        }
-        return urls
-    }
-
-    private func appendPasteboardFileURL(_ value: String?, to urls: inout [URL]) {
-        guard let value,
-              let url = URL(string: value),
-              url.isFileURL,
-              urls.contains(url) == false
-        else {
-            return
-        }
-        urls.append(url)
-    }
-
-    private func localClipboardFiles(from urls: [URL]) -> SessionLocalClipboardPayload {
-        var files: [RDPClipboardLocalFile] = []
-        var totalByteCount = 0
-
-        for url in urls {
-            let fileURL = url.standardizedFileURL
-            let fileName = fileURL.lastPathComponent
-            guard fileName.isEmpty == false else {
-                return .unsupported("Local file clipboard was not shared.")
-            }
-
-            do {
-                let resourceValues = try fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-                guard resourceValues.isRegularFile == true else {
-                    return .unsupported("Local clipboard has non-file items; remote clipboard cleared.")
-                }
-
-                guard let byteCount = resourceValues.fileSize,
-                      byteCount >= 0
-                else {
-                    return .unsupported("Local file clipboard could not be read; remote clipboard cleared.")
-                }
-                guard byteCount <= sessionMaximumLocalClipboardFileBytes,
-                      totalByteCount <= sessionMaximumLocalClipboardFileBytes - byteCount
-                else {
-                    return .unsupported("Local clipboard files exceed 32 MiB; remote clipboard cleared.")
-                }
-
-                let contents = try Data(contentsOf: fileURL)
-                guard contents.count <= sessionMaximumLocalClipboardFileBytes,
-                      totalByteCount <= sessionMaximumLocalClipboardFileBytes - contents.count
-                else {
-                    return .unsupported("Local clipboard files exceed 32 MiB; remote clipboard cleared.")
-                }
-                totalByteCount += contents.count
-                files.append(RDPClipboardLocalFile(fileName: fileName, contents: contents))
-            } catch {
-                return .unsupported("Local file clipboard could not be read; remote clipboard cleared.")
-            }
-        }
-
-        return files.isEmpty ? .empty : .files(files)
-    }
-
-    private func applyRemoteClipboardText(_ text: String) {
-        guard clipboardSharingEnabled else {
-            return
-        }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        pasteboardChangeCount = pasteboard.changeCount
-        toast("Remote text copied", systemImage: "doc.on.clipboard")
-    }
-
-    private func applyRemoteClipboardFileList(_ descriptorList: RDPClipboardFileGroupDescriptorW) {
-        guard clipboardSharingEnabled else {
-            return
-        }
-        discardRemoteClipboardFileTransfer()
-        do {
-            let files = try descriptorList.remoteFileTransferFiles(
-                maximumTotalByteCount: UInt64(sessionMaximumLocalClipboardFileBytes)
-            )
-            let downloadDirectory = try makeRemoteClipboardDownloadDirectory()
-            requestRemoteClipboardFileSize(SessionRemoteClipboardFileTransfer(
-                files: files,
-                currentFileOffset: 0,
-                streamID: nextRemoteClipboardTransferStreamID(),
-                expectedByteCount: nil,
-                requestedRange: false,
-                totalExpectedByteCount: 0,
-                downloadedFileURLs: [],
-                downloadDirectory: downloadDirectory
-            ))
-        } catch let error as RDPClipboardRemoteFileTransferPlanningError {
-            toast(remoteClipboardFileTransferPlanningMessage(for: error), systemImage: "exclamationmark.triangle")
-        } catch {
-            toast("Remote files could not be prepared", systemImage: "exclamationmark.triangle")
-        }
-    }
-
-    private func applyRemoteClipboardFileContentsResponse(_ response: RDPClipboardFileContentsResponse) {
-        guard var transfer = remoteClipboardFileTransfer,
-              transfer.streamID == response.streamID
-        else {
-            return
-        }
-        guard response.ok else {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote file transfer failed")
-            return
-        }
-
-        if transfer.requestedRange {
-            applyRemoteClipboardFileData(response.data, transfer: transfer)
-            return
-        }
-
-        do {
-            let byteCount = try response.decodedFileSize()
-            guard byteCount <= UInt64(sessionMaximumLocalClipboardFileBytes),
-                  transfer.totalExpectedByteCount <= UInt64(sessionMaximumLocalClipboardFileBytes) - byteCount,
-                  let requestedByteCount = UInt32(exactly: byteCount)
-            else {
-                failRemoteClipboardFileTransfer(transfer, message: "Remote files exceed 32 MiB")
-                return
-            }
-
-            guard let clipboardSession else {
-                failRemoteClipboardFileTransfer(transfer, message: "Clipboard is not ready")
-                return
-            }
-
-            transfer.expectedByteCount = byteCount
-            transfer.totalExpectedByteCount += byteCount
-            if byteCount == 0 {
-                remoteClipboardFileTransfer = transfer
-                applyRemoteClipboardFileData(Data(), transfer: transfer)
-                return
-            }
-
-            transfer.requestedRange = true
-            remoteClipboardFileTransfer = transfer
-            guard let currentFile = transfer.currentFile else {
-                failRemoteClipboardFileTransfer(transfer, message: "Remote file transfer failed")
-                return
-            }
-            try clipboardSession.requestRemoteFileRange(
-                streamID: transfer.streamID,
-                fileIndex: currentFile.fileIndex,
-                position: 0,
-                requestedByteCount: requestedByteCount
-            )
-        } catch {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote file size request failed")
-        }
-    }
-
-    private func applyRemoteClipboardFileData(_ data: Data, transfer: SessionRemoteClipboardFileTransfer) {
-        guard let currentFile = transfer.currentFile,
-              transfer.expectedByteCount == UInt64(data.count),
-              data.count <= sessionMaximumLocalClipboardFileBytes
-        else {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote file transfer was incomplete")
-            return
-        }
-
-        do {
-            var nextTransfer = transfer
-            let fileURL = try writeRemoteClipboardFile(
-                named: currentFile.fileName,
-                contents: data,
-                in: transfer.downloadDirectory
-            )
-            nextTransfer.downloadedFileURLs.append(fileURL)
-
-            guard nextTransfer.currentFileOffset + 1 < nextTransfer.files.count else {
-                finishRemoteClipboardFileTransfer(nextTransfer)
-                return
-            }
-
-            nextTransfer.currentFileOffset += 1
-            nextTransfer.streamID = nextRemoteClipboardTransferStreamID()
-            nextTransfer.expectedByteCount = nil
-            nextTransfer.requestedRange = false
-            requestRemoteClipboardFileSize(nextTransfer)
-        } catch {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote file could not be saved")
-        }
-    }
-
-    private func requestRemoteClipboardFileSize(_ transfer: SessionRemoteClipboardFileTransfer) {
-        guard let clipboardSession,
-              let currentFile = transfer.currentFile
-        else {
-            failRemoteClipboardFileTransfer(transfer, message: "Clipboard is not ready")
-            return
-        }
-
-        remoteClipboardFileTransfer = transfer
-        do {
-            try clipboardSession.requestRemoteFileSize(
-                streamID: transfer.streamID,
-                fileIndex: currentFile.fileIndex
-            )
-            let message = transfer.files.count == 1
-                ? "Downloading \(currentFile.fileName)"
-                : "Downloading file \(transfer.currentFileOffset + 1) of \(transfer.files.count)"
-            toast(message, systemImage: "arrow.down.doc")
-        } catch {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote file request failed")
-        }
-    }
-
-    private func finishRemoteClipboardFileTransfer(_ transfer: SessionRemoteClipboardFileTransfer) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        guard pasteboard.writeObjects(transfer.downloadedFileURLs.map { $0 as NSURL }) else {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote files could not be copied")
-            return
-        }
-
-        pasteboardChangeCount = pasteboard.changeCount
-        remoteClipboardFileTransfer = nil
-        if transfer.downloadedFileURLs.count == 1,
-           let fileName = transfer.files.first?.fileName
-        {
-            toast("Remote file copied: \(fileName)", systemImage: "doc.on.clipboard")
-        } else {
-            toast("\(transfer.downloadedFileURLs.count) remote files copied", systemImage: "doc.on.clipboard")
-        }
-    }
-
-    private func failRemoteClipboardFileTransfer(
-        _ transfer: SessionRemoteClipboardFileTransfer?,
-        message: String
-    ) {
-        if let downloadDirectory = transfer?.downloadDirectory {
-            try? FileManager.default.removeItem(at: downloadDirectory)
-            if remoteClipboardDownloadDirectory == downloadDirectory {
-                remoteClipboardDownloadDirectory = nil
-            }
-        }
-        remoteClipboardFileTransfer = nil
-        toast(message, systemImage: "exclamationmark.triangle")
-    }
-
-    private func remoteClipboardFileTransferPlanningMessage(
-        for error: RDPClipboardRemoteFileTransferPlanningError
-    ) -> String {
-        switch error {
-        case .emptyFileList:
-            "Remote file clipboard is empty"
-        case .containsOnlyDirectories:
-            "Remote clipboard has folders; file copy is not ready"
-        case .invalidFileIndex:
-            "Remote file index is not valid"
-        case .totalByteLimitExceeded:
-            "Remote files exceed 32 MiB"
-        }
-    }
-
-    private func discardRemoteClipboardFileTransfer() {
-        guard let transfer = remoteClipboardFileTransfer else {
-            return
-        }
-        try? FileManager.default.removeItem(at: transfer.downloadDirectory)
-        if remoteClipboardDownloadDirectory == transfer.downloadDirectory {
-            remoteClipboardDownloadDirectory = nil
-        }
-        remoteClipboardFileTransfer = nil
-    }
-
-    private func makeRemoteClipboardDownloadDirectory() throws -> URL {
-        let fileManager = FileManager.default
-        if let remoteClipboardDownloadDirectory {
-            try? fileManager.removeItem(at: remoteClipboardDownloadDirectory)
-        }
-
-        let directory = fileManager.temporaryDirectory
-            .appendingPathComponent("RDPeekRemoteClipboard", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        remoteClipboardDownloadDirectory = directory
-        return directory
-    }
-
-    private func writeRemoteClipboardFile(
-        named fileName: String,
-        contents: Data,
-        in directory: URL
-    ) throws -> URL {
-        let fileURL = directory.appendingPathComponent(fileName, isDirectory: false)
-        try contents.write(to: fileURL, options: .atomic)
-        return fileURL
-    }
-
-    private func nextRemoteClipboardTransferStreamID() -> UInt32 {
-        let streamID = nextRemoteClipboardStreamID
-        nextRemoteClipboardStreamID = streamID == UInt32.max ? 1 : streamID + 1
-        return streamID
-    }
-
-    private func updateClipboardSharing(enabled: Bool) {
-        guard enabled else {
-            temporaryClipboardSharingExpiresAt = nil
-            discardRemoteClipboardFileTransfer()
-            clipboardSession?.publishLocalUnicodeText(nil)
-            pasteboardChangeCount = NSPasteboard.general.changeCount
-            return
-        }
-        publishPasteboardIfChanged(force: true)
     }
 
     // MARK: - Certificate trust
@@ -1860,14 +1436,6 @@ final class SessionViewController: NSViewController {
     private var canStartConnection: Bool {
         !isConnecting && draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
-
-    private var temporaryClipboardSharingRemainingSeconds: Int? {
-        guard let temporaryClipboardSharingExpiresAt else {
-            return nil
-        }
-        let remainingSeconds = temporaryClipboardSharingExpiresAt.timeIntervalSinceNow
-        return max(0, Int(ceil(remainingSeconds)))
-    }
 }
 
 // MARK: - Menu command surface
@@ -1971,32 +1539,6 @@ private final class SessionMainActorSink: @unchecked Sendable {
                 operation(controller)
             }
         }
-    }
-}
-
-private enum SessionLocalClipboardPayload: Equatable {
-    case text(String)
-    case files([RDPClipboardLocalFile])
-    case empty
-    case unsupported(String)
-    case ignored(String)
-}
-
-private struct SessionRemoteClipboardFileTransfer: Equatable {
-    var files: [RDPClipboardRemoteFileTransferFile]
-    var currentFileOffset: Int
-    var streamID: UInt32
-    var expectedByteCount: UInt64?
-    var requestedRange: Bool
-    var totalExpectedByteCount: UInt64
-    var downloadedFileURLs: [URL]
-    var downloadDirectory: URL
-
-    var currentFile: RDPClipboardRemoteFileTransferFile? {
-        guard files.indices.contains(currentFileOffset) else {
-            return nil
-        }
-        return files[currentFileOffset]
     }
 }
 
