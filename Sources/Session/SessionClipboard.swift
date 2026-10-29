@@ -547,12 +547,13 @@ final class SessionClipboard {
         }
     }
 
+    /// `receiveFileContents` has already taken `transfer` out of
+    /// `fileTransfer`.
     private func finishFileTransfer(_ transfer: SessionRemoteClipboardFileTransfer) {
         // A local copy made since the remote one, which the poll has not
         // seen yet, is newer than the download, so it stays.
         guard pasteboard.changeCount == pasteboardChangeCount else {
-            try? FileManager.default.removeItem(at: transfer.downloadDirectory)
-            fileTransfer = nil
+            removeDownloadDirectory(transfer.downloadDirectory)
             return
         }
         cancelLocalFileRead()
@@ -565,7 +566,6 @@ final class SessionClipboard {
 
         pasteboardChangeCount = pasteboard.changeCount
         copiedDownload = (transfer.downloadDirectory, pasteboardChangeCount)
-        fileTransfer = nil
         if transfer.downloadedFileURLs.count == 1,
            let fileName = transfer.files.first?.fileName
         {
@@ -576,7 +576,7 @@ final class SessionClipboard {
     }
 
     private func failFileTransfer(_ transfer: SessionRemoteClipboardFileTransfer, message: String) {
-        try? FileManager.default.removeItem(at: transfer.downloadDirectory)
+        removeDownloadDirectory(transfer.downloadDirectory)
         fileTransfer = nil
         onToast(message, "exclamationmark.triangle")
     }
@@ -598,7 +598,7 @@ final class SessionClipboard {
         guard let fileTransfer else {
             return
         }
-        try? FileManager.default.removeItem(at: fileTransfer.downloadDirectory)
+        removeDownloadDirectory(fileTransfer.downloadDirectory)
         self.fileTransfer = nil
     }
 
@@ -610,8 +610,12 @@ final class SessionClipboard {
         else {
             return
         }
-        try? FileManager.default.removeItem(at: copiedDownload.directory)
+        removeDownloadDirectory(copiedDownload.directory)
         self.copiedDownload = nil
+    }
+
+    private func removeDownloadDirectory(_ directory: URL) {
+        try? FileManager.default.removeItem(at: directory)
     }
 
     /// Removes what earlier runs left behind: downloads a crash cut short,
