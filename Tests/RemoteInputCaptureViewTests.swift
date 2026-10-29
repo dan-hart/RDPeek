@@ -204,6 +204,20 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertTrue(harness.recorder.events.contains(.keyboard(scancode: .leftWindows, isReleased: true)))
     }
 
+    func testKeysHeldWhenTheViewLosesFocusAreReleased() {
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: .shift))
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_DownArrow), flags: .shift))
+        harness.recorder.events.removeAll()
+
+        _ = harness.view.resignFirstResponder()
+
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: RDPKeyboardScancode(code: 0x2A), isReleased: true),
+            .keyboard(scancode: RDPKeyboardScancode(code: 0x50, isExtended: true), isReleased: true),
+        ])
+    }
+
     // MARK: - Toggle-key synchronization
 
     func testBecomingFirstResponderSynchronizesToggleKeys() {
