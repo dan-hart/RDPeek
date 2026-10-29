@@ -180,6 +180,7 @@ struct RemoteSessionDiagnosticsSnapshot: Equatable {
     var clipboardSharingEnabled = false
     var audioPlaybackEnabled = false
     var certificateTrustedByApp = false
+    var usesLegacyRSAKeyExchange = false
     var isConnecting = false
 }
 
@@ -234,6 +235,12 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                     DiagnosticRow("Requested Protocols", snapshot.report?.requestedProtocols.joined(separator: ", ") ?? "none")
                     DiagnosticRow("Selected Protocols", snapshot.report?.selectedProtocols?.joined(separator: ", ") ?? "none")
                     DiagnosticRow("TLS", snapshot.report?.tlsProtocol ?? "not negotiated")
+                    DiagnosticRow(
+                        "RSA Key Exchange",
+                        snapshot.usesLegacyRSAKeyExchange
+                            ? "fallback in use: the certificate does not allow ECDHE"
+                            : "not used"
+                    )
                     DiagnosticRow("Certificate", certificateState(snapshot))
                     DiagnosticRow("MCS", snapshot.report?.mcsConnectResult ?? "not exchanged")
                     DiagnosticRow("I/O Channel", optionalValue(snapshot.report?.mcsIOChannelID))

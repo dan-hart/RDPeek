@@ -454,6 +454,7 @@ final class SessionViewController: NSViewController {
             clipboardSharingEnabled: clipboard.isSharingEnabled,
             audioPlaybackEnabled: audioPlaybackEnabled,
             certificateTrustedByApp: certificateTrustedByApp,
+            usesLegacyRSAKeyExchange: usesLegacyRSAKeyExchange,
             isConnecting: isConnecting
         )
         diagnosticsModel.updateSnapshot(nextSnapshot)
