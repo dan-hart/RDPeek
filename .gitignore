@@ -6,7 +6,16 @@
 /.swiftpm/
 **/.swiftpm/
 /DerivedData/
-/*.xcodeproj/
+# The generated project is not committed, except for Package.resolved, which
+# pins the resolved package versions.
+/*.xcodeproj/*
+!/*.xcodeproj/project.xcworkspace/
+/*.xcodeproj/project.xcworkspace/*
+!/*.xcodeproj/project.xcworkspace/xcshareddata/
+/*.xcodeproj/project.xcworkspace/xcshareddata/*
+!/*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+/*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/*
+!/*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 /Generated/
 *.xcuserdata/
 *.xcuserstate

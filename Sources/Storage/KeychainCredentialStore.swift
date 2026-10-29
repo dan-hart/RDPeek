@@ -1,6 +1,5 @@
 import Foundation
 import RDPKit
-import Security
 
 struct KeychainCredentialKey: Equatable, Sendable {
     let identity: RDPConnectionIdentity
@@ -16,137 +15,99 @@ struct KeychainCredentialKey: Equatable, Sendable {
     /// hosts case-insensitively, so the keychain must address them the same
     /// way — otherwise a case-only host edit strands the stored password.
     var account: String {
-        guard let qualifiedUsername = identity.qualifiedUsername else {
+        guard let account = identity.credentialAccountName else {
             preconditionFailure("KeychainCredentialKey requires a credential account identity.")
         }
-        return "\(qualifiedUsername)@\(identity.host.lowercased()):\(identity.port)"
-    }
-
-    /// The pre-normalization account name older installs stored items under.
-    var legacyAccount: String? {
-        guard let legacy = identity.credentialAccountName, legacy != account else {
-            return nil
-        }
-        return legacy
+        return account
     }
 }
 
 /// The credential operations models depend on, as a seam so tests can
-/// substitute a fake instead of touching the real Keychain.
-protocol CredentialStoring {
+/// substitute a fake instead of touching the real Keychain. Sendable so
+/// reads can run off the main actor.
+protocol CredentialStoring: Sendable {
     func password(for key: KeychainCredentialKey) throws -> String?
     func savePassword(_ password: String, for key: KeychainCredentialKey) throws
     func deletePassword(for key: KeychainCredentialKey) throws
+    /// For a PC deleted while `others` still remember its account's
+    /// password: moves one saved under the PC's earlier account names,
+    /// which their reads may not try, to the account's current name.
+    func moveLegacyPasswords(for key: KeychainCredentialKey, keptBy others: [RDPConnectionIdentity]) throws
 }
 
-struct KeychainCredentialStore: CredentialStoring, Sendable {
-    private let service = "ai.aneesiqbal.rdpeek.credentials"
+struct KeychainCredentialStore: CredentialStoring {
+    private let keychain: any KeychainItems
+
+    init(keychain: any KeychainItems = KeychainService(name: "ai.aneesiqbal.rdpeek.credentials")) {
+        self.keychain = keychain
+    }
 
     func password(for key: KeychainCredentialKey) throws -> String? {
-        if let password = try readPassword(account: key.account) {
+        if let password = try password(account: key.account) {
             return password
         }
-        // Fall back to the raw-case account older installs wrote, and
-        // migrate the item to the normalized account on a hit.
-        guard let legacyAccount = key.legacyAccount,
-              let password = try readPassword(account: legacyAccount)
-        else {
-            return nil
+        // A password saved under the name an older install gave the
+        // account, with the host as typed, moves to the current name. It
+        // is renamed in one step rather than saved again, so one deleted
+        // meanwhile, with its PC say, stays deleted, and one saved under
+        // the current name meanwhile, which is newer, stays.
+        for legacyAccount in key.identity.legacyCredentialAccountNames {
+            guard let password = try password(account: legacyAccount) else {
+                continue
+            }
+            let rename = try? keychain.rename(account: legacyAccount, to: key.account)
+            switch rename {
+            case .renamed, nil:
+                // A rename that failed leaves the item to the next read.
+                return password
+            case .notFound:
+                // Deleted, or moved by another read, meanwhile.
+                return try self.password(account: key.account)
+            case .newNameTaken:
+                try? keychain.delete(account: legacyAccount)
+                return try self.password(account: key.account)
+            }
         }
-        try? savePassword(password, for: key)
-        return password
+        return nil
     }
 
     func savePassword(_ password: String, for key: KeychainCredentialKey) throws {
-        let passwordData = Data(password.utf8)
-        let attributes: [String: Any] = [
-            kSecValueData as String: passwordData,
-        ]
-        let updateStatus = SecItemUpdate(baseQuery(account: key.account) as CFDictionary, attributes as CFDictionary)
-        if updateStatus != errSecSuccess {
-            guard updateStatus == errSecItemNotFound else {
-                throw KeychainCredentialError.unexpectedStatus(updateStatus)
-            }
-
-            var query = baseQuery(account: key.account)
-            query[kSecValueData as String] = passwordData
-            query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            let addStatus = SecItemAdd(query as CFDictionary, nil)
-            if addStatus == errSecDuplicateItem {
-                // Another writer (editor vs. session persistence) added the
-                // item between our update and add; retry the update.
-                let retryStatus = SecItemUpdate(
-                    baseQuery(account: key.account) as CFDictionary,
-                    attributes as CFDictionary
-                )
-                guard retryStatus == errSecSuccess else {
-                    throw KeychainCredentialError.unexpectedStatus(retryStatus)
-                }
-            } else if addStatus != errSecSuccess {
-                throw KeychainCredentialError.unexpectedStatus(addStatus)
-            }
-        }
-
-        if let legacyAccount = key.legacyAccount {
-            try? deletePassword(account: legacyAccount)
+        try keychain.save(Data(password.utf8), account: key.account)
+        // An older password left under an earlier name could come back once
+        // this one is deleted through another spelling of the host.
+        for legacyAccount in key.identity.legacyCredentialAccountNames {
+            try? keychain.delete(account: legacyAccount)
         }
     }
 
     func deletePassword(for key: KeychainCredentialKey) throws {
-        try deletePassword(account: key.account)
-        if let legacyAccount = key.legacyAccount {
-            try deletePassword(account: legacyAccount)
+        try keychain.delete(account: key.account)
+        for legacyAccount in key.identity.legacyCredentialAccountNames {
+            try keychain.delete(account: legacyAccount)
         }
     }
 
-    private func readPassword(account: String) throws -> String? {
-        var query = baseQuery(account: account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
+    /// A password under one of `key`'s earlier names moves to the current
+    /// name in one step, as a read moves it, or goes when that name has a
+    /// password already. An earlier name one of `others` spells alike stays
+    /// for that PC's own read. Nothing is read.
+    func moveLegacyPasswords(for key: KeychainCredentialKey, keptBy others: [RDPConnectionIdentity]) throws {
+        let namesInUse = Set(others.flatMap(\.legacyCredentialAccountNames))
+        for legacyAccount in key.identity.legacyCredentialAccountNames where namesInUse.contains(legacyAccount) == false {
+            if try keychain.rename(account: legacyAccount, to: key.account) == .newNameTaken {
+                try keychain.delete(account: legacyAccount)
+            }
+        }
+    }
 
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound {
+    private func password(account: String) throws -> String? {
+        guard let data = try keychain.data(account: account) else {
             return nil
         }
-        guard status == errSecSuccess else {
-            throw KeychainCredentialError.unexpectedStatus(status)
-        }
-        guard let data = result as? Data,
-              let password = String(data: data, encoding: .utf8)
-        else {
-            throw KeychainCredentialError.invalidPasswordData
+        guard let password = String(data: data, encoding: .utf8) else {
+            throw KeychainError.invalidItemData
         }
         return password
-    }
-
-    private func deletePassword(account: String) throws {
-        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainCredentialError.unexpectedStatus(status)
-        }
-    }
-
-    private func baseQuery(account: String) -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-    }
-}
-
-enum KeychainCredentialError: Error, CustomStringConvertible {
-    case invalidPasswordData
-    case unexpectedStatus(OSStatus)
-
-    var description: String {
-        switch self {
-        case .invalidPasswordData:
-            "Keychain password data was not valid UTF-8."
-        case let .unexpectedStatus(status):
-            "Keychain returned OSStatus \(status)."
-        }
     }
 }
 
@@ -167,14 +128,10 @@ enum CredentialPersistenceResult: Sendable {
     case deleted
 }
 
-func persistCredentialsIfNeeded(
-    _ request: CredentialPersistenceRequest?,
-    store: KeychainCredentialStore
-) -> Result<CredentialPersistenceResult, Error>? {
-    guard let request else {
-        return nil
-    }
-
+func persistCredentials(
+    _ request: CredentialPersistenceRequest,
+    store: any CredentialStoring
+) -> Result<CredentialPersistenceResult, Error> {
     do {
         switch request {
         case let .save(key, password):

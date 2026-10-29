@@ -1,9 +1,9 @@
 import AppKit
+import os
 import QuartzCore
 import RDPKit
 import SwiftUI
-
-private let sessionMaximumLocalClipboardFileBytes = 32 * 1024 * 1024
+import SystemConfiguration
 
 /// Owns one remote desktop connection and the views that present it.
 ///
@@ -12,7 +12,8 @@ private let sessionMaximumLocalClipboardFileBytes = 32 * 1024 * 1024
 /// with a full-bleed canvas plus SwiftUI HUD overlays.
 @MainActor
 final class SessionViewController: NSViewController {
-    private let credentialStore = KeychainCredentialStore()
+    private let credentialStore: any CredentialStoring
+    private let credentialCache: InMemoryCredentialCache
     private let clientLicenseStore = ClientLicenseStore()
     private let trustedCertificateStore = TrustedCertificateStore()
     private let sessionID: UUID
@@ -20,21 +21,49 @@ final class SessionViewController: NSViewController {
 
     let hudModel = SessionHUDModel()
     private(set) var draft: RDPConnectionDraft
+    /// The PC as last saved, and as the draft last followed it: the draft
+    /// takes saved changes from the next connection the user starts.
+    private var savedDraft: RDPConnectionDraft
+    private var followedSavedDraft: RDPConnectionDraft
+    /// The PC was deleted. The session may go on, but keeps no password.
+    private var isPCDeleted = false
 
     private var requestedDesktopSizeLabel = "auto"
-    private var rememberPassword: Bool
-    private var hasRememberedPassword = false
+    /// The name the last connection gave servers for the Mac.
+    private var sentClientName: String?
+    /// The password the Keychain holds for the draft's identity, when known.
+    private var rememberedPassword: String?
     private var isAwaitingCredentials = false
+    /// Why the sign-in overlay asks again, if it does.
+    private var credentialsErrorMessage: String?
     private var isResolvingStoredCredentials = false
+    private var credentialResolutionTask: Task<Void, Never>?
     private var didPromptForCredentials = false
+    /// The attempt sent the draft's password, which is kept once the server
+    /// accepts it.
+    private var isAwaitingCredentialAcceptance = false
+    /// The password was kept for the connection the user started.
+    private var hasKeptCredentials = false
     private var isConnecting = false
     private var hasEverPresentedFrame = false
     private var autoRetryCount = 0
+    private var didRetryFirstFrameTimeout = false
     private var isAutoRetryPending = false
+    /// Why the session is connecting again on its own, for the connecting
+    /// overlay; nil for a connection the user started.
+    private var autoRetryReason: SessionAutoRetryReason?
     private var autoRetryTask: Task<Void, Never>?
-    private var firstFrameWatchdogTask: Task<Void, Never>?
-    private var audioMessage: String?
-    private var connectionTask: Task<Void, Never>?
+    /// This connection offers only RSA key exchange, after the server's
+    /// certificate turned down ECDHE. Not saved: every connection tries
+    /// ECDHE first.
+    private var usesLegacyRSAKeyExchange = false
+    /// This connection presents no stored client license, after the
+    /// server's licensing failed with it. A license the server issues
+    /// replaces the stored one; every connection the user starts presents
+    /// the stored license first.
+    private var omitsStoredClientLicense = false
+    private var connectionRequestsAudio = false
+    private var didReportAudioFailure = false
     private var activeConnectionID: UUID?
     private var activeCancellation: RDPConnectionCancellation?
     private var sessionEndReason: RDPSessionEndReason?
@@ -44,33 +73,37 @@ final class SessionViewController: NSViewController {
     private var displaySelection = RemoteDisplaySelection.all
     private var pendingDisplayResizeTask: Task<Void, Never>?
     private var lastRequestedDisplayRequest: RDPDisplayRequest?
-    private var viewerPointSize: CGSize = .zero
     private var viewerPixelSize: RDPViewerPixelSize?
-    private var clipboardSession: RDPClipboardSession?
-    private var clipboardSharingEnabled: Bool
-    private var pasteboardChangeCount = NSPasteboard.general.changeCount
-    private var temporaryClipboardSharingExpiresAt: Date?
-    private var remoteClipboardFileTransfer: SessionRemoteClipboardFileTransfer?
-    private var remoteClipboardDownloadDirectory: URL?
-    private var nextRemoteClipboardStreamID: UInt32 = 1
+    private let clipboard: SessionClipboard
     private var audioPlaybackEnabled: Bool
     private var remoteAudioPlayer = RDPAudioPlayer()
-    private var report: RDPPreflightReport?
+    private var report: RDPConnectionReport?
+    /// The connection's report while it runs, for Stats for Nerds until
+    /// `report` arrives; once the session returns, its final report, which
+    /// a cancelled session or a refused certificate leaves in no `report`.
+    private var liveReport: RDPLiveConnectionReport?
     private var liveCertificate: RDPServerCertificateInfo?
+    /// The frame the canvas maps the desktop with, replaced only when the
+    /// desktop size changes.
     private var previewFrame: RDPFrameMetadata?
-    private var previewFrameCount = 0
+    /// The frame presented last, for Stats for Nerds. Its metadata, which
+    /// scans the video payload, is read only while that window is open.
+    private var latestPresentedFrame: RDPGraphicsFrameSnapshot?
     private var viewerMetricsSummary: String?
-    private var previewDecodeError: String?
+    private var isMetricsOverlayVisible = false
     private var hasPresentedFrame = false
+    /// Numbers the frames handed to the display.
+    private var presentedFrameCount = 0
     private var framePresentationBuffer = RDPFramePresentationBuffer()
     private var framePacing = RDPFramePacingState()
     private var remoteDesktopRenderer = RDPRemoteDesktopRenderer()
     private var renderMetricsStore = RDPRenderMetricsStore()
     private let diagnosticsModel = RemoteSessionDiagnosticsModel()
     private var certificateTrustedByApp = false
-    private var certificateTrustMessage: String?
+    private var certificateRefusal: CertificateRefusal?
     private var shouldAutoConnect = true
     private var diagnosticsTask: Task<Void, Never>?
+    private var metricsOverlayTask: Task<Void, Never>?
     private var clipboardPollingTask: Task<Void, Never>?
     private var overlayVisibilityTask: Task<Void, Never>?
     private var didClose = false
@@ -86,15 +119,23 @@ final class SessionViewController: NSViewController {
     init(
         sessionID: UUID,
         draft: RDPConnectionDraft,
-        launchStore: SessionLaunchStore
+        launchStore: SessionLaunchStore,
+        credentialStore: any CredentialStoring = KeychainCredentialStore(),
+        credentialCache: InMemoryCredentialCache = .shared
     ) {
         self.sessionID = sessionID
         self.draft = draft
+        savedDraft = draft
+        followedSavedDraft = draft
         self.launchStore = launchStore
-        rememberPassword = draft.rememberPassword
-        clipboardSharingEnabled = draft.clipboardSharingEnabled
+        self.credentialStore = credentialStore
+        self.credentialCache = credentialCache
+        clipboard = SessionClipboard(isSharingEnabled: draft.clipboardSharingEnabled)
         audioPlaybackEnabled = draft.audioPlaybackEnabled
         super.init(nibName: nil, bundle: nil)
+        clipboard.onToast = { [weak self] text, systemImage in
+            self?.toast(text, systemImage: systemImage)
+        }
     }
 
     @available(*, unavailable)
@@ -111,13 +152,26 @@ final class SessionViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         launchStore?.registerDiagnostics(diagnosticsModel, for: sessionID)
-        startDiagnosticsLoop()
         startClipboardPollingLoop()
-        if shouldAutoConnect {
-            shouldAutoConnect = false
-            resolveStoredCredentialsAndConnect()
-        }
         render()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        guard shouldAutoConnect else {
+            return
+        }
+        shouldAutoConnect = false
+        // The window controller settles the window's frame right after
+        // showing it. Connect once that is laid out, so the first desktop
+        // size is the canvas's rather than a guess from the screen.
+        Task { @MainActor [weak self] in
+            guard let self, didClose == false else {
+                return
+            }
+            view.layoutSubtreeIfNeeded()
+            startConnection()
+        }
     }
 
     func closeSession() {
@@ -126,6 +180,7 @@ final class SessionViewController: NSViewController {
         }
         didClose = true
         diagnosticsTask?.cancel()
+        metricsOverlayTask?.cancel()
         clipboardPollingTask?.cancel()
         overlayVisibilityTask?.cancel()
         launchStore?.unregisterDiagnostics(for: sessionID)
@@ -154,14 +209,20 @@ final class SessionViewController: NSViewController {
         view.addSubview(titlebarBackdrop)
 
         canvasView.translatesAutoresizingMaskIntoConstraints = false
-        canvasView.onSurfaceSizeChange = { [weak self] size in
-            self?.updateViewerSurfaceSize(size)
+        canvasView.onSurfaceChange = { [weak self] pointSize, backingScaleFactor in
+            self?.updateViewerSurface(pointSize: pointSize, backingScaleFactor: backingScaleFactor)
         }
         view.addSubview(canvasView)
         remoteDesktopRenderer.attach(canvasView.displayView)
 
         frameClockView.translatesAutoresizingMaskIntoConstraints = false
         frameClockView.isHidden = true
+        frameClockView.onFrame = { [weak self] displayLink in
+            self?.displayLinkFrameArrived(displayLink)
+        }
+        frameClockView.onTimingChange = { [weak self] nextState in
+            self?.updateFramePacing(nextState)
+        }
         view.addSubview(frameClockView)
 
         // Full-bleed hosts must not report an intrinsic size, or the window
@@ -227,12 +288,6 @@ final class SessionViewController: NSViewController {
     }
 
     private func configureHUDModel() {
-        hudModel.deviceName = draft.displayName
-        hudModel.hostLabel = draft.port == 3389 ? draft.host : "\(draft.host):\(draft.port)"
-        hudModel.isClipboardSharingEnabled = clipboardSharingEnabled
-        hudModel.isAudioPlaybackEnabled = audioPlaybackEnabled
-        hudModel.isFollowWindowSizeEnabled = autoApplyViewerSize
-
         hudModel.onReconnect = { [weak self] in self?.startConnection() }
         hudModel.onCancel = { [weak self] in self?.cancelConnection() }
         hudModel.onClose = { [weak self] in self?.view.window?.close() }
@@ -262,73 +317,108 @@ final class SessionViewController: NSViewController {
             self.displaySelection.toggle(monitor, in: monitors)
             self.render()
         }
+        hudModel.onSetMetricsOverlayVisible = { [weak self] visible in
+            self?.setMetricsOverlayVisible(visible)
+        }
         hudModel.onOpenDiagnostics = { [weak self] in self?.openDiagnosticsWindow() }
     }
 
     // MARK: - Rendering
 
+    /// Pushes session state to the canvas, the HUD, and the Session menu.
+    /// It runs for every state change, so it publishes only what changed;
+    /// the diagnostics loop picks up the rest.
     private func render() {
         // Only displayed frames may change the active input/render topology.
         let frame = previewFrame
         let viewport = frame.map { RemoteDisplayViewport(frame: $0, selection: displaySelection) }
         canvasView.update(
-            frame: frame,
+            frame: previewFrame,
             hasPresentedFrame: hasPresentedFrame,
             inputSession: inputSession,
             viewport: viewport
         )
 
+        hudModel.update(\.deviceName, to: draft.displayName)
+        hudModel.update(\.hostLabel, to: draft.hostLabel)
+        // The sign-in overlay copies the prefill as it appears, so it never
+        // overwrites what the user types; it is set before the phase that
+        // shows the overlay.
+        hudModel.update(\.prefillUsername, to: draft.username)
+        hudModel.update(\.prefillDomain, to: draft.domain)
+        hudModel.update(\.prefillRememberPassword, to: draft.rememberPassword)
+        hudModel.update(\.credentialsErrorMessage, to: credentialsErrorMessage)
+
         let nextPhase = currentPhase
         if hudModel.phase != nextPhase {
             hudModel.phase = nextPhase
             updateOverlayVisibility(for: nextPhase)
+            startMetricsOverlayLoopIfNeeded()
         }
-        hudModel.certificateNotice = certificateNoticeState()
-        hudModel.metricsSummary = viewerMetricsSummary
-        hudModel.isClipboardSharingEnabled = clipboardSharingEnabled
-        hudModel.isAudioPlaybackEnabled = audioPlaybackEnabled
-        hudModel.isFollowWindowSizeEnabled = autoApplyViewerSize
         let monitors = viewport?.monitors ?? []
         let selected = displaySelection.selected(in: monitors)
-        hudModel.displays = monitors.enumerated().map { index, monitor in
-            SessionDisplayChoice(id: index, label: "Display \(index + 1) — \(Int64(monitor.right) - Int64(monitor.left) + 1) × \(Int64(monitor.bottom) - Int64(monitor.top) + 1)",
+        let displays = monitors.enumerated().map { index, monitor in
+            SessionDisplayChoice(id: index, label: "Display \(index + 1) — \(monitor.rect.width) × \(monitor.rect.height)",
                                  monitor: monitor, isSelected: selected.contains(monitor), canToggle: selected.count > 1 || !selected.contains(monitor))
         }
-        hudModel.areAllDisplaysSelected = displaySelection == .all
-        hudModel.canMatchWindowSize = isConnecting && displayControlSession != nil
+        hudModel.update(\.displays, to: displays)
+        hudModel.update(\.areAllDisplaysSelected, to: displaySelection == .all)
+        hudModel.update(\.canMatchWindowSize, to: isConnecting && displayControlSession != nil
             && remoteDisplayAllowsWindowMatching(hasPresentedFrame: hasPresentedFrame,
-                                                reportedMonitorCount: frame?.monitorDefinitions.count ?? 0)
-        hudModel.canSyncClipboard = clipboardSharingEnabled && clipboardSession != nil
-        hudModel.canShareClipboardTemporarily = clipboardSession != nil
-        hudModel.temporaryClipboardSecondsRemaining = temporaryClipboardSharingRemainingSeconds
-        hudModel.canReconnect = canStartConnection
-        hudModel.canCancel = isConnecting || isResolvingStoredCredentials || isAutoRetryPending
+                                                reportedMonitorCount: frame?.monitors.count ?? 0))
 
-        updateFrameClock()
-        syncDiagnosticsSnapshot()
-        publishSessionCommandStateIfKey()
+        hudModel.update(
+            \.connectingStatusDetail,
+            to: nextPhase == .connecting ? autoRetryReason?.statusDetail : nil
+        )
+        hudModel.update(\.certificateNotice, to: certificateNoticeState())
+        hudModel.update(\.isMetricsOverlayVisible, to: isMetricsOverlayVisible)
+        // The overlay measures the desktop, so it shows only while the
+        // desktop does.
+        hudModel.update(\.metricsSummary, to: nextPhase.isActive ? viewerMetricsSummary : nil)
+        hudModel.update(\.isClipboardSharingEnabled, to: clipboard.isSharingEnabled)
+        hudModel.update(\.isAudioPlaybackEnabled, to: audioPlaybackEnabled)
+        hudModel.update(\.isFollowWindowSizeEnabled, to: autoApplyViewerSize)
+        hudModel.update(\.temporaryClipboardSecondsRemaining, to: clipboard.temporarySharingSecondsRemaining)
+        // One command state feeds the HUD and the Session menu, so they
+        // agree on what can be done.
+        let commands = sessionCommandState
+        hudModel.update(\.startTitle, to: commands.startTitle)
+        hudModel.update(\.canReconnect, to: commands.canStart)
+        hudModel.update(\.canCancel, to: commands.canCancel)
+        hudModel.update(\.canSyncClipboard, to: commands.canSyncClipboard)
+        hudModel.update(\.canShareClipboardTemporarily, to: commands.canShareClipboardTemporarily)
+
+        frameClockView.isEnabled = framePresentationClockEnabled
+        publishSessionCommandStateIfKey(commands)
     }
 
     /// Pushes this session's menu-relevant state to the launch store while
     /// its window is key, so the Session menu enables and titles its items
     /// from live state.
     func publishSessionCommandStateIfKey() {
-        guard view.window?.isKeyWindow == true else {
-            return
-        }
-        launchStore?.updateKeySessionCommands(sessionCommandState)
+        publishSessionCommandStateIfKey(sessionCommandState)
     }
 
-    var sessionCommandState: SessionCommandState {
+    private func publishSessionCommandStateIfKey(_ commands: SessionCommandState) {
+        guard didClose == false, view.window?.isKeyWindow == true else {
+            return
+        }
+        launchStore?.updateKeySessionCommands(commands)
+    }
+
+    private var sessionCommandState: SessionCommandState {
         SessionCommandState.make(
             isConnecting: isConnecting,
             isResolvingStoredCredentials: isResolvingStoredCredentials,
             isAutoRetryPending: isAutoRetryPending,
+            isAwaitingCredentials: isAwaitingCredentials,
             hasFrame: previewFrame != nil,
             hasReport: report != nil,
-            hasClipboardSession: clipboardSession != nil,
-            clipboardSharingEnabled: clipboardSharingEnabled,
-            hostIsEmpty: draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            hasEndReason: sessionEndReason != nil,
+            hostIsEmpty: draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            canSyncClipboard: clipboard.canSync,
+            canShareClipboardTemporarily: clipboard.canStartTemporarySharing
         )
     }
 
@@ -368,21 +458,33 @@ final class SessionViewController: NSViewController {
         }
     }
 
+    /// Offers to trust a refused certificate. Certificates RDPeek lets
+    /// through need no notice; their warnings stay in Diagnostics.
     private func certificateNoticeState() -> SessionCertificateNotice? {
-        if certificateTrustedByApp {
+        // Trust and Connect would start a connection under the sign-in
+        // sheet, with the password it is replacing.
+        guard isAwaitingCredentials == false else {
             return nil
         }
-        // The live callback fires at TLS time, so warnings surface while
-        // connecting and during the session, not only at disconnect.
-        if let warning = liveCertificate?.warnings.first ?? report?.warnings.first {
+        let canTrust = liveCertificate?.sha256 != nil
+        switch certificateRefusal {
+        case .changed:
             return SessionCertificateNotice(
-                title: "Certificate Warning",
-                message: warning.message,
-                systemImage: "lock.trianglebadge.exclamationmark.fill",
-                canTrust: (liveCertificate?.sha256 ?? report?.certificateSHA256) != nil
+                title: "Certificate Changed",
+                message: "Trust the new certificate only if you know why the server's certificate changed.",
+                canTrust: canTrust
             )
+        case .untrusted:
+            let fingerprint = liveCertificate?.sha256.map { " SHA-256: \($0)" } ?? ""
+            return SessionCertificateNotice(
+                title: "Untrusted Certificate",
+                message: "This Mac does not trust the server's certificate. Trust it only if you expect it, "
+                    + "such as a server's self-signed certificate.\(fingerprint)",
+                canTrust: canTrust
+            )
+        case nil:
+            return nil
         }
-        return nil
     }
 
     private func toast(_ text: String, systemImage: String) {
@@ -393,30 +495,58 @@ final class SessionViewController: NSViewController {
         activeConnectionID == id
     }
 
-    fileprivate var isClosed: Bool {
-        didClose
-    }
-
-    private func updateFrameClock() {
-        frameClockView.configure(
-            isEnabled: framePresentationClockEnabled,
-            onFrame: { [weak self] displayLink in
-                self?.displayLinkFrameArrived(displayLink)
-            },
-            onTimingChange: { [weak self] nextState in
-                self?.updateFramePacing(nextState)
-            }
-        )
-    }
-
-    private func startDiagnosticsLoop() {
-        diagnosticsTask?.cancel()
+    /// Keeps the snapshot current while Stats for Nerds, its only viewer,
+    /// is open; opening it again starts the loop again.
+    private func startDiagnosticsLoopIfNeeded() {
+        guard diagnosticsTask == nil else {
+            return
+        }
         diagnosticsTask = Task { @MainActor [weak self] in
-            while Task.isCancelled == false {
-                self?.syncDiagnosticsSnapshot()
+            while Task.isCancelled == false, self?.refreshDiagnosticsIfShowing() == true {
                 try? await Task.sleep(nanoseconds: 250_000_000)
             }
         }
+    }
+
+    /// Returns false, ending the loop, once Stats for Nerds is closed.
+    private func refreshDiagnosticsIfShowing() -> Bool {
+        guard launchStore?.isShowingDiagnostics(for: sessionID) == true else {
+            diagnosticsTask = nil
+            return false
+        }
+        syncDiagnosticsSnapshot()
+        return true
+    }
+
+    private var isMetricsOverlayShowing: Bool {
+        isMetricsOverlayVisible && currentPhase.isActive
+    }
+
+    /// The overlay's rolling rates fall once traffic stops, but frames and
+    /// bytes are what recompute the summary, so a still desktop would keep
+    /// showing its last busy second. Recompute it every second while the
+    /// overlay shows.
+    private func startMetricsOverlayLoopIfNeeded() {
+        guard metricsOverlayTask == nil, isMetricsOverlayShowing else {
+            return
+        }
+        metricsOverlayTask = Task { @MainActor [weak self] in
+            while Task.isCancelled == false, self?.refreshMetricsOverlayIfShowing() == true {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    /// Returns false, ending the loop, once the overlay no longer shows.
+    private func refreshMetricsOverlayIfShowing() -> Bool {
+        guard isMetricsOverlayShowing else {
+            metricsOverlayTask = nil
+            return false
+        }
+        if updateViewerMetricsSummary(renderMetricsStore.metrics) {
+            render()
+        }
+        return true
     }
 
     private func startClipboardPollingLoop() {
@@ -428,133 +558,205 @@ final class SessionViewController: NSViewController {
                     return
                 }
 
-                if temporaryClipboardSharingExpiresAt != nil {
-                    expireTemporaryClipboardSharingIfNeeded()
-                }
-                if clipboardSharingEnabled, clipboardSession != nil {
-                    publishPasteboardIfChanged()
-                }
+                clipboard.poll()
                 render()
             }
         }
     }
 
-    private func openDiagnosticsWindow() {
+    func openDiagnosticsWindow() {
         syncDiagnosticsSnapshot()
         launchStore?.openDiagnostics(for: sessionID)
+        startDiagnosticsLoopIfNeeded()
     }
 
     private func syncDiagnosticsSnapshot() {
+        let renderMetrics = renderMetricsStore.metrics
+        let now = Date()
         let nextSnapshot = RemoteSessionDiagnosticsSnapshot(
             title: draft.displayName,
-            report: report,
-            previewFrame: previewFrame,
-            previewFrameCount: previewFrameCount,
-            previewDecodeError: previewDecodeError,
-            renderMetrics: renderMetricsStore.metrics,
+            report: report ?? liveReport?.snapshot,
+            latestFrame: latestPresentedFrame.map(RDPFrameMetadata.init),
+            renderMetrics: renderMetrics,
+            rollingFramesPerSecond: renderMetrics.rollingFramesPerSecond(at: now),
+            rollingWireMegabitsPerSecond: renderMetrics.rollingWireMegabitsPerSecond(at: now),
+            averageWireMegabitsPerSecond: renderMetrics.averageWireMegabitsPerSecond(at: now),
             framePacing: framePacing,
             sessionEndReason: sessionEndReason,
             serverCertificateInfo: liveCertificate,
             viewerPixelSize: viewerPixelSize,
             requestedDesktopSize: requestedDesktopSizeLabel,
+            clientName: sentClientName,
             inputReady: inputSession != nil,
+            supportsUnicodeInput: inputSession?.supportsUnicodeInput ?? false,
             displayControlReady: displayControlSession != nil,
-            clipboardReady: clipboardSession != nil,
-            clipboardSharingEnabled: clipboardSharingEnabled,
-            audioPlaybackEnabled: audioPlaybackEnabled,
+            clipboardReady: clipboard.session != nil,
+            clipboardSharingEnabled: clipboard.isSharingEnabled,
+            connectionRequestsAudio: connectionRequestsAudio,
             certificateTrustedByApp: certificateTrustedByApp,
-            certificateTrustMessage: certificateTrustMessage,
-            formError: nil,
+            usesLegacyRSAKeyExchange: usesLegacyRSAKeyExchange,
             isConnecting: isConnecting
         )
         diagnosticsModel.updateSnapshot(nextSnapshot)
     }
 
-    /// The user never picks a resolution: derive the initial remote desktop
-    /// size from the viewer surface, falling back to the window's screen.
-    private func initialDesktopSize() -> RDPDesktopSize {
-        if let viewerPixelSize {
-            let request = viewerPixelSize.displayRequest
-            if let size = try? RDPDesktopSize(
-                width: evenDesktopDimension(request.width, minimum: 640),
-                height: evenDesktopDimension(request.height, minimum: 480)
-            ) {
-                return size
-            }
-        }
-
-        let screen = view.window?.screen ?? NSScreen.main
-        let scale = screen?.backingScaleFactor ?? 2
-        let surface = screen?.visibleFrame.size ?? CGSize(width: 1920, height: 1080)
-        if let size = try? RDPDesktopSize(
-            width: evenDesktopDimension(UInt32((surface.width * scale).rounded()), minimum: 640),
-            height: evenDesktopDimension(UInt32((surface.height * scale).rounded()), minimum: 480)
-        ) {
-            return size
-        }
-
-        guard let fallback = try? RDPDesktopSize(width: 1920, height: 1080) else {
-            preconditionFailure("1920x1080 is always a valid desktop size")
-        }
-        return fallback
+    /// Keeps what Stats for Nerds shows of the settings a connection sends,
+    /// in the form Display Control requests are shown in.
+    private func recordSentSettings(_ configuration: RDPConnectionConfiguration) {
+        let scale = configuration.scaleFactors
+        requestedDesktopSizeLabel = "\(configuration.desktopWidth)x\(configuration.desktopHeight), "
+            + "RDP scale \(scale.desktopScaleFactor)%/\(scale.deviceScaleFactor)%"
+        sentClientName = configuration.clientName
     }
 
-    private func evenDesktopDimension(_ value: UInt32, minimum: UInt16) -> UInt16 {
-        let even = UInt16(clamping: value) & ~1
-        return min(max(even, minimum), 8192)
+    /// The user never picks a resolution: the remote desktop starts at the
+    /// canvas size in points. Servers without Display Control keep it, at
+    /// 100% scale — a desktop of Retina pixels at 100% would be tiny. Display
+    /// Control servers get the pixel size and scale once their channel opens.
+    private func initialDesktopSize() -> RDPDesktopSize {
+        var surface = canvasView.bounds.size
+        if surface.width <= 0 || surface.height <= 0 {
+            surface = (view.window?.screen ?? NSScreen.main)?.visibleFrame.size
+                ?? CGSize(width: 1280, height: 800)
+        }
+        return RDPDesktopSize.initial(canvasPointSize: surface)
     }
 
     // MARK: - Credentials prompt
 
     private func promptForCredentials(errorMessage: String? = nil) {
-        hudModel.prefillUsername = draft.username
-        hudModel.prefillDomain = draft.domain
-        hudModel.prefillRememberPassword = rememberPassword
-        hudModel.credentialsErrorMessage = errorMessage
+        credentialsErrorMessage = errorMessage
         didPromptForCredentials = true
         isAwaitingCredentials = true
         render()
     }
 
-    private func applyCredentials(username: String, domain: String, password: String, remember: Bool) {
-        draft.username = username.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft.domain = domain.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft.password = password
-        rememberPassword = remember
-        draft.rememberPassword = remember
-        if remember == false,
-           password.isEmpty == false,
-           let account = draft.identity.credentialAccountName
+    /// A password the server rejected is offered neither by Reconnect nor,
+    /// on the next connect, from this app run's cache.
+    private func forgetRejectedPassword() {
+        if let account = draft.identity.credentialAccountName,
+           SessionCredentialPolicy.forgetsCachedPassword(credentialCache.password(for: account), rejected: draft.password)
         {
-            InMemoryCredentialCache.shared.setPassword(password, for: account)
+            credentialCache.removePassword(for: account)
+        }
+        draft.password = ""
+    }
+
+    private func applyCredentials(username: String, domain: String, password: String, remember: Bool) {
+        let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let domain = domain.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Leaving every field empty connects without credentials; anything
+        // in between would only fail the connection.
+        do {
+            _ = try RDPCredentials.validated(username: username, domain: domain, password: password)
+        } catch let RDPCredentialValidationError.fieldTooLong(field) {
+            let name = switch field {
+            case .username: "user name"
+            case .domain: "domain"
+            case .password: "password"
+            }
+            promptForCredentials(errorMessage: "The \(name) is too long to send.")
+            return
+        } catch {
+            promptForCredentials(errorMessage: "Enter both a user name and a password.")
+            return
+        }
+        // What the user typed applies over the PC's saved changes.
+        followSavedDraft()
+        let previousIdentity = draft.identity
+        draft.username = username
+        draft.domain = domain
+        draft.password = password
+        draft.rememberPassword = remember
+        if SessionCredentialPolicy.keepsRememberedPassword(
+            signingInAs: draft.identity,
+            insteadOf: previousIdentity
+        ) == false {
+            rememberedPassword = nil
         }
         isAwaitingCredentials = false
-        hudModel.credentialsErrorMessage = nil
+        credentialsErrorMessage = nil
         startConnection()
+    }
+
+    // MARK: - Saved PC
+
+    /// The PC was saved, maybe changed. Its name shows at once; the rest
+    /// applies from the next connection the user starts, so automatic
+    /// retries of this one keep the settings it started with.
+    func followSavedDevice(_ saved: RDPConnectionDraft) {
+        guard saved != savedDraft else {
+            return
+        }
+        if saved.name != savedDraft.name {
+            draft.name = saved.name
+            render()
+        }
+        savedDraft = saved
+    }
+
+    /// The PC was deleted: the session may go on, but no password it signs
+    /// in with is kept for a PC that is gone.
+    func savedDeviceWasDeleted() {
+        isPCDeleted = true
+    }
+
+    /// Connect on the PC in the Connection Center: a session that ended or
+    /// failed connects again, as Reconnect would. One that is connecting,
+    /// showing the desktop, or asking to sign in goes on as it is.
+    func connectFromSavedDevice() {
+        guard sessionCommandState.canStart, report != nil || sessionEndReason != nil else {
+            return
+        }
+        startConnection()
+    }
+
+    private func followSavedDraft() {
+        guard followedSavedDraft != savedDraft else {
+            return
+        }
+        let previous = draft
+        draft = draft.following(savedDraft, previouslySaved: followedSavedDraft)
+        followedSavedDraft = savedDraft
+        if SessionCredentialPolicy.keepsRememberedPassword(
+            signingInAs: draft.identity,
+            insteadOf: previous.identity
+        ) == false {
+            rememberedPassword = nil
+        }
+        if draft.clipboardSharingEnabled != previous.clipboardSharingEnabled {
+            setClipboardSharing(draft.clipboardSharingEnabled)
+        }
+        if draft.audioPlaybackEnabled != previous.audioPlaybackEnabled {
+            setAudioPlayback(draft.audioPlaybackEnabled)
+        }
     }
 
     // MARK: - Connection lifecycle
 
-    /// A user-initiated (or post-credential) connection: resets the
-    /// automatic retry budget before attempting.
+    /// The one way a connection starts: the window opening, Reconnect, ⌘R,
+    /// Connect on the PC, signing in, and trusting a certificate. Takes the
+    /// PC's saved changes, resets the automatic retries, and finds the
+    /// password first when the session has none.
     func startConnection() {
+        followSavedDraft()
+        hasKeptCredentials = false
         autoRetryTask?.cancel()
         autoRetryTask = nil
         autoRetryCount = 0
+        didRetryFirstFrameTimeout = false
         isAutoRetryPending = false
-        hudModel.connectingStatusDetail = nil
-        startConnectionAttempt()
+        usesLegacyRSAKeyExchange = false
+        omitsStoredClientLicense = false
+        autoRetryReason = nil
+        connect(using: credentialSource(remembersPassword: draft.rememberPassword))
     }
 
-    /// Retries shortly after a transport-level failure. The first connection
-    /// to a LAN host often fails while macOS shows the local-network
-    /// permission dialog; a quiet retry papers over that race. Only failures
-    /// that happened before TLS was established are retried, so credentials
-    /// are never re-submitted automatically.
-    private func scheduleAutoRetry() {
-        autoRetryCount += 1
+    /// Waits briefly, then connects again; the connecting overlay says why
+    /// until the desktop shows.
+    private func scheduleAutoRetry(_ reason: SessionAutoRetryReason) {
         isAutoRetryPending = true
-        hudModel.connectingStatusDetail = "Network hiccup — retrying…"
+        autoRetryReason = reason
         render()
 
         autoRetryTask?.cancel()
@@ -568,96 +770,21 @@ final class SessionViewController: NSViewController {
         }
     }
 
-    /// RDPKit's live-viewer mode has no deadline on post-TLS reads, so a
-    /// stalled handshake would otherwise show "Connecting" forever. Cancel
-    /// the attempt ourselves when no frame arrives in time, and lean on the
-    /// auto-retry budget — this automates the manual disconnect/reconnect
-    /// that recovers from the stall.
-    private func startFirstFrameWatchdog() {
-        firstFrameWatchdogTask?.cancel()
-        let deadlineSeconds = UInt64(max(5, draft.timeoutSeconds) + 5)
-        firstFrameWatchdogTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: deadlineSeconds * 1_000_000_000)
-            guard Task.isCancelled == false,
-                  let self,
-                  didClose == false,
-                  isConnecting,
-                  hasPresentedFrame == false
-            else {
-                return
-            }
-            cancelConnection(shouldRecordCancellation: false)
-            if autoRetryCount < 2 {
-                scheduleAutoRetry()
-            } else {
-                sessionEndReason = RDPSessionEndReason(
-                    kind: .failed,
-                    message: "Timed out waiting for the remote desktop."
-                )
-                render()
-            }
-        }
-    }
-
+    /// One attempt with the draft as it is. Automatic retries call this
+    /// directly; everything else goes through `startConnection()`.
     private func startConnectionAttempt() {
-        isAwaitingCredentials = false
-        isAutoRetryPending = false
-        activeCancellation?.cancel()
-        connectionTask?.cancel()
-        cancelPendingDisplayResize(resetLastRequestedSize: true)
-        connectionTask = nil
-        activeConnectionID = nil
-        activeCancellation = nil
-        sessionEndReason = nil
-        inputSession = nil
-        displayControlSession = nil
-        clipboardSession = nil
-        discardRemoteClipboardFileTransfer()
-        pasteboardChangeCount = NSPasteboard.general.changeCount
-        remoteAudioPlayer.reset()
-        isConnecting = false
-
-        report = nil
-        liveCertificate = nil
-        previewFrame = nil
-        previewFrameCount = 0
-        viewerMetricsSummary = nil
-        previewDecodeError = nil
-        resetFramePresentationState()
-        renderMetricsStore.reset()
-        certificateTrustedByApp = false
-        certificateTrustMessage = nil
+        resetForConnectionAttempt()
 
         let target: RDPConnectionTarget
-        do {
-            target = try RDPConnectionTarget(host: draft.host, portText: String(draft.port))
-        } catch {
-            sessionEndReason = RDPSessionEndReason(kind: .failed, message: String(describing: error))
-            render()
-            return
-        }
-        let requestedDesktopSize = initialDesktopSize()
-        requestedDesktopSizeLabel = "\(requestedDesktopSize.width)x\(requestedDesktopSize.height)"
-
-        let trimmedUsername = draft.username.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedDomain = draft.domain.trimmingCharacters(in: .whitespacesAndNewlines)
-        let credentialKey = makeCredentialKey(
-            host: target.host,
-            port: target.port,
-            username: trimmedUsername,
-            domain: trimmedDomain
-        )
-        let clientLicenseKey = ClientLicenseStoreKey(identity: RDPConnectionIdentity(
-            host: target.host,
-            port: target.port,
-            username: trimmedUsername,
-            domain: trimmedDomain
-        ))
         let credentials: RDPCredentials?
         do {
+            target = try RDPConnectionTarget(host: draft.host, port: draft.port)
+            // RDPKit splits a "DOMAIN\user" name typed with no domain, as
+            // Windows clients do; the draft keeps the name as typed for its
+            // Keychain entry.
             credentials = try RDPCredentials.validated(
-                username: trimmedUsername,
-                domain: trimmedDomain,
+                username: draft.username,
+                domain: draft.domain,
                 password: draft.password
             )
         } catch {
@@ -665,52 +792,134 @@ final class SessionViewController: NSViewController {
             render()
             return
         }
-        let credentialPersistenceRequest = credentialPersistenceRequest(
-            key: credentialKey,
-            password: draft.password,
-            hasCredentials: credentials != nil
+        let desktopSize = initialDesktopSize()
+        let configuration = makeConnectionConfiguration(
+            target: target,
+            credentials: credentials,
+            desktopSize: desktopSize
         )
+        recordSentSettings(configuration)
 
-        let baseConfiguration = RDPConnectionConfiguration(
+        let connectionID = UUID()
+        let cancellation = RDPConnectionCancellation()
+        let liveReport = RDPLiveConnectionReport()
+        activeConnectionID = connectionID
+        activeCancellation = cancellation
+        self.liveReport = liveReport
+        isAwaitingCredentialAcceptance = credentials != nil
+        renderMetricsStore.reset(connectionStartedAt: Date())
+        updateViewerMetricsSummary(renderMetricsStore.metrics)
+        isConnecting = true
+        launchStore?.recordConnectionStart(for: draft.deviceID)
+        render()
+
+        startSessionThread(
+            configuration: configuration,
+            sink: SessionMainActorSink(controller: self, connectionID: connectionID),
+            liveReport: liveReport,
+            cancellation: cancellation
+        )
+    }
+
+    /// Forgets the previous attempt, however it ended.
+    private func resetForConnectionAttempt() {
+        isAwaitingCredentials = false
+        isAutoRetryPending = false
+        activeCancellation?.cancel()
+        detachSessionChannels()
+        activeConnectionID = nil
+        activeCancellation = nil
+        sessionEndReason = nil
+        isConnecting = false
+
+        report = nil
+        liveReport = nil
+        liveCertificate = nil
+        previewFrame = nil
+        latestPresentedFrame = nil
+        presentedFrameCount = 0
+        viewerMetricsSummary = nil
+        resetFramePresentationState()
+        renderMetricsStore.reset()
+        certificateTrustedByApp = false
+        certificateRefusal = nil
+    }
+
+    private func makeConnectionConfiguration(
+        target: RDPConnectionTarget,
+        credentials: RDPCredentials?,
+        desktopSize: RDPDesktopSize
+    ) -> RDPConnectionConfiguration {
+        // Announce the Mac's keyboard layout so the server maps scancodes to
+        // the characters the keys are labelled with; the input layer sends
+        // keys by the layout this session announced.
+        let keyboardLayout = MacRDPKeyboardLayout.current()
+        canvasView.keyboardLayout = keyboardLayout
+        connectionRequestsAudio = audioPlaybackEnabled
+        return RDPConnectionConfiguration(
             target: target,
             credentials: credentials,
             timeoutSeconds: draft.timeoutSeconds,
             hideCertificateWarnings: draft.hideCertificateWarnings,
             graphicsFrameCaptureLimit: nil,
-            desktopSize: requestedDesktopSize,
-            clipboardEnabled: clipboardSharingEnabled,
+            desktopSize: desktopSize,
+            // Always join the clipboard channel: SessionClipboard keeps both
+            // directions shut while sharing is off, so turning it on (or a
+            // temporary share) works without reconnecting. The cost: joining
+            // sends the mandatory empty Format List, and Windows empties its
+            // clipboard for it (checked on Windows 11; gnome-remote-desktop
+            // keeps its own).
+            clipboardEnabled: true,
             audioPlaybackEnabled: audioPlaybackEnabled,
             // RDPeek never exposes a graphics-profile picker: automatic lets
             // RDPKit negotiate the best path per host (Windows included).
-            graphicsCapabilityProfile: .automatic
+            graphicsCapabilityProfile: .automatic,
+            keyboardLayout: keyboardLayout,
+            legacyRSAKeyExchange: usesLegacyRSAKeyExchange,
+            // Servers list the session, and count per-device licenses, under
+            // the Mac's name; RDPKit cuts it to 15 characters.
+            clientName: SCDynamicStoreCopyComputerName(nil, nil) as String? ?? "RDPeek"
         )
+    }
 
-        let connectionID = UUID()
-        let cancellation = RDPConnectionCancellation()
-        let connectionStartedAt = Date()
-        activeConnectionID = connectionID
-        activeCancellation = cancellation
-        renderMetricsStore.reset(connectionStartedAt: connectionStartedAt)
-        updateViewerMetricsSummary(renderMetricsStore.metrics)
-        audioMessage = nil
-        isConnecting = true
-        launchStore?.recordConnectionStart(for: draft.deviceID)
-        render()
-        startFirstFrameWatchdog()
-
-        let sink = SessionMainActorSink(controller: self, connectionID: connectionID)
-        let credentialStore = credentialStore
+    private func startSessionThread(
+        configuration baseConfiguration: RDPConnectionConfiguration,
+        sink: SessionMainActorSink,
+        liveReport: RDPLiveConnectionReport,
+        cancellation: RDPConnectionCancellation
+    ) {
         let clientLicenseStore = clientLicenseStore
-        connectionTask = Task.detached(priority: .userInitiated) {
+        let clientLicenseKey = ClientLicenseStoreKey(identity: draft.identity)
+        let presentsStoredClientLicense = omitsStoredClientLicense == false
+        let trustedCertificateStore = trustedCertificateStore
+        let acceptsUntrustedCertificates = draft.hideCertificateWarnings
+        let port = baseConfiguration.port
+        let initialScaleFactors = baseConfiguration.scaleFactors
+        // RDPSessionClient.run blocks for the whole session and waits on
+        // the decode queue, so it gets its own thread rather than pinning a
+        // Swift concurrency worker per session, which could starve the
+        // decode drain.
+        let sessionThread = Thread {
             var configuration = baseConfiguration
-            configuration.storedClientLicense = try? clientLicenseStore.license(for: clientLicenseKey)
-            let decodeQueue = RDPLatestFrameDecodeQueue(
+            // Read here, not on the main thread: the Keychain can block on
+            // its access-approval dialog. No connection deadline runs yet.
+            if presentsStoredClientLicense {
+                configuration.storedClientLicense = try? clientLicenseStore.license(for: clientLicenseKey)
+            }
+            var keyframeRequests = RDPKeyframeRequestThrottle()
+            // Which remote copy a clipboard handler is called for, so the
+            // bridge can drop one that a publish on the main thread
+            // replaced before the copy got there.
+            let clipboardSession = OSAllocatedUnfairLock<RDPClipboardSession?>(initialState: nil)
+            let deliveredRemoteCopyNumber: @Sendable () -> Int = {
+                clipboardSession.withLock { $0?.deliveredRemoteCopyNumber } ?? 0
+            }
+            let decodeQueue = RDPFrameDecodeQueue(
                 shouldCancel: {
                     cancellation.isCancelled
                 },
                 onDecoded: { presentation, receivedAt, decodedAt, timing in
                     sink.apply { controller in
-                        controller.previewDecodeError = nil
                         let shouldForceMetricsSnapshot = !controller.hasPresentedFrame
                         controller.renderMetricsStore.recordDecodedFrame(
                             presentation.frame,
@@ -730,20 +939,9 @@ final class SessionViewController: NSViewController {
                 },
                 onDecodeFailed: { receivedAt, errorDescription in
                     sink.apply { controller in
-                        controller.previewDecodeError = errorDescription
                         controller.renderMetricsStore.recordDecodeFailure(
                             receivedAt: receivedAt,
                             errorDescription: errorDescription
-                        )
-                        controller.publishRenderMetricsSnapshotIfNeeded(at: receivedAt)
-                        controller.render()
-                    }
-                },
-                onSkippedFrames: { count, receivedAt in
-                    sink.apply { controller in
-                        controller.renderMetricsStore.recordSkippedDecodeFrames(
-                            count,
-                            receivedAt: receivedAt
                         )
                         if controller.publishRenderMetricsSnapshotIfNeeded(at: receivedAt) {
                             controller.render()
@@ -753,7 +951,7 @@ final class SessionViewController: NSViewController {
             )
             let wireReceiveCoalescer = RDPWireReceiveMetricsCoalescer(
                 shouldCancel: {
-                    Task.isCancelled || cancellation.isCancelled
+                    cancellation.isCancelled
                 },
                 onFlush: { sample in
                     sink.apply { controller in
@@ -769,237 +967,239 @@ final class SessionViewController: NSViewController {
                 wireReceiveCoalescer.cancel()
                 decodeQueue.cancel()
             }
-            let nextReport = RDPPreflightClient().run(
+            // `run` reports a failure to connect in the report, as it does
+            // every other failure.
+            let report = RDPSessionClient().run(
                 configuration: configuration,
                 onGraphicsFrame: { frame in
-                    try decodeQueue.submitAndWait(
+                    let completion = decodeQueue.submitAndWait(
                         frame,
                         receivedAt: Date(),
                         shouldContinue: {
-                            Task.isCancelled == false && cancellation.isCancelled == false
+                            cancellation.isCancelled == false
                         }
-                    ).requireDecoded()
-                },
-                onInputReady: { session in
-                    // Keychain writes can block on the access-approval
-                    // dialog; keep them off the connection thread so the
-                    // graphics handshake (and the first-frame watchdog)
-                    // are not held up behind them.
-                    if let credentialPersistenceRequest {
-                        Task.detached(priority: .utility) {
-                            let persistenceResult = persistCredentialsIfNeeded(
-                                credentialPersistenceRequest,
-                                store: credentialStore
-                            )
-                            if let persistenceResult {
-                                // The write may finish after the connection
-                                // ended (keychain approval dialog); its
-                                // outcome is not connection-scoped, so do
-                                // not drop it with the stale-event gate.
-                                // Carry the identity the entry was stored
-                                // under — the draft can be re-signed-in
-                                // with different credentials by then.
-                                let identity = credentialPersistenceRequest.key.identity
-                                sink.applyIgnoringConnectionState { controller in
-                                    controller.applyCredentialPersistenceResult(
-                                        persistenceResult,
-                                        identity: identity
-                                    )
-                                }
-                            }
+                    )
+                    try keyframeRequests.finishGraphicsFrame(frame, decoded: completion, at: Date()) {
+                        let monitors = frame.monitors
+                        let graphicsOutputRect = frame.graphicsOutputRect
+                        sink.apply { controller in
+                            controller.requestKeyframe(monitors: monitors, graphicsOutputRect: graphicsOutputRect,
+                                                       initialScaleFactors: initialScaleFactors)
                         }
                     }
+                },
+                onInputReady: { session in
                     sink.apply { controller in
-                        controller.inputSession = session
-                        controller.render()
+                        controller.sessionActivated(session)
                     }
                 },
                 onDisplayControlReady: { session in
                     sink.apply { controller in
                         controller.displayControlSession = session
+                        // A server redirection's target has not been sent
+                        // the layout the first server got.
+                        controller.lastRequestedDisplayRequest = nil
+                        controller.scheduleAutoDisplaySizeUpdate()
                         controller.render()
                     }
                 },
                 onClipboardReady: { session in
+                    // The server's first copy can come before the
+                    // bridge attaches on the main thread, so nothing is
+                    // fetched until it applies the sharing choice; on,
+                    // fetching then gets a copy that came in between.
+                    session.fetchesRemoteCopies = false
+                    clipboardSession.withLock { $0 = session }
                     sink.apply { controller in
-                        guard controller.clipboardSharingEnabled else {
-                            session.publishLocalUnicodeText(nil)
-                            controller.clipboardSession = session
-                            controller.render()
-                            return
-                        }
-                        controller.clipboardSession = session
-                        controller.publishPasteboardIfChanged(force: true)
+                        controller.clipboard.attach(session)
                         controller.render()
                     }
                 },
                 onClipboardText: { text in
+                    let copyNumber = deliveredRemoteCopyNumber()
                     sink.apply { controller in
-                        guard controller.clipboardSharingEnabled else {
-                            return
-                        }
-                        controller.applyRemoteClipboardText(text)
+                        controller.clipboard.receiveText(text, copyNumber: copyNumber)
                         controller.render()
                     }
                 },
                 onClipboardFileGroupDescriptor: { descriptorList in
+                    let copyNumber = deliveredRemoteCopyNumber()
                     sink.apply { controller in
-                        guard controller.clipboardSharingEnabled else {
-                            return
-                        }
-                        controller.applyRemoteClipboardFileList(descriptorList)
+                        controller.clipboard.receiveFileList(descriptorList, copyNumber: copyNumber)
                         controller.render()
                     }
                 },
                 onClipboardFileContents: { response in
                     sink.apply { controller in
-                        guard controller.clipboardSharingEnabled else {
-                            return
-                        }
-                        controller.applyRemoteClipboardFileContentsResponse(response)
+                        controller.clipboard.receiveFileContents(response)
+                        controller.render()
+                    }
+                },
+                onClipboardRemoteCopyUnavailable: { isEmpty in
+                    let copyNumber = deliveredRemoteCopyNumber()
+                    sink.apply { controller in
+                        controller.clipboard.receiveRemoteCopyUnavailable(isEmpty: isEmpty, copyNumber: copyNumber)
                         controller.render()
                     }
                 },
                 onAudioSample: { sample in
-                    guard Task.isCancelled == false else {
-                        return
-                    }
                     sink.apply { controller in
-                        guard controller.audioPlaybackEnabled else {
-                            return
-                        }
-                        do {
-                            let queued = try controller.remoteAudioPlayer.enqueue(sample)
-                            controller.updateAudioMessage(queued ? nil : "Dropping delayed audio")
-                        } catch {
-                            controller.updateAudioMessage(String(describing: error))
-                        }
+                        controller.playAudioSample(sample)
                     }
                 },
                 onCertificate: { info in
+                    // Runs before any credential is sent, so cancelling
+                    // here refuses the server without signing in to it.
+                    let refusal = trustedCertificateStore.refusal(
+                        of: info,
+                        port: port,
+                        acceptsUntrusted: acceptsUntrustedCertificates
+                    )
+                    if refusal != nil {
+                        cancellation.cancel()
+                    }
                     sink.apply { controller in
-                        controller.liveCertificate = info
-                        controller.certificateTrustedByApp = controller.trustedCertificateStore.isTrusted(
-                            host: target.host,
-                            port: target.port,
-                            sha256: info.sha256
-                        )
-                        controller.render()
+                        controller.receiveCertificate(info, port: port, refusal: refusal)
                     }
                 },
                 onWireReceive: { sample in
-                    guard Task.isCancelled == false else {
-                        return
-                    }
                     wireReceiveCoalescer.record(sample)
                 },
-                cancellation: cancellation,
-                shouldCancel: {
-                    Task.isCancelled || cancellation.isCancelled
-                }
+                liveReport: liveReport,
+                cancellation: cancellation
             )
-            let finalWireReceiveSample = wireReceiveCoalescer.takePendingSample()
-            // License persistence is not connection-scoped. Save an issued
-            // license even when closing the window cancelled this task, so
-            // the next connection can present it to the server.
-            persistClientLicenseIfNeeded(
-                nextReport.rdpIssuedClientLicense,
-                key: clientLicenseKey,
-                store: clientLicenseStore
-            )
-            guard Task.isCancelled == false else {
+            // A license the server issued stays valid even when closing the
+            // window cancelled the session; the next connection presents it.
+            if let license = report.rdpIssuedClientLicense {
+                try? clientLicenseStore.saveLicense(license, for: clientLicenseKey)
+            }
+            guard cancellation.isCancelled == false else {
                 return
             }
-            let firstFrameDecodeResult = nextReport.rdpGraphicsFirstFrame.map(decodeReportFirstFrame)
+            let finalWireReceiveSample = wireReceiveCoalescer.takePendingSample()
             sink.apply { controller in
                 if let finalWireReceiveSample {
                     controller.renderMetricsStore.recordWireReceive(finalWireReceiveSample)
                 }
-                controller.flushPendingFramePresentation()
-                controller.publishRenderMetricsSnapshotIfNeeded(force: true)
-                controller.report = nextReport
-                controller.sessionEndReason = RDPSessionEndReason(report: nextReport)
-                controller.certificateTrustedByApp = controller.trustedCertificateStore.isTrusted(
-                    host: target.host,
-                    port: target.port,
-                    sha256: nextReport.certificateSHA256
-                )
-                if controller.hasPresentedFrame == false,
-                   let firstFrameDecodeResult
-                {
-                    switch firstFrameDecodeResult {
-                    case let .decoded(presentation, receivedAt, decodedAt, timing):
-                        controller.renderMetricsStore.recordDecodedFrame(
-                            presentation.frame,
-                            receivedAt: receivedAt,
-                            decodedAt: decodedAt,
-                            timing: timing
-                        )
-                        controller.publishRenderMetricsSnapshotIfNeeded(force: true, at: decodedAt)
-                        controller.applyFramePresentation(presentation)
-                    case let .failed(receivedAt, errorDescription):
-                        controller.previewDecodeError = errorDescription
-                        controller.renderMetricsStore.recordDecodeFailure(
-                            receivedAt: receivedAt,
-                            errorDescription: errorDescription
-                        )
-                        controller.publishRenderMetricsSnapshotIfNeeded(force: true, at: receivedAt)
-                    }
-                }
-                controller.isConnecting = false
-                controller.activeConnectionID = nil
-                controller.activeCancellation = nil
-                controller.connectionTask = nil
-                // The channel is closed once the run loop returns; drop the
-                // session objects so clipboard sync/polling and the input
-                // wiring can't keep talking to a dead channel.
-                controller.inputSession = nil
-                controller.displayControlSession = nil
-                controller.clipboardSession = nil
-                controller.discardRemoteClipboardFileTransfer()
-                controller.remoteAudioPlayer.reset()
-                controller.firstFrameWatchdogTask?.cancel()
-                // Retry transport failures (no negotiation response ever
-                // arrived) and pre-frame stalls. Some servers give no
-                // explicit bad-credential signal — rejected credentials
-                // surface as a timeout, which the retry budget bounds.
-                if let reason = controller.sessionEndReason,
-                   reason.kind == .failed,
-                   controller.hasPresentedFrame == false,
-                   controller.autoRetryCount < 2,
-                   nextReport.responseHex == nil
-                   || nextReport.error?.contains("RDP Graphics Update") == true
-                {
-                    controller.scheduleAutoRetry()
-                }
-                controller.render()
+                controller.finishConnection(report, configuration: configuration)
             }
+        }
+        sessionThread.name = "RDPeek session"
+        sessionThread.qualityOfService = .userInitiated
+        sessionThread.start()
+    }
+
+    /// The server activated the session: it accepted the sign-in.
+    private func sessionActivated(_ session: RDPInputSession) {
+        inputSession = session
+        // Activation repeats after a reactivation or server redirection;
+        // the sign-in is kept only the first time.
+        if isAwaitingCredentialAcceptance {
+            isAwaitingCredentialAcceptance = false
+            // An automatic retry signs in again with the same password,
+            // which was kept already.
+            if hasKeptCredentials == false {
+                hasKeptCredentials = true
+                keepAcceptedCredentials()
+            }
+        }
+        render()
+    }
+
+    private func receiveCertificate(
+        _ info: RDPServerCertificateInfo,
+        port: UInt16,
+        refusal: CertificateRefusal?
+    ) {
+        liveCertificate = info
+        // After a server redirection, the certificate belongs to the
+        // redirection target.
+        certificateTrustedByApp = trustedCertificateStore.isTrusted(
+            host: info.host,
+            port: port,
+            sha256: info.sha256
+        )
+        if let refusal {
+            refuseCertificate(refusal)
+        }
+        render()
+    }
+
+    /// The session ended without the user ending it: record why, then
+    /// connect again, ask to sign in, or show the end. `configuration` is
+    /// the one the session ran with, stored client license included.
+    private func finishConnection(
+        _ finishedReport: RDPConnectionReport,
+        configuration: RDPConnectionConfiguration
+    ) {
+        flushPendingFramePresentation()
+        publishRenderMetricsSnapshotIfNeeded(force: true)
+        let outcome = SessionAttemptOutcome.after(
+            finishedReport,
+            host: configuration.host,
+            presentedFrames: hasPresentedFrame,
+            usedLegacyRSAKeyExchange: configuration.legacyRSAKeyExchange,
+            presentedStoredClientLicense: configuration.storedClientLicense != nil,
+            unreachableRetriesSpent: autoRetryCount,
+            retriedFirstFrameTimeout: didRetryFirstFrameTimeout
+        )
+        report = finishedReport
+        certificateTrustedByApp = trustedCertificateStore.isTrusted(
+            host: liveCertificate?.host ?? configuration.host,
+            port: configuration.port,
+            sha256: finishedReport.certificateSHA256
+        )
+        isConnecting = false
+        activeConnectionID = nil
+        activeCancellation = nil
+        // The channel is closed once the session returns; drop the session
+        // objects so clipboard sync/polling and the input wiring can't keep
+        // talking to a dead channel.
+        detachSessionChannels()
+        // As after Disconnect, what comes next shows over black: the hidden
+        // desktop gives up the keyboard and its last frame is released.
+        resetFramePresentationState()
+
+        switch outcome {
+        case .retryWithLegacyRSAKeyExchange:
+            usesLegacyRSAKeyExchange = true
+            startConnectionAttempt()
+        case .retryWithoutStoredClientLicense:
+            omitsStoredClientLicense = true
+            startConnectionAttempt()
+        case let .retry(reason):
+            switch reason {
+            case .networkHiccup:
+                autoRetryCount += 1
+            case .firstFrameTimeout:
+                didRetryFirstFrameTimeout = true
+            }
+            scheduleAutoRetry(reason)
+        case let .promptForCredentials(message):
+            forgetRejectedPassword()
+            promptForCredentials(errorMessage: message)
+        case let .end(reason):
+            sessionEndReason = reason
+            render()
         }
     }
 
     func cancelConnection(shouldRecordCancellation: Bool = true) {
         let shouldRecordCancellation = shouldRecordCancellation
-            && (isConnecting || activeConnectionID != nil || connectionTask != nil
+            && (isConnecting || activeConnectionID != nil
                 || isResolvingStoredCredentials || isAutoRetryPending)
         autoRetryTask?.cancel()
         autoRetryTask = nil
-        firstFrameWatchdogTask?.cancel()
+        credentialResolutionTask?.cancel()
+        credentialResolutionTask = nil
         isAutoRetryPending = false
         isResolvingStoredCredentials = false
-        hudModel.connectingStatusDetail = nil
+        autoRetryReason = nil
         activeCancellation?.cancel()
-        connectionTask?.cancel()
-        cancelPendingDisplayResize(resetLastRequestedSize: true)
+        detachSessionChannels()
         resetFramePresentationState()
         activeCancellation = nil
-        connectionTask = nil
         activeConnectionID = nil
-        inputSession = nil
-        displayControlSession = nil
-        clipboardSession = nil
-        discardRemoteClipboardFileTransfer()
-        pasteboardChangeCount = NSPasteboard.general.changeCount
-        remoteAudioPlayer.reset()
         isConnecting = false
         if shouldRecordCancellation {
             // Cancelling a connect that never showed a frame, when the
@@ -1015,6 +1215,32 @@ final class SessionViewController: NSViewController {
         render()
     }
 
+    /// Ends a connection whose certificate must not receive credentials;
+    /// the certificate notice offers to trust it and connect again.
+    private func refuseCertificate(_ refusal: CertificateRefusal) {
+        certificateRefusal = refusal
+        let reason = switch refusal {
+        case .changed: "The server's certificate is not the one trusted for this host."
+        case .untrusted: "Neither this Mac nor RDPeek trusts the server's certificate."
+        }
+        sessionEndReason = RDPSessionEndReason(
+            kind: .failed,
+            message: reason + " The connection was closed before any credential was sent."
+        )
+        cancelConnection(shouldRecordCancellation: false)
+    }
+
+    /// Drops what a session handed out, so nothing more is sent to it once
+    /// it has ended — however it ended.
+    private func detachSessionChannels() {
+        cancelPendingDisplayResize(resetLastRequestedSize: true)
+        inputSession = nil
+        displayControlSession = nil
+        clipboard.detach()
+        remoteAudioPlayer.reset()
+        didReportAudioFailure = false
+    }
+
     // MARK: - Frame presentation
 
     @discardableResult
@@ -1027,6 +1253,8 @@ final class SessionViewController: NSViewController {
             return applyFramePresentation(presentation)
         }
 
+        // The display link idles until a frame waits for it.
+        frameClockView.requestFrame()
         if framePresentationBuffer.replacePendingPresentation(presentation) {
             let skippedAt = Date()
             renderMetricsStore.recordSkippedPresentationFrame(at: skippedAt)
@@ -1053,16 +1281,12 @@ final class SessionViewController: NSViewController {
         _ nextState: RDPFramePacingState,
         shouldRender: Bool = true
     ) -> Bool {
-        let currentBackingScaleFactor = framePacing.backingScaleFactor
         guard framePacing != nextState else {
             return false
         }
 
         framePacing = nextState
         updateViewerMetricsSummary(renderMetricsStore.metrics)
-        if currentBackingScaleFactor != nextState.backingScaleFactor {
-            refreshViewerPixelSize()
-        }
         if shouldRender {
             render()
         }
@@ -1077,19 +1301,25 @@ final class SessionViewController: NSViewController {
         return applyFramePresentation(pendingFramePresentation)
     }
 
+    /// Returns whether the canvas needs a render: on the first frame and
+    /// when the desktop size or monitor layout changes. Every frame is kept
+    /// for Stats for Nerds without a render; AVC444 can alternate codecs frame by frame.
     @discardableResult
     private func applyFramePresentation(_ presentation: RDPDecodedFramePresentation) -> Bool {
         let wasFirstPresentedFrame = hasPresentedFrame == false
-        let shouldUpdateFrameMetadata = shouldPublishFrameMetadata(presentation.frame)
-        guard remoteDesktopRenderer.present(presentation, id: renderMetricsStore.metrics.decodedFrameCount) else {
+        let frame = presentation.frame
+        let shouldUpdateFrameMetadata = shouldPublishFrameMetadata(frame)
+        presentedFrameCount += 1
+        guard remoteDesktopRenderer.present(presentation, id: presentedFrameCount) else {
             return false
         }
-        if wasFirstPresentedFrame || shouldUpdateFrameMetadata {
-            let metadata = RDPFrameMetadata(presentation.frame)
+        latestPresentedFrame = frame
+        if shouldUpdateFrameMetadata {
+            let metadata = RDPFrameMetadata(frame)
             previewFrame = metadata
             let monitors = RemoteDisplayViewport(frame: metadata).monitors
             displaySelection.reconcile(with: monitors)
-            if metadata.monitorDefinitions.count > 1 {
+            if metadata.monitors.count > 1 {
                 autoApplyViewerSize = false
                 cancelPendingDisplayResize()
             }
@@ -1101,8 +1331,6 @@ final class SessionViewController: NSViewController {
             hasPresentedFrame = true
             hasEverPresentedFrame = true
             autoRetryCount = 0
-            firstFrameWatchdogTask?.cancel()
-            hudModel.connectingStatusDetail = nil
         }
         return wasFirstPresentedFrame || shouldUpdateFrameMetadata
     }
@@ -1113,9 +1341,7 @@ final class SessionViewController: NSViewController {
         }
         return currentFrame.width != frame.width
             || currentFrame.height != frame.height
-            || currentFrame.codecName != frame.codecName
-            || currentFrame.videoCodec != frame.videoCodec
-            || currentFrame.monitorDefinitions != frame.monitorDefinitions
+            || currentFrame.monitors != frame.monitors
     }
 
     @discardableResult
@@ -1126,23 +1352,28 @@ final class SessionViewController: NSViewController {
         guard let snapshot = renderMetricsStore.snapshotIfNeeded(force: force, at: timestamp) else {
             return false
         }
-        var didChange = false
-        if previewFrameCount != snapshot.decodedFrameCount {
-            previewFrameCount = snapshot.decodedFrameCount
-            didChange = true
-        }
-        didChange = updateViewerMetricsSummary(snapshot) || didChange
-        return didChange
+        return updateViewerMetricsSummary(snapshot)
     }
 
+    /// The summary only feeds the performance overlay, so it is left unset
+    /// while the overlay is hidden.
     @discardableResult
     private func updateViewerMetricsSummary(_ metrics: RDPRenderMetrics) -> Bool {
-        let nextSummary = compactViewerMetricsSummary(metrics: metrics, framePacing: framePacing)
+        let nextSummary = isMetricsOverlayVisible
+            ? compactViewerMetricsSummary(metrics: metrics, framePacing: framePacing, at: Date())
+            : nil
         if viewerMetricsSummary != nextSummary {
             viewerMetricsSummary = nextSummary
             return true
         }
         return false
+    }
+
+    private func setMetricsOverlayVisible(_ visible: Bool) {
+        isMetricsOverlayVisible = visible
+        updateViewerMetricsSummary(renderMetricsStore.metrics)
+        render()
+        startMetricsOverlayLoopIfNeeded()
     }
 
     private func resetFramePresentationState() {
@@ -1156,36 +1387,22 @@ final class SessionViewController: NSViewController {
 
     // MARK: - Display control
 
-    private func updateViewerSurfaceSize(_ pointSize: CGSize) {
-        guard pointSize.width > 0, pointSize.height > 0 else {
-            return
-        }
-        viewerPointSize = pointSize
-        refreshViewerPixelSize()
-        render()
-    }
-
-    private func refreshViewerPixelSize() {
-        guard viewerPointSize.width > 0, viewerPointSize.height > 0 else {
-            return
-        }
-        let scale = framePacing.backingScaleFactor
-            ?? view.window?.backingScaleFactor
-            ?? NSScreen.main?.backingScaleFactor
-            ?? 1
-        let nextSize = RDPViewerPixelSize(pointSize: viewerPointSize, backingScaleFactor: scale)
+    /// The canvas reports its size and backing scale together, so the
+    /// remote desktop follows the window across displays of other scales.
+    private func updateViewerSurface(pointSize: CGSize, backingScaleFactor: CGFloat) {
+        let nextSize = RDPViewerPixelSize(pointSize: pointSize, backingScaleFactor: backingScaleFactor)
         if viewerPixelSize != nextSize {
             viewerPixelSize = nextSize
             scheduleAutoDisplaySizeUpdate()
         }
     }
 
-    private func scheduleAutoDisplaySizeUpdate(force: Bool = false) {
+    private func scheduleAutoDisplaySizeUpdate() {
         guard autoApplyViewerSize,
               hasPresentedFrame,
               let previewFrame,
               remoteDisplayAllowsWindowMatching(hasPresentedFrame: hasPresentedFrame,
-                                               reportedMonitorCount: previewFrame.monitorDefinitions.count),
+                                               reportedMonitorCount: previewFrame.monitors.count),
               isConnecting,
               displayControlSession != nil,
               let viewerPixelSize
@@ -1193,12 +1410,15 @@ final class SessionViewController: NSViewController {
             return
         }
 
+        // Cancel first: a window resized away and back within the delay
+        // must not leave the remote at the size in between.
+        pendingDisplayResizeTask?.cancel()
         let displayRequest = viewerPixelSize.displayRequest
-        guard force || lastRequestedDisplayRequest != displayRequest else {
+        guard lastRequestedDisplayRequest != displayRequest else {
+            pendingDisplayResizeTask = nil
             return
         }
 
-        pendingDisplayResizeTask?.cancel()
         pendingDisplayResizeTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard Task.isCancelled == false else {
@@ -1214,7 +1434,7 @@ final class SessionViewController: NSViewController {
               hasPresentedFrame,
               let previewFrame,
               remoteDisplayAllowsWindowMatching(hasPresentedFrame: hasPresentedFrame,
-                                               reportedMonitorCount: previewFrame.monitorDefinitions.count),
+                                               reportedMonitorCount: previewFrame.monitors.count),
               isConnecting,
               displayControlSession != nil,
               lastRequestedDisplayRequest != displayRequest
@@ -1233,7 +1453,20 @@ final class SessionViewController: NSViewController {
         displayControlSession.send(request)
         lastRequestedDisplayRequest = request
         requestedDesktopSizeLabel = request.label
-        render()
+    }
+
+    /// Some servers answer a repeated layout with a keyframe. Re-send only a
+    /// known single-display layout, so recovery never collapses multiple monitors.
+    private func requestKeyframe(
+        monitors: [RDPRemoteMonitor],
+        graphicsOutputRect: RDPFrameRect?,
+        initialScaleFactors: RDPDisplayScaleFactors
+    ) {
+        guard let displayControlSession,
+              let request = remoteDisplayKeyframeRequest(monitors: monitors, graphicsOutputRect: graphicsOutputRect,
+                                                         initialScaleFactors: initialScaleFactors,
+                                                         lastRequest: lastRequestedDisplayRequest) else { return }
+        displayControlSession.send(request)
     }
 
     private func cancelPendingDisplayResize(resetLastRequestedSize: Bool = false) {
@@ -1248,7 +1481,7 @@ final class SessionViewController: NSViewController {
         guard enabled == false || hudModel.canMatchWindowSize else { return }
         autoApplyViewerSize = enabled
         if enabled {
-            scheduleAutoDisplaySizeUpdate(force: true)
+            scheduleAutoDisplaySizeUpdate()
         } else {
             cancelPendingDisplayResize()
         }
@@ -1258,55 +1491,34 @@ final class SessionViewController: NSViewController {
     // MARK: - Clipboard
 
     func syncClipboardNow() {
-        publishPasteboardIfChanged(force: true)
+        clipboard.syncNow()
         render()
     }
 
     func startTemporaryClipboardSharing() {
-        guard clipboardSession != nil else {
-            return
-        }
-
-        temporaryClipboardSharingExpiresAt = Date().addingTimeInterval(30)
-        clipboardSharingEnabled = true
-        updateClipboardSharing(enabled: true)
-        toast("Sharing clipboard for 30 seconds", systemImage: "clock")
+        clipboard.startTemporarySharing()
         render()
-    }
-
-    private func expireTemporaryClipboardSharingIfNeeded(now: Date = Date()) {
-        guard let temporaryClipboardSharingExpiresAt,
-              now >= temporaryClipboardSharingExpiresAt
-        else {
-            return
-        }
-
-        self.temporaryClipboardSharingExpiresAt = nil
-        guard clipboardSharingEnabled else {
-            return
-        }
-
-        clipboardSharingEnabled = false
-        updateClipboardSharing(enabled: false)
-        toast("Clipboard sharing ended", systemImage: "doc.on.clipboard")
     }
 
     private func setClipboardSharing(_ enabled: Bool) {
-        clipboardSharingEnabled = enabled
-        temporaryClipboardSharingExpiresAt = nil
-        updateClipboardSharing(enabled: enabled)
+        clipboard.setSharingEnabled(enabled)
         render()
     }
 
-    /// Surfaces remote audio problems once per change, so a silent session
-    /// explains itself instead of just not playing sound.
-    private func updateAudioMessage(_ message: String?) {
-        guard audioMessage != message else {
+    private func playAudioSample(_ sample: RDPAudioSample) {
+        guard audioPlaybackEnabled else {
             return
         }
-        audioMessage = message
-        if let message {
-            toast("Audio: \(message)", systemImage: "speaker.slash")
+        // A full queue drops delayed audio by design; only a failure to play
+        // at all is worth telling, once per connection.
+        do {
+            try remoteAudioPlayer.enqueue(sample)
+        } catch {
+            guard didReportAudioFailure == false else {
+                return
+            }
+            didReportAudioFailure = true
+            toast("Remote audio cannot play on this Mac", systemImage: "speaker.slash")
         }
     }
 
@@ -1314,607 +1526,170 @@ final class SessionViewController: NSViewController {
         audioPlaybackEnabled = enabled
         if !enabled {
             remoteAudioPlayer.reset()
-        } else if isConnecting, report == nil, draft.audioPlaybackEnabled == false {
+        } else if isConnecting, connectionRequestsAudio == false {
             toast("Audio starts on the next connection", systemImage: "speaker.wave.2")
         }
         render()
     }
 
-    private func publishPasteboardIfChanged(force: Bool = false) {
-        guard clipboardSharingEnabled else {
-            pasteboardChangeCount = NSPasteboard.general.changeCount
-            return
-        }
-        guard let clipboardSession else {
-            pasteboardChangeCount = NSPasteboard.general.changeCount
-            return
-        }
-
-        let pasteboard = NSPasteboard.general
-        let nextChangeCount = pasteboard.changeCount
-        guard force || nextChangeCount != pasteboardChangeCount else {
-            return
-        }
-
-        pasteboardChangeCount = nextChangeCount
-        switch localClipboardPayload(from: pasteboard) {
-        case let .text(text):
-            clipboardSession.publishLocalUnicodeText(text)
-            if force {
-                toast("Clipboard synced", systemImage: "doc.on.clipboard.fill")
-            }
-        case let .files(files):
-            clipboardSession.publishLocalFiles(files)
-            let message = files.count == 1 ? "1 file shared to remote" : "\(files.count) files shared to remote"
-            toast(message, systemImage: "doc.on.clipboard.fill")
-        case .empty:
-            clipboardSession.publishLocalUnicodeText(nil)
-        case let .unsupported(message):
-            clipboardSession.publishLocalUnicodeText(nil)
-            toast(message, systemImage: "exclamationmark.triangle")
-        case let .ignored(message):
-            toast(message, systemImage: "exclamationmark.triangle")
-        }
-    }
-
-    private func localClipboardPayload(from pasteboard: NSPasteboard) -> SessionLocalClipboardPayload {
-        let fileURLs = pasteboardFileURLs(from: pasteboard)
-        if fileURLs.isEmpty == false {
-            return localClipboardFiles(from: fileURLs)
-        }
-        if let text = pasteboard.string(forType: .string) {
-            guard RDPClipboardLimits.canPublishUnicodeText(text) else {
-                return .ignored("Local text is too large to sync.")
-            }
-            return .text(text)
-        }
-        return .empty
-    }
-
-    private func pasteboardFileURLs(from pasteboard: NSPasteboard) -> [URL] {
-        var urls: [URL] = []
-        if let pasteboardItems = pasteboard.pasteboardItems {
-            for item in pasteboardItems {
-                appendPasteboardFileURL(item.string(forType: .fileURL), to: &urls)
-            }
-        }
-        if urls.isEmpty, pasteboard.types?.contains(.fileURL) == true {
-            appendPasteboardFileURL(pasteboard.string(forType: .fileURL), to: &urls)
-        }
-        return urls
-    }
-
-    private func appendPasteboardFileURL(_ value: String?, to urls: inout [URL]) {
-        guard let value,
-              let url = URL(string: value),
-              url.isFileURL,
-              urls.contains(url) == false
-        else {
-            return
-        }
-        urls.append(url)
-    }
-
-    private func localClipboardFiles(from urls: [URL]) -> SessionLocalClipboardPayload {
-        var files: [RDPClipboardLocalFile] = []
-        var totalByteCount = 0
-
-        for url in urls {
-            let fileURL = url.standardizedFileURL
-            let fileName = fileURL.lastPathComponent
-            guard fileName.isEmpty == false else {
-                return .unsupported("Local file clipboard was not shared.")
-            }
-
-            do {
-                let resourceValues = try fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
-                guard resourceValues.isRegularFile == true else {
-                    return .unsupported("Local clipboard has non-file items; remote clipboard cleared.")
-                }
-
-                guard let byteCount = resourceValues.fileSize,
-                      byteCount >= 0
-                else {
-                    return .unsupported("Local file clipboard could not be read; remote clipboard cleared.")
-                }
-                guard byteCount <= sessionMaximumLocalClipboardFileBytes,
-                      totalByteCount <= sessionMaximumLocalClipboardFileBytes - byteCount
-                else {
-                    return .unsupported("Local clipboard files exceed 32 MiB; remote clipboard cleared.")
-                }
-
-                let contents = try Data(contentsOf: fileURL)
-                guard contents.count <= sessionMaximumLocalClipboardFileBytes,
-                      totalByteCount <= sessionMaximumLocalClipboardFileBytes - contents.count
-                else {
-                    return .unsupported("Local clipboard files exceed 32 MiB; remote clipboard cleared.")
-                }
-                totalByteCount += contents.count
-                files.append(RDPClipboardLocalFile(fileName: fileName, contents: contents))
-            } catch {
-                return .unsupported("Local file clipboard could not be read; remote clipboard cleared.")
-            }
-        }
-
-        return files.isEmpty ? .empty : .files(files)
-    }
-
-    private func applyRemoteClipboardText(_ text: String) {
-        guard clipboardSharingEnabled else {
-            return
-        }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        pasteboardChangeCount = pasteboard.changeCount
-        toast("Remote text copied", systemImage: "doc.on.clipboard")
-    }
-
-    private func applyRemoteClipboardFileList(_ descriptorList: RDPClipboardFileGroupDescriptorW) {
-        guard clipboardSharingEnabled else {
-            return
-        }
-        discardRemoteClipboardFileTransfer()
-        do {
-            let files = try descriptorList.remoteFileTransferFiles(
-                maximumTotalByteCount: UInt64(sessionMaximumLocalClipboardFileBytes)
-            )
-            let downloadDirectory = try makeRemoteClipboardDownloadDirectory()
-            requestRemoteClipboardFileSize(SessionRemoteClipboardFileTransfer(
-                files: files,
-                currentFileOffset: 0,
-                streamID: nextRemoteClipboardTransferStreamID(),
-                expectedByteCount: nil,
-                requestedRange: false,
-                totalExpectedByteCount: 0,
-                downloadedFileURLs: [],
-                downloadDirectory: downloadDirectory
-            ))
-        } catch let error as RDPClipboardRemoteFileTransferPlanningError {
-            toast(remoteClipboardFileTransferPlanningMessage(for: error), systemImage: "exclamationmark.triangle")
-        } catch {
-            toast("Remote files could not be prepared", systemImage: "exclamationmark.triangle")
-        }
-    }
-
-    private func applyRemoteClipboardFileContentsResponse(_ response: RDPClipboardFileContentsResponse) {
-        guard var transfer = remoteClipboardFileTransfer,
-              transfer.streamID == response.streamID
-        else {
-            return
-        }
-        guard response.ok else {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote file transfer failed")
-            return
-        }
-
-        if transfer.requestedRange {
-            applyRemoteClipboardFileData(response.data, transfer: transfer)
-            return
-        }
-
-        do {
-            let byteCount = try response.decodedFileSize()
-            guard byteCount <= UInt64(sessionMaximumLocalClipboardFileBytes),
-                  transfer.totalExpectedByteCount <= UInt64(sessionMaximumLocalClipboardFileBytes) - byteCount,
-                  let requestedByteCount = UInt32(exactly: byteCount)
-            else {
-                failRemoteClipboardFileTransfer(transfer, message: "Remote files exceed 32 MiB")
-                return
-            }
-
-            guard let clipboardSession else {
-                failRemoteClipboardFileTransfer(transfer, message: "Clipboard is not ready")
-                return
-            }
-
-            transfer.expectedByteCount = byteCount
-            transfer.totalExpectedByteCount += byteCount
-            if byteCount == 0 {
-                remoteClipboardFileTransfer = transfer
-                applyRemoteClipboardFileData(Data(), transfer: transfer)
-                return
-            }
-
-            transfer.requestedRange = true
-            remoteClipboardFileTransfer = transfer
-            guard let currentFile = transfer.currentFile else {
-                failRemoteClipboardFileTransfer(transfer, message: "Remote file transfer failed")
-                return
-            }
-            try clipboardSession.requestRemoteFileRange(
-                streamID: transfer.streamID,
-                fileIndex: currentFile.fileIndex,
-                position: 0,
-                requestedByteCount: requestedByteCount
-            )
-        } catch {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote file size request failed")
-        }
-    }
-
-    private func applyRemoteClipboardFileData(_ data: Data, transfer: SessionRemoteClipboardFileTransfer) {
-        guard let currentFile = transfer.currentFile,
-              transfer.expectedByteCount == UInt64(data.count),
-              data.count <= sessionMaximumLocalClipboardFileBytes
-        else {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote file transfer was incomplete")
-            return
-        }
-
-        do {
-            var nextTransfer = transfer
-            let fileURL = try writeRemoteClipboardFile(
-                named: currentFile.fileName,
-                contents: data,
-                in: transfer.downloadDirectory
-            )
-            nextTransfer.downloadedFileURLs.append(fileURL)
-
-            guard nextTransfer.currentFileOffset + 1 < nextTransfer.files.count else {
-                finishRemoteClipboardFileTransfer(nextTransfer)
-                return
-            }
-
-            nextTransfer.currentFileOffset += 1
-            nextTransfer.streamID = nextRemoteClipboardTransferStreamID()
-            nextTransfer.expectedByteCount = nil
-            nextTransfer.requestedRange = false
-            requestRemoteClipboardFileSize(nextTransfer)
-        } catch {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote file could not be saved")
-        }
-    }
-
-    private func requestRemoteClipboardFileSize(_ transfer: SessionRemoteClipboardFileTransfer) {
-        guard let clipboardSession,
-              let currentFile = transfer.currentFile
-        else {
-            failRemoteClipboardFileTransfer(transfer, message: "Clipboard is not ready")
-            return
-        }
-
-        remoteClipboardFileTransfer = transfer
-        do {
-            try clipboardSession.requestRemoteFileSize(
-                streamID: transfer.streamID,
-                fileIndex: currentFile.fileIndex
-            )
-            let message = transfer.files.count == 1
-                ? "Downloading \(currentFile.fileName)"
-                : "Downloading file \(transfer.currentFileOffset + 1) of \(transfer.files.count)"
-            toast(message, systemImage: "arrow.down.doc")
-        } catch {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote file request failed")
-        }
-    }
-
-    private func finishRemoteClipboardFileTransfer(_ transfer: SessionRemoteClipboardFileTransfer) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        guard pasteboard.writeObjects(transfer.downloadedFileURLs.map { $0 as NSURL }) else {
-            failRemoteClipboardFileTransfer(transfer, message: "Remote files could not be copied")
-            return
-        }
-
-        pasteboardChangeCount = pasteboard.changeCount
-        remoteClipboardFileTransfer = nil
-        if transfer.downloadedFileURLs.count == 1,
-           let fileName = transfer.files.first?.fileName
-        {
-            toast("Remote file copied: \(fileName)", systemImage: "doc.on.clipboard")
-        } else {
-            toast("\(transfer.downloadedFileURLs.count) remote files copied", systemImage: "doc.on.clipboard")
-        }
-    }
-
-    private func failRemoteClipboardFileTransfer(
-        _ transfer: SessionRemoteClipboardFileTransfer?,
-        message: String
-    ) {
-        if let downloadDirectory = transfer?.downloadDirectory {
-            try? FileManager.default.removeItem(at: downloadDirectory)
-            if remoteClipboardDownloadDirectory == downloadDirectory {
-                remoteClipboardDownloadDirectory = nil
-            }
-        }
-        remoteClipboardFileTransfer = nil
-        toast(message, systemImage: "exclamationmark.triangle")
-    }
-
-    private func remoteClipboardFileTransferPlanningMessage(
-        for error: RDPClipboardRemoteFileTransferPlanningError
-    ) -> String {
-        switch error {
-        case .emptyFileList:
-            "Remote file clipboard is empty"
-        case .containsOnlyDirectories:
-            "Remote clipboard has folders; file copy is not ready"
-        case .invalidFileIndex:
-            "Remote file index is not valid"
-        case .totalByteLimitExceeded:
-            "Remote files exceed 32 MiB"
-        }
-    }
-
-    private func discardRemoteClipboardFileTransfer() {
-        guard let transfer = remoteClipboardFileTransfer else {
-            return
-        }
-        try? FileManager.default.removeItem(at: transfer.downloadDirectory)
-        if remoteClipboardDownloadDirectory == transfer.downloadDirectory {
-            remoteClipboardDownloadDirectory = nil
-        }
-        remoteClipboardFileTransfer = nil
-    }
-
-    private func makeRemoteClipboardDownloadDirectory() throws -> URL {
-        let fileManager = FileManager.default
-        if let remoteClipboardDownloadDirectory {
-            try? fileManager.removeItem(at: remoteClipboardDownloadDirectory)
-        }
-
-        let directory = fileManager.temporaryDirectory
-            .appendingPathComponent("RDPeekRemoteClipboard", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        remoteClipboardDownloadDirectory = directory
-        return directory
-    }
-
-    private func writeRemoteClipboardFile(
-        named fileName: String,
-        contents: Data,
-        in directory: URL
-    ) throws -> URL {
-        let fileURL = directory.appendingPathComponent(fileName, isDirectory: false)
-        try contents.write(to: fileURL, options: .atomic)
-        return fileURL
-    }
-
-    private func nextRemoteClipboardTransferStreamID() -> UInt32 {
-        let streamID = nextRemoteClipboardStreamID
-        nextRemoteClipboardStreamID = streamID == UInt32.max ? 1 : streamID + 1
-        return streamID
-    }
-
-    private func updateClipboardSharing(enabled: Bool) {
-        guard enabled else {
-            temporaryClipboardSharingExpiresAt = nil
-            discardRemoteClipboardFileTransfer()
-            clipboardSession?.publishLocalUnicodeText(nil)
-            pasteboardChangeCount = NSPasteboard.general.changeCount
-            return
-        }
-        publishPasteboardIfChanged(force: true)
-    }
-
     // MARK: - Certificate trust
 
+    /// Trusts the refused certificate and connects again.
     private func trustCurrentCertificate() {
         guard let key = currentCertificateTrustKey() else {
-            toast("No certificate fingerprint available", systemImage: "exclamationmark.triangle")
             return
         }
         trustedCertificateStore.trust(key)
-        certificateTrustedByApp = true
-        certificateTrustMessage = "Certificate trusted for this host."
-        toast("Certificate trusted for this host", systemImage: "checkmark.shield.fill")
-        render()
+        startConnection()
     }
 
     private func currentCertificateTrustKey() -> RDPServerCertificateTrustKey? {
-        guard let certificateSHA256 = liveCertificate?.sha256 ?? report?.certificateSHA256,
-              let target = try? RDPConnectionTarget(host: draft.host, portText: String(draft.port))
-        else {
+        guard let liveCertificate else {
             return nil
         }
-        return RDPServerCertificateTrustKey(host: target.host, port: target.port, sha256: certificateSHA256)
+        return RDPServerCertificateTrustKey(
+            host: liveCertificate.host,
+            port: draft.port,
+            sha256: liveCertificate.sha256
+        )
     }
 
     // MARK: - Credentials
 
-    /// Resolves the password (Keychain, then the in-memory cache) without
-    /// blocking the main thread, then connects or asks the user to sign in.
-    /// The Keychain read can block on the access-approval dialog, so it runs
-    /// off the main actor while the connecting overlay is up.
-    private func resolveStoredCredentialsAndConnect() {
-        guard draft.password.isEmpty else {
-            hasRememberedPassword = rememberPassword
-            startConnection()
-            return
-        }
+    private func credentialSource(remembersPassword: Bool) -> SessionCredentialPolicy.Source {
+        SessionCredentialPolicy.source(
+            sessionPassword: draft.password,
+            identity: draft.identity,
+            remembersPassword: remembersPassword,
+            didPromptForCredentials: didPromptForCredentials,
+            cachedPassword: credentialCache.password(for:)
+        )
+    }
 
-        guard let key = currentCredentialKey() else {
+    /// Connects with the password the session found, or asks for one.
+    private func connect(using source: SessionCredentialPolicy.Source) {
+        credentialResolutionTask?.cancel()
+        switch source {
+        case .session, .noCredentials:
+            startConnectionAttempt()
+        case let .keychain(key):
+            readKeychainAndConnect(key)
+        case let .cache(password):
+            draft.password = password
+            startConnectionAttempt()
+        case .prompt:
             promptForCredentials()
-            return
         }
+    }
 
+    /// The Keychain read can block on the access-approval dialog, so it
+    /// runs off the main actor while the connecting overlay is up.
+    private func readKeychainAndConnect(_ key: KeychainCredentialKey) {
         isResolvingStoredCredentials = true
         render()
         let store = credentialStore
-        Task { @MainActor [weak self] in
+        credentialResolutionTask = Task { @MainActor [weak self] in
             let savedPassword = await Task.detached(priority: .userInitiated) {
                 try? store.password(for: key)
             }.value
 
-            guard let self, didClose == false, isResolvingStoredCredentials else {
+            guard Task.isCancelled == false, let self, didClose == false else {
                 return
             }
+            credentialResolutionTask = nil
             isResolvingStoredCredentials = false
 
             if let savedPassword, savedPassword.isEmpty == false {
-                hasRememberedPassword = true
-                rememberPassword = true
+                rememberedPassword = savedPassword
                 draft.password = savedPassword
-                startConnection()
-                return
+                startConnectionAttempt()
+            } else {
+                rememberedPassword = nil
+                connect(using: credentialSource(remembersPassword: false))
             }
-
-            hasRememberedPassword = false
-            if let account = draft.identity.credentialAccountName,
-               let cachedPassword = InMemoryCredentialCache.shared.password(for: account)
-            {
-                draft.password = cachedPassword
-                startConnection()
-                return
-            }
-
-            promptForCredentials()
         }
     }
 
-    private func currentCredentialKey() -> KeychainCredentialKey? {
-        guard let target = try? RDPConnectionTarget(host: draft.host, portText: String(draft.port)) else {
-            return nil
-        }
-        return makeCredentialKey(
-            host: target.host,
-            port: target.port,
-            username: draft.username.trimmingCharacters(in: .whitespacesAndNewlines),
-            domain: draft.domain.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Keeps the password the server just accepted: in the Keychain when
+    /// the user asked to remember it, else for this app run only. Turning
+    /// Remember off deletes a password the Keychain held for this identity.
+    private func keepAcceptedCredentials() {
+        let keep = SessionCredentialPolicy.keep(
+            password: draft.password,
+            identity: draft.identity,
+            remembersPassword: draft.rememberPassword,
+            rememberedPassword: rememberedPassword,
+            isRememberedByAnotherPC: launchStore?.isPasswordRemembered(
+                for: draft.identity,
+                byOtherThan: draft.deviceID
+            ) == true,
+            isPCDeleted: isPCDeleted
         )
+        guard let key = keep.key else {
+            return
+        }
+        credentialCache.setPassword(draft.password, for: key.account)
+        switch keep {
+        case .nothing, .cacheOnly:
+            break
+        case .save:
+            persistAcceptedCredentials(.save(key: key, password: draft.password))
+        case .delete:
+            persistAcceptedCredentials(.delete(key: key))
+        case .stopRemembering:
+            rememberedPassword = nil
+            launchStore?.recordCredentialPersistence(for: draft.deviceID, identity: draft.identity, remembered: false)
+        }
     }
 
-    private func makeCredentialKey(
-        host: String,
-        port: UInt16,
-        username: String,
-        domain: String
-    ) -> KeychainCredentialKey? {
-        KeychainCredentialKey(identity: RDPConnectionIdentity(
-            host: host,
-            port: port,
-            username: username,
-            domain: domain
-        ))
-    }
-
-    private func credentialPersistenceRequest(
-        key: KeychainCredentialKey?,
-        password: String,
-        hasCredentials: Bool
-    ) -> CredentialPersistenceRequest? {
-        guard hasCredentials,
-              let key
-        else {
-            return nil
+    /// Writes to the Keychain off the main actor: the write can block on
+    /// the access-approval dialog. The outcome reaches the device profile
+    /// and the password cache even when the window closed meanwhile.
+    private func persistAcceptedCredentials(_ request: CredentialPersistenceRequest) {
+        let store = credentialStore
+        let launchStore = launchStore
+        let deviceID = draft.deviceID
+        Task { @MainActor [weak self, weak launchStore] in
+            let result = await Task.detached(priority: .utility) {
+                persistCredentials(request, store: store)
+            }.value
+            let identity = request.key.identity
+            switch result {
+            case .success(.saved):
+                launchStore?.recordCredentialPersistence(for: deviceID, identity: identity, remembered: true)
+            case .success(.deleted):
+                launchStore?.recordCredentialPersistence(for: deviceID, identity: identity, remembered: false)
+            case .failure:
+                break
+            }
+            self?.applyCredentialPersistenceResult(result, request: request)
         }
-
-        if rememberPassword {
-            return .save(key: key, password: password)
-        }
-        if hasRememberedPassword {
-            return .delete(key: key)
-        }
-        return nil
     }
 
     private func applyCredentialPersistenceResult(
         _ result: Result<CredentialPersistenceResult, Error>,
-        identity: RDPConnectionIdentity
+        request: CredentialPersistenceRequest
     ) {
         // A delayed write can land after the user re-signed in with
         // different credentials; only mirror it on session state when it
         // matches what the session is now using.
-        let matchesCurrentDraft = draft.identity.hasSameConnectionIdentity(as: identity)
+        let matchesCurrentDraft = draft.identity.hasSameConnectionIdentity(as: request.key.identity)
         switch result {
         case .success(.saved):
-            if matchesCurrentDraft {
-                hasRememberedPassword = true
-                rememberPassword = true
+            if matchesCurrentDraft, case let .save(_, password) = request {
+                rememberedPassword = password
             }
-            // Reflect the save on the device profile, or the editor keeps
-            // showing remember-off and later renames orphan the entry.
-            launchStore?.recordCredentialPersistence(
-                for: draft.deviceID,
-                identity: identity,
-                remembered: true
-            )
         case .success(.deleted):
             if matchesCurrentDraft {
-                hasRememberedPassword = false
+                rememberedPassword = nil
             }
-            launchStore?.recordCredentialPersistence(
-                for: draft.deviceID,
-                identity: identity,
-                remembered: false
-            )
-        case .failure:
-            break
+        case let .failure(error):
+            let action = switch request {
+            case .save: "Password not saved to Keychain"
+            case .delete: "Password not removed from Keychain"
+            }
+            toast("\(action): \(error)", systemImage: "exclamationmark.triangle")
         }
-    }
-
-    private var canStartConnection: Bool {
-        !isConnecting && draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-    }
-
-    private var temporaryClipboardSharingRemainingSeconds: Int? {
-        guard let temporaryClipboardSharingExpiresAt else {
-            return nil
-        }
-        let remainingSeconds = temporaryClipboardSharingExpiresAt.timeIntervalSinceNow
-        return max(0, Int(ceil(remainingSeconds)))
-    }
-}
-
-// MARK: - Menu command surface
-
-@MainActor
-protocol RDPSessionCommandHandling: AnyObject {
-    var rdpStartSessionTitle: String { get }
-    var rdpCanStartSession: Bool { get }
-    var rdpCanCancelSession: Bool { get }
-    var rdpCanSyncClipboard: Bool { get }
-    var rdpCanStartTemporaryClipboardSharing: Bool { get }
-
-    func rdpStartSession()
-    func rdpCancelSession()
-    func rdpOpenDiagnostics()
-    func rdpSyncClipboard()
-    func rdpStartTemporaryClipboardSharing()
-}
-
-extension SessionViewController: RDPSessionCommandHandling {
-    var rdpStartSessionTitle: String {
-        sessionCommandState.startTitle
-    }
-
-    var rdpCanStartSession: Bool {
-        sessionCommandState.canStart
-    }
-
-    var rdpCanCancelSession: Bool {
-        sessionCommandState.canCancel
-    }
-
-    var rdpCanSyncClipboard: Bool {
-        sessionCommandState.canSyncClipboard
-    }
-
-    var rdpCanStartTemporaryClipboardSharing: Bool {
-        sessionCommandState.canShareClipboardTemporarily
-    }
-
-    func rdpStartSession() {
-        startConnection()
-    }
-
-    func rdpCancelSession() {
-        cancelConnection()
-    }
-
-    func rdpOpenDiagnostics() {
-        openDiagnosticsWindow()
-    }
-
-    func rdpSyncClipboard() {
-        syncClipboardNow()
-    }
-
-    func rdpStartTemporaryClipboardSharing() {
-        startTemporaryClipboardSharing()
     }
 }
 
@@ -1929,80 +1704,20 @@ private final class SessionMainActorSink: @unchecked Sendable {
         self.connectionID = connectionID
     }
 
+    /// Runs `operation` on the main queue in submission order, so frames
+    /// and audio stay ordered. The block keeps the sink alive: the session
+    /// thread releases it right after submitting the final update. The sink
+    /// holds the controller weakly, so this forms no cycle.
     func apply(_ operation: @escaping @MainActor (SessionViewController) -> Void) {
-        Task { @MainActor [weak self] in
-            guard let self,
-                  let controller,
-                  controller.acceptsConnectionEvent(id: connectionID)
-            else {
-                return
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard let controller = self.controller,
+                      controller.acceptsConnectionEvent(id: self.connectionID)
+                else {
+                    return
+                }
+                operation(controller)
             }
-            operation(controller)
         }
     }
-
-    /// Applies even after the connection has ended — for outcomes that are
-    /// not connection-scoped, like a keychain write that finished after the
-    /// session dropped and must still be reflected in tracked state.
-    func applyIgnoringConnectionState(_ operation: @escaping @MainActor (SessionViewController) -> Void) {
-        Task { @MainActor [weak self] in
-            guard let self,
-                  let controller,
-                  controller.isClosed == false
-            else {
-                return
-            }
-            operation(controller)
-        }
-    }
-}
-
-private enum SessionLocalClipboardPayload: Equatable {
-    case text(String)
-    case files([RDPClipboardLocalFile])
-    case empty
-    case unsupported(String)
-    case ignored(String)
-}
-
-private struct SessionRemoteClipboardFileTransfer: Equatable {
-    var files: [RDPClipboardRemoteFileTransferFile]
-    var currentFileOffset: Int
-    var streamID: UInt32
-    var expectedByteCount: UInt64?
-    var requestedRange: Bool
-    var totalExpectedByteCount: UInt64
-    var downloadedFileURLs: [URL]
-    var downloadDirectory: URL
-
-    var currentFile: RDPClipboardRemoteFileTransferFile? {
-        guard files.indices.contains(currentFileOffset) else {
-            return nil
-        }
-        return files[currentFileOffset]
-    }
-}
-
-func compactViewerMetricsSummary(
-    metrics: RDPRenderMetrics,
-    framePacing: RDPFramePacingState
-) -> String? {
-    var parts: [String] = []
-    let framesPerSecond = metrics.rollingFramesPerSecond ?? metrics.averageFramesPerSecond
-    if let framesPerSecond {
-        parts.append(String(format: "%.1f fps", framesPerSecond))
-    }
-    if let lastDecodeMilliseconds = metrics.lastDecodeMilliseconds {
-        parts.append(String(format: "decode %.1f ms", lastDecodeMilliseconds))
-    }
-    if let wireMegabitsPerSecond = metrics.rollingWireMegabitsPerSecond {
-        parts.append(String(format: "rx %.1f Mbps", wireMegabitsPerSecond))
-    }
-    if let displayLinkFramesPerSecond = framePacing.displayLinkFramesPerSecond {
-        parts.append(String(format: "%.0f Hz", displayLinkFramesPerSecond))
-    }
-    guard parts.isEmpty == false else {
-        return nil
-    }
-    return parts.joined(separator: "  ·  ")
 }

@@ -28,7 +28,9 @@ struct HelpView: View {
                     HelpBody(
                         "Transient network failures — like the first-time local-network " +
                             "permission prompt — retry automatically. Connecting to a PC " +
-                            "that already has a session focuses its window."
+                            "that already has a session focuses its window, and connects " +
+                            "again if that session ended. Changes saved to a PC apply to " +
+                            "its open window from the next connection."
                     )
                 }
 
@@ -39,9 +41,13 @@ struct HelpView: View {
                             "menu to resize the remote desktop with the window."
                     )
                     HelpBody(
-                        "The ⋯ menu in the titlebar holds clipboard sharing (always-on, " +
-                            "one-shot sync, or 30-second time-boxed), remote audio, window " +
-                            "size matching, the performance overlay, and Stats for Nerds."
+                        "The ⋯ menu in the titlebar holds Disconnect, clipboard sharing " +
+                            "(for the session or for 30 seconds, and Sync Now to send the " +
+                            "clipboard again), remote audio, window size matching, the " +
+                            "performance overlay, and " +
+                            "Stats for Nerds. While the remote desktop has your keyboard, " +
+                            "RDPeek's own ⌘ shortcuts go to it too, so use this menu or the " +
+                            "Session menu in the menu bar instead."
                     )
                     HelpBody(
                         "Use the Displays menu in the titlebar to view all server-reported " +
@@ -51,25 +57,47 @@ struct HelpView: View {
                             "server must expose the displays you want to view."
                     )
                     HelpBody(
-                        "Certificate warnings appear as a banner at the top; Trust pins " +
-                            "that certificate for that host and port."
+                        "Clipboard sharing can be turned on, or shared for 30 seconds, " +
+                            "at any time in a session. To allow that, RDPeek always joins " +
+                            "the remote clipboard, so a Windows PC empties its clipboard " +
+                            "when you connect, even with sharing off. Nothing is copied " +
+                            "either way until you share."
+                    )
+                    HelpBody(
+                        "A certificate this Mac does not trust stops the connection " +
+                            "before any credential is sent. Trust and Connect pins that " +
+                            "certificate for that host and port; a different certificate " +
+                            "from that host that this Mac does not trust is then refused " +
+                            "until you trust it instead."
+                    )
+                    HelpBody(
+                        "With “\(UntrustedCertificatesOption.title)” on, a PC connects " +
+                            "without asking when neither this Mac nor RDPeek trusts the " +
+                            "certificate, and sends your credentials. Anyone able to " +
+                            "intercept the connection could pose as the server and " +
+                            "capture them. A certificate that replaced one you trusted " +
+                            "is still refused."
                     )
                 }
 
                 HelpSection(title: "Keyboard Shortcuts", systemImage: "keyboard") {
                     Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 7) {
                         HelpShortcutRow("⌘N", "Add PC")
+                        HelpShortcutRow("Arrow keys", "Select another PC")
                         HelpShortcutRow("Return", "Connect to the selected PC")
                         HelpShortcutRow("Delete", "Delete the selected PC")
-                        HelpShortcutRow("⌘R", "Reconnect (in a session)")
-                        HelpShortcutRow("⌘.", "Disconnect / cancel connecting")
-                        HelpShortcutRow("⇧⌘D", "Stats for Nerds")
+                        HelpShortcutRow("⌘R", "Reconnect a session that ended")
+                        HelpShortcutRow("⌘.", "Cancel connecting")
                         HelpShortcutRow("⌘,", "Settings")
                     }
                     HelpBody(
                         "Inside a session, shortcuts with ⌘ or ⌃ are sent to the remote " +
-                            "desktop as scancodes, so Windows and Linux shortcuts work; " +
-                            "plain typing is sent as Unicode."
+                            "desktop as scancodes, so Windows and Linux shortcuts work. " +
+                            "Left ⌥ is Alt; right ⌥ types the character it gives on your " +
+                            "Mac, such as @ with ⌥L on a German layout, and is Alt otherwise. " +
+                            "The remote desktop is told your Mac's keyboard layout; keys " +
+                            "that type the same character there are sent as scancodes, so " +
+                            "a remote input method sees them, and other text as Unicode."
                     )
                 }
 
@@ -78,8 +106,8 @@ struct HelpView: View {
                         "PC profiles live in app preferences and never contain " +
                             "passwords. Passwords are stored in your macOS Keychain, one " +
                             "item per user and host, and are removed when you delete the " +
-                            "PC or turn off remembering. Trusted certificate fingerprints " +
-                            "are pinned per host."
+                            "last PC that remembers them or turn off remembering. Trusted " +
+                            "certificate fingerprints are pinned per host and port."
                     )
                 }
 
@@ -95,17 +123,17 @@ struct HelpView: View {
                             "prompt on future connections."
                     )
                     HelpBody(
-                        "Sign-in fails — use “Use different credentials…” on the failure " +
-                            "screen. Note that some servers report a wrong password only " +
-                            "as a timeout."
+                        "Sign-in fails — RDPeek asks for the user name and password " +
+                            "again; on other failures, use “Use different credentials…”. " +
+                            "Note that some servers report a wrong password only as a timeout."
                     )
                     HelpBody(
                         "No sound — enable “Play remote audio” on the PC and reconnect; " +
                             "audio is negotiated when the connection starts."
                     )
                     HelpBody(
-                        "Choppy video — open Stats for Nerds (⇧⌘D) or the performance " +
-                            "overlay to see fps, decode times, and bandwidth."
+                        "Choppy video — open Stats for Nerds or the performance overlay " +
+                            "from the ⋯ menu to see fps, decode times, and bandwidth."
                     )
                 }
 

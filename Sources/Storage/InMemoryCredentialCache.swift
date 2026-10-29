@@ -1,7 +1,7 @@
-import Foundation
-
-/// Holds passwords the user chose not to persist, for the lifetime of the
-/// app process only. Keyed by the connection identity's account name.
+/// Holds the passwords sessions signed in with and the PC editor saved
+/// during this app run, remembered in the Keychain or not, so PCs that
+/// don't remember theirs connect without asking. Kept for the lifetime of
+/// the app process only. Keyed by the connection identity's account name.
 @MainActor
 final class InMemoryCredentialCache {
     static let shared = InMemoryCredentialCache()
@@ -18,11 +18,5 @@ final class InMemoryCredentialCache {
 
     func removePassword(for account: String) {
         passwords.removeValue(forKey: account)
-    }
-
-    /// Test hook: the cache is a process-wide singleton, so tests reset it
-    /// between cases.
-    func removeAll() {
-        passwords.removeAll()
     }
 }

@@ -10,6 +10,7 @@ struct DeviceCardView: View {
     var onDuplicate: () -> Void
     var onDelete: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
     var body: some View {
@@ -30,7 +31,8 @@ struct DeviceCardView: View {
             radius: isHovering ? 14 : 5,
             y: isHovering ? 8 : 2
         )
-        .scaleEffect(isHovering ? 1.02 : 1)
+        // Under Reduce Motion, hovering only deepens the shadow.
+        .scaleEffect(isHovering && reduceMotion == false ? 1.02 : 1)
         .animation(AppTheme.cardSpring, value: isHovering)
         .animation(AppTheme.cardSpring, value: isSelected)
         .onHover { hovering in
@@ -73,7 +75,23 @@ struct DeviceCardView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: device.displayName))
-        .accessibilityHint(Text("Double-tap to connect."))
+        .accessibilityValue(Text(verbatim: [device.subtitle, lastUsedText].compactMap(\.self).joined(separator: ", ")))
+        .accessibilityHint(Text("Connects to this PC."))
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        // The default action is VoiceOver's VO-Space; the rest mirror the
+        // context menu.
+        .accessibilityAction(.default) {
+            onConnect()
+        }
+        .accessibilityAction(named: Text("Edit")) {
+            onEdit()
+        }
+        .accessibilityAction(named: Text("Duplicate")) {
+            onDuplicate()
+        }
+        .accessibilityAction(named: Text("Delete")) {
+            onDelete()
+        }
     }
 
     private var thumbnail: some View {
@@ -125,8 +143,7 @@ struct DeviceCardView: View {
                 .help("Connect")
                 .padding(10)
                 .opacity(isHovering ? 1 : 0)
-                .scaleEffect(isHovering ? 1 : 0.7)
-                .animation(AppTheme.cardSpring, value: isHovering)
+                .scaleEffect(isHovering || reduceMotion ? 1 : 0.7)
             }
         }
     }
@@ -142,8 +159,8 @@ struct DeviceCardView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
-            if let lastConnectedAt = device.lastConnectedAt {
-                Text(verbatim: "Last used \(Self.relativeFormatter.localizedString(for: lastConnectedAt, relativeTo: Date()))")
+            if let lastUsedText {
+                Text(verbatim: lastUsedText)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
@@ -152,6 +169,13 @@ struct DeviceCardView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// "Last used 5 min. ago", or nil for a PC never connected to.
+    private var lastUsedText: String? {
+        device.lastConnectedAt.map { lastConnectedAt in
+            "Last used \(Self.relativeFormatter.localizedString(for: lastConnectedAt, relativeTo: Date()))"
+        }
     }
 
     private static let relativeFormatter: RelativeDateTimeFormatter = {

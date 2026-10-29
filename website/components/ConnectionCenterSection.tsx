@@ -30,7 +30,8 @@ export function ConnectionCenterSection() {
           </p>
           <p className="mt-3 leading-relaxed text-muted">
             Defaults for new PCs live in Settings, and deleting a PC cleans up its
-            Keychain entry — with a confirmation first.
+            Keychain entry unless another PC still remembers it — with a
+            confirmation first.
           </p>
         </Reveal>
         <Reveal delay={0.1}>

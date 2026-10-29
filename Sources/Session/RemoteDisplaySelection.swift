@@ -4,22 +4,22 @@ import RDPKit
 /// Explicit choices keep the complete server descriptor, never an array index.
 enum RemoteDisplaySelection: Equatable {
     case all
-    case only([RDPMonitorDefinition])
+    case only([RDPRemoteMonitor])
 
-    func selected(in monitors: [RDPMonitorDefinition]) -> [RDPMonitorDefinition] {
+    func selected(in monitors: [RDPRemoteMonitor]) -> [RDPRemoteMonitor] {
         switch self {
         case .all: monitors
         case let .only(selected): monitors.filter { selected.contains($0) }
         }
     }
 
-    mutating func reconcile(with monitors: [RDPMonitorDefinition]) {
+    mutating func reconcile(with monitors: [RDPRemoteMonitor]) {
         guard case .only = self else { return }
         let surviving = selected(in: monitors)
         self = surviving.isEmpty ? .all : .only(surviving)
     }
 
-    mutating func toggle(_ monitor: RDPMonitorDefinition, in monitors: [RDPMonitorDefinition]) {
+    mutating func toggle(_ monitor: RDPRemoteMonitor, in monitors: [RDPRemoteMonitor]) {
         guard monitors.contains(monitor) else { return }
         var selected = selected(in: monitors)
         if selected.contains(monitor) {
@@ -36,11 +36,11 @@ enum RemoteDisplaySelection: Equatable {
 /// Local destination rectangles use AppKit's bottom-left coordinates.
 struct RemoteDisplayViewport: Equatable {
     let frameSize: CGSize
-    let monitors: [RDPMonitorDefinition]
+    let monitors: [RDPRemoteMonitor]
     let sourceRect: CGRect
     let visibleRects: [CGRect]
 
-    init(frameSize: CGSize, monitors: [RDPMonitorDefinition], selection: RemoteDisplaySelection = .all) {
+    init(frameSize: CGSize, monitors: [RDPRemoteMonitor], selection: RemoteDisplaySelection = .all) {
         self.frameSize = frameSize
         let frameRect = CGRect(origin: .zero, size: frameSize)
         let layout = Self.validatedLayout(monitors, frameSize: frameSize)
@@ -55,7 +55,7 @@ struct RemoteDisplayViewport: Equatable {
 
     init(frame: RDPFrameMetadata, selection: RemoteDisplaySelection = .all) {
         self.init(frameSize: CGSize(width: Int(frame.width), height: Int(frame.height)),
-                  monitors: frame.monitorDefinitions, selection: selection)
+                  monitors: frame.monitors, selection: selection)
     }
 
     func destinationRect(in bounds: CGRect) -> CGRect {
@@ -81,8 +81,9 @@ struct RemoteDisplayViewport: Equatable {
               point.x >= destination.minX, point.x < destination.maxX,
               point.y >= destination.minY, point.y < destination.maxY else { return nil }
         let scale = sourceRect.width / destination.width
-        let x = sourceRect.minX + (point.x - destination.minX) * scale
-        // The very bottom edge still refers to the last row, not the next pixel.
+        // Rounding a clamped edge after adding the source offset can reach
+        // the exclusive maximum; keep both axes on the final source pixel.
+        let x = min(sourceRect.maxX - 1, sourceRect.minX + (point.x - destination.minX) * scale)
         let y = min(sourceRect.maxY - 1, sourceRect.minY + (destination.maxY - point.y) * scale)
         let remote = CGPoint(x: floor(x), y: floor(y))
         guard visibleRects.contains(where: { $0.contains(remote) }),
@@ -91,15 +92,13 @@ struct RemoteDisplayViewport: Equatable {
         return RDPRemotePoint(x: UInt16(remote.x), y: UInt16(remote.y))
     }
 
-    private static func validatedLayout(_ monitors: [RDPMonitorDefinition], frameSize: CGSize) -> [CGRect] {
+    private static func validatedLayout(_ monitors: [RDPRemoteMonitor], frameSize: CGSize) -> [CGRect] {
         guard frameSize.width.isFinite, frameSize.height.isFinite,
-              frameSize.width > 0, frameSize.height > 0,
-              monitors.allSatisfy({ $0.left <= $0.right && $0.top <= $0.bottom }),
-              let minX = monitors.map(\.left).min(), let minY = monitors.map(\.top).min() else { return [] }
+              frameSize.width > 0, frameSize.height > 0 else { return [] }
+        // RDPKit normalizes server origins and supplies half-open output rectangles.
         let rectangles = monitors.map { monitor in
-            CGRect(x: Double(monitor.left) - Double(minX), y: Double(monitor.top) - Double(minY),
-                   width: Double(monitor.right) - Double(monitor.left) + 1,
-                   height: Double(monitor.bottom) - Double(monitor.top) + 1)
+            CGRect(x: Int(monitor.rect.left), y: Int(monitor.rect.top),
+                   width: Int(monitor.rect.width), height: Int(monitor.rect.height))
         }
         guard rectangles.allSatisfy({ $0.width > 0 && $0.height > 0 && $0.maxX <= frameSize.width && $0.maxY <= frameSize.height }) else {
             return []
@@ -117,4 +116,27 @@ struct RemoteDisplayViewport: Equatable {
 
 func remoteDisplayAllowsWindowMatching(hasPresentedFrame: Bool, reportedMonitorCount: Int) -> Bool {
     hasPresentedFrame && reportedMonitorCount <= 1
+}
+
+/// Re-sends a desktop layout to recover video without replacing its topology.
+func remoteDisplayKeyframeRequest(
+    monitors: [RDPRemoteMonitor],
+    graphicsOutputRect: RDPFrameRect?,
+    initialScaleFactors: RDPDisplayScaleFactors,
+    lastRequest: RDPDisplayRequest?
+) -> RDPDisplayRequest? {
+    // Display Control's convenience request describes one monitor. Unknown or
+    // multiple-monitor layouts must not be replaced just to recover video.
+    guard monitors.count == 1, let monitor = monitors.first,
+          monitor.isPrimary, monitor.rect.left == 0, monitor.rect.top == 0,
+          graphicsOutputRect == nil || graphicsOutputRect == monitor.rect else { return nil }
+    let rect = monitor.rect
+    if let lastRequest, lastRequest.width == UInt32(rect.width), lastRequest.height == UInt32(rect.height) {
+        return lastRequest
+    }
+    let request = RDPDisplayRequest(width: UInt32(rect.width), height: UInt32(rect.height),
+                                    scaleFactors: initialScaleFactors)
+    // Display Control clamps small/large desktops and rounds odd widths.
+    guard request.width == UInt32(rect.width), request.height == UInt32(rect.height) else { return nil }
+    return request
 }

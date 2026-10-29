@@ -13,10 +13,10 @@ enum SessionPhase: Equatable {
     }
 }
 
+/// A server certificate RDPeek refused, offered for trust.
 struct SessionCertificateNotice: Equatable {
     var title: String
     var message: String
-    var systemImage: String
     var canTrust: Bool
 }
 
@@ -29,7 +29,7 @@ struct SessionToast: Equatable, Identifiable {
 struct SessionDisplayChoice: Identifiable, Equatable {
     var id: Int
     var label: String
-    var monitor: RDPMonitorDefinition
+    var monitor: RDPRemoteMonitor
     var isSelected: Bool
     var canToggle: Bool
 }
@@ -55,6 +55,9 @@ final class SessionHUDModel: ObservableObject {
     @Published var canSyncClipboard = false
     @Published var canShareClipboardTemporarily = false
     @Published var temporaryClipboardSecondsRemaining: Int?
+    /// The Session menu's title for starting a connection, so the HUD's
+    /// Reconnect controls say the same.
+    @Published var startTitle = "Connect"
     @Published var canReconnect = false
     @Published var canCancel = false
 
@@ -75,16 +78,33 @@ final class SessionHUDModel: ObservableObject {
     var onSetAudioPlayback: (Bool) -> Void = { _ in }
     var onSetFollowWindowSize: (Bool) -> Void = { _ in }
     var onSelectAllDisplays: () -> Void = {}
-    var onToggleDisplay: (RDPMonitorDefinition) -> Void = { _ in }
+    var onToggleDisplay: (RDPRemoteMonitor) -> Void = { _ in }
+    var onSetMetricsOverlayVisible: (Bool) -> Void = { _ in }
     var onOpenDiagnostics: () -> Void = {}
 
     private var toastDismissTask: Task<Void, Never>?
 
+    /// Assigns only a changed value, so a render that changes nothing
+    /// publishes nothing to the SwiftUI layers.
+    func update<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<SessionHUDModel, Value>, to value: Value) {
+        if self[keyPath: keyPath] != value {
+            self[keyPath: keyPath] = value
+        }
+    }
+
+    /// SessionToastRoot animates the toast in and out. VoiceOver announces
+    /// it, as it is gone before VoiceOver could reach it.
     func showToast(_ text: String, systemImage: String) {
         let nextToast = SessionToast(text: text, systemImage: systemImage)
-        withAnimation(.spring(duration: 0.35)) {
-            toast = nextToast
-        }
+        toast = nextToast
+        NSAccessibility.post(
+            element: NSApp.mainWindow ?? NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [
+                .announcement: text,
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ]
+        )
         toastDismissTask?.cancel()
         toastDismissTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 2_600_000_000)
@@ -94,9 +114,7 @@ final class SessionHUDModel: ObservableObject {
             else {
                 return
             }
-            withAnimation(.easeOut(duration: 0.3)) {
-                self.toast = nil
-            }
+            self.toast = nil
         }
     }
 }
@@ -190,10 +208,17 @@ private struct ConnectingStatusText: View {
     @State private var dotCount = 1
 
     var body: some View {
-        Text(verbatim: "Connecting" + String(repeating: ".", count: dotCount))
+        // The widest text holds the width, so the centered word stays put
+        // while the dots change.
+        Text(verbatim: "Connecting...")
+            .hidden()
+            .overlay(alignment: .leading) {
+                Text(verbatim: "Connecting" + String(repeating: ".", count: dotCount))
+            }
             .font(.body)
-            .monospacedDigit()
             .foregroundStyle(.white.opacity(0.65))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: "Connecting"))
             .task {
                 while Task.isCancelled == false {
                     try? await Task.sleep(nanoseconds: 450_000_000)
@@ -204,22 +229,26 @@ private struct ConnectingStatusText: View {
 }
 
 private struct PulsingBeacon: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isAnimating = false
 
     var body: some View {
         ZStack {
-            ForEach(0 ..< 3, id: \.self) { index in
-                Circle()
-                    .stroke(Color.white.opacity(0.35), lineWidth: 1.5)
-                    .frame(width: 104, height: 104)
-                    .scaleEffect(isAnimating ? 2.1 : 1)
-                    .opacity(isAnimating ? 0 : 0.7)
-                    .animation(
-                        .easeOut(duration: 2.6)
-                            .repeatForever(autoreverses: false)
-                            .delay(Double(index) * 0.85),
-                        value: isAnimating
-                    )
+            // The expanding rings are motion only; Reduce Motion drops them.
+            if reduceMotion == false {
+                ForEach(0 ..< 3, id: \.self) { index in
+                    Circle()
+                        .stroke(Color.white.opacity(0.35), lineWidth: 1.5)
+                        .frame(width: 104, height: 104)
+                        .scaleEffect(isAnimating ? 2.1 : 1)
+                        .opacity(isAnimating ? 0 : 0.7)
+                        .animation(
+                            .easeOut(duration: 2.6)
+                                .repeatForever(autoreverses: false)
+                                .delay(Double(index) * 0.85),
+                            value: isAnimating
+                        )
+                }
             }
 
             Circle()
@@ -404,7 +433,7 @@ private struct SessionEndedOverlay: View {
                         Button {
                             model.onReconnect()
                         } label: {
-                            Label("Reconnect", systemImage: "arrow.clockwise")
+                            Label(model.startTitle, systemImage: "arrow.clockwise")
                                 .frame(minWidth: 110)
                         }
                         .buttonStyle(.borderedProminent)
@@ -432,12 +461,13 @@ private struct SessionEndedOverlay: View {
 
 struct SessionBannerRoot: View {
     @ObservedObject var model: SessionHUDModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack {
             if let notice = model.certificateNotice {
                 SessionCertificateBanner(model: model, notice: notice)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
             }
         }
         .animation(.spring(duration: 0.45, bounce: 0.25), value: model.certificateNotice)
@@ -450,9 +480,9 @@ private struct SessionCertificateBanner: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: notice.systemImage)
+            Image(systemName: "lock.trianglebadge.exclamationmark.fill")
                 .font(.title3)
-                .foregroundStyle(notice.canTrust ? Color.yellow : Color.green)
+                .foregroundStyle(.yellow)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(verbatim: notice.title)
@@ -460,12 +490,13 @@ private struct SessionCertificateBanner: View {
                 Text(verbatim: notice.message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                    .lineLimit(4)
                     .frame(maxWidth: 380, alignment: .leading)
+                    .textSelection(.enabled)
             }
 
             if notice.canTrust {
-                Button("Trust") {
+                Button("Trust and Connect") {
                     model.onTrustCertificate()
                 }
                 .buttonStyle(.borderedProminent)
@@ -488,6 +519,7 @@ private struct SessionCertificateBanner: View {
 
 struct SessionToastRoot: View {
     @ObservedObject var model: SessionHUDModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack {
@@ -507,7 +539,7 @@ struct SessionToastRoot: View {
                 }
                 .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
                 .padding(.bottom, 24)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 .id(toast.id)
             }
         }
@@ -523,7 +555,7 @@ struct SessionMetricsRoot: View {
             Spacer()
             HStack {
                 Spacer()
-                if model.isMetricsOverlayVisible, let summary = model.metricsSummary {
+                if let summary = visibleSummary {
                     Text(verbatim: summary)
                         .font(.caption.monospaced())
                         .foregroundStyle(.white.opacity(0.85))
@@ -535,7 +567,12 @@ struct SessionMetricsRoot: View {
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: model.isMetricsOverlayVisible)
+        .animation(.easeInOut(duration: 0.25), value: visibleSummary != nil)
+    }
+
+    /// The session publishes a summary only while the desktop shows.
+    private var visibleSummary: String? {
+        model.isMetricsOverlayVisible ? model.metricsSummary : nil
     }
 }
 
@@ -587,7 +624,7 @@ struct SessionTitlebarAccessory: View {
                 Button {
                     model.onReconnect()
                 } label: {
-                    Label("Reconnect", systemImage: "arrow.clockwise")
+                    Label(model.startTitle, systemImage: "arrow.clockwise")
                 }
                 .disabled(model.canReconnect == false)
 
@@ -679,7 +716,7 @@ struct SessionTitlebarAccessory: View {
     private var metricsBinding: Binding<Bool> {
         Binding(
             get: { model.isMetricsOverlayVisible },
-            set: { model.isMetricsOverlayVisible = $0 }
+            set: { model.onSetMetricsOverlayVisible($0) }
         )
     }
 }

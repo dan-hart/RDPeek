@@ -13,7 +13,7 @@ lightweight, and Mac-first.
   recent use
 - **Full-bleed sessions** — edge-to-edge video under a transparent titlebar,
   with an animated connecting overlay, a status pill, and a session menu
-- **Hardware-decoded video** — H.264 (AVC420/AVC444) and HEVC via
+- **Hardware-decoded video** — H.264 (AVC420/AVC444) via
   VideoToolbox, presented on the display link for smooth pacing
 - **Remote display selection** — view all server-reported displays or any
   subset together, with their relative arrangement preserved
@@ -22,8 +22,8 @@ lightweight, and Mac-first.
 - **Your keyboard, their shortcuts** — while a session has focus, ⌘ and ⌃
   chords go to the remote desktop (⌘ maps to the Windows key, so ⌘R is
   Win+R), and modifier state survives focus changes without sticking
-- **Clipboard both ways** — text and files (up to 32 MiB), always-on,
-  one-shot sync, or time-boxed 30-second sharing
+- **Clipboard both ways** — text and files (up to 32 MiB), shared for the
+  whole session or for 30 seconds at a time
 - **Remote audio** — optional RDPSND playback
 - **Credentials done right** — passwords live in your Keychain (or in
   memory for the current run only), and sessions that need a password
@@ -70,9 +70,9 @@ Press **⌘?** in the app for the full shortcut list and usage details.
 
 ## Building from Source
 
-Requirements: Xcode 16+ (Swift 6) and
+Requirements: Xcode 26+ (Swift 6.2) and
 [XcodeGen](https://github.com/yonaskolb/XcodeGen) to generate the project
-(the `.xcodeproj` is not committed).
+(the `.xcodeproj` is not committed, except its `Package.resolved`).
 
 ```sh
 xcodegen generate
@@ -84,15 +84,8 @@ open "DerivedData/Build/Products/Debug/RDPeek.app"
 Or open `RDPeek.xcodeproj` in Xcode after generating and run the `RDPeek`
 scheme. Run the test suite with `xcodebuild test` using the same flags;
 warnings are errors, and `swiftlint lint --strict` must stay clean. CI runs
-lint, an unsigned build, and the tests on every push and pull request.
-
-This feature branch uses [dan-hart/RDPKit](https://github.com/dan-hart/RDPKit),
-based on upstream RDPKit 0.3.1, pinned to an exact revision in `project.yml`.
-The dependency branch exposes server monitor metadata through decoded frames
-and fixes coalesced graphics-message handling and AVC444 regional luma retention.
-It is separate from the RDPeek changes so the package API can be proposed to
-[steelbrain/RDPKit](https://github.com/steelbrain/RDPKit) independently. Once
-upstream releases that API, switch the package URL back and pin that version.
+lint, an unsigned build, and the tests on pushes to `main` and on pull
+requests.
 
 ## Project Layout
 
@@ -102,7 +95,8 @@ Sources/App/              App entry, scenes, commands, settings, theme
 Sources/ConnectionCenter/ Device grid, cards, editor sheet, list model
 Sources/Session/          Session window, view controller, canvas, input, HUD
 Sources/Diagnostics/      Stats for Nerds window
-Sources/Storage/          Device profiles, Keychain, trusted certificates
+Sources/Storage/          Device profiles, Keychain passwords and client
+                          licenses, in-memory password cache, trusted certs
 Sources/Resources/        Asset catalog and the app-icon pipeline
 Tests/                    Unit tests (input state, stores, session gating)
 website/                  rdpeek.com (Next.js, deployed on Vercel)
@@ -110,7 +104,7 @@ website/                  rdpeek.com (Next.js, deployed on Vercel)
 
 The connection, clipboard, display-control, audio, and credential logic in
 `Sources/Session` is adapted from RDPKit's example client, which is the
-reference implementation for driving `RDPPreflightClient`.
+reference implementation for driving `RDPSessionClient`.
 
 Contributing? [AGENTS.md](AGENTS.md) documents the conventions this repo
 holds itself to — layer boundaries, build and lint gates, and commit style.

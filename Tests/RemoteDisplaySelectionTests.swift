@@ -4,12 +4,12 @@ import XCTest
 
 final class RemoteDisplaySelectionTests: XCTestCase {
     private let monitors = [
-        RDPMonitorDefinition(left: -100, top: 0, right: -1, bottom: 99, flags: 0),
-        RDPMonitorDefinition(left: 0, top: 0, right: 99, bottom: 99, flags: 1),
-        RDPMonitorDefinition(left: 100, top: 0, right: 199, bottom: 99, flags: 0),
+        RDPRemoteMonitor(rect: RDPFrameRect(left: 0, top: 0, right: 100, bottom: 100), isPrimary: false),
+        RDPRemoteMonitor(rect: RDPFrameRect(left: 100, top: 0, right: 200, bottom: 100), isPrimary: true),
+        RDPRemoteMonitor(rect: RDPFrameRect(left: 200, top: 0, right: 300, bottom: 100), isPrimary: false),
     ]
 
-    func testAllDisplaysNormalizesNegativeOrigins() {
+    func testAllDisplaysUsesNormalizedOutputCoordinates() {
         let viewport = RemoteDisplayViewport(frameSize: CGSize(width: 300, height: 100), monitors: monitors)
         XCTAssertEqual(viewport.sourceRect, CGRect(x: 0, y: 0, width: 300, height: 100))
         XCTAssertEqual(viewport.remotePoint(from: CGPoint(x: 5, y: 50), in: CGRect(x: 0, y: 0, width: 300, height: 100)),
@@ -56,17 +56,17 @@ final class RemoteDisplaySelectionTests: XCTestCase {
     }
 
     func testRejectsReversedOverlappingDuplicateAndExtremeRectangles() {
-        let reversed = RDPMonitorDefinition(left: 100, top: 0, right: 0, bottom: 99, flags: 0)
-        let extreme = RDPMonitorDefinition(left: .min, top: 0, right: .max, bottom: 99, flags: 0)
-        let overlap = RDPMonitorDefinition(left: -50, top: 0, right: 49, bottom: 99, flags: 0)
+        let reversed = RDPRemoteMonitor(rect: RDPFrameRect(left: 100, top: 0, right: 1, bottom: 100), isPrimary: false)
+        let extreme = RDPRemoteMonitor(rect: RDPFrameRect(left: 0, top: 0, right: 65535, bottom: 100), isPrimary: false)
+        let overlap = RDPRemoteMonitor(rect: RDPFrameRect(left: 50, top: 0, right: 150, bottom: 100), isPrimary: false)
         for layout in [[reversed], [extreme], [monitors[0], monitors[0]], [monitors[0], overlap]] {
             XCTAssertTrue(RemoteDisplayViewport(frameSize: CGSize(width: 300, height: 100), monitors: layout).monitors.isEmpty)
         }
     }
 
     func testStackedLayoutPreservesVerticalArrangementAndNonzeroBounds() {
-        let above = RDPMonitorDefinition(left: 0, top: -100, right: 99, bottom: -1, flags: 0)
-        let primary = RDPMonitorDefinition(left: 0, top: 0, right: 199, bottom: 99, flags: 1)
+        let above = RDPRemoteMonitor(rect: RDPFrameRect(left: 0, top: 0, right: 100, bottom: 100), isPrimary: false)
+        let primary = RDPRemoteMonitor(rect: RDPFrameRect(left: 0, top: 100, right: 200, bottom: 200), isPrimary: true)
         let viewport = RemoteDisplayViewport(frameSize: CGSize(width: 200, height: 200), monitors: [above, primary])
         let bounds = CGRect(x: 10, y: 20, width: 200, height: 200)
         XCTAssertNil(viewport.remotePoint(from: CGPoint(x: 160, y: 170), in: bounds))
@@ -85,7 +85,7 @@ final class RemoteDisplaySelectionTests: XCTestCase {
     }
 
     func testInvalidOrUnavailableLayoutUsesCompleteFrame() {
-        let invalid = RDPMonitorDefinition(left: 0, top: 0, right: -1, bottom: 100, flags: 0)
+        let invalid = RDPRemoteMonitor(rect: RDPFrameRect(left: 0, top: 0, right: 0, bottom: 101), isPrimary: false)
         for layout in [[], [invalid], monitors] {
             let viewport = RemoteDisplayViewport(frameSize: CGSize(width: 50, height: 50), monitors: layout)
             XCTAssertTrue(viewport.monitors.isEmpty)
@@ -94,7 +94,7 @@ final class RemoteDisplaySelectionTests: XCTestCase {
     }
 
     func testIncompleteLayoutUsesCompleteFrameWithoutHidingPixelsOrInput() {
-        let monitor = RDPMonitorDefinition(left: 0, top: 0, right: 99, bottom: 99, flags: 1)
+        let monitor = RDPRemoteMonitor(rect: RDPFrameRect(left: 0, top: 0, right: 100, bottom: 100), isPrimary: true)
         for size in [CGSize(width: 300, height: 100), CGSize(width: 100, height: 300)] {
             let viewport = RemoteDisplayViewport(frameSize: size, monitors: [monitor])
             let bounds = CGRect(origin: .zero, size: size)
@@ -104,4 +104,43 @@ final class RemoteDisplaySelectionTests: XCTestCase {
                            RDPRemotePoint(x: UInt16(size.width - 1), y: UInt16(size.height - 1)))
         }
     }
+    func testKeyframeRecoveryNeverReplacesMultipleOrUnknownDisplays() {
+        let previous = RDPDisplayRequest(width: 1280, height: 800, scaleFactors: RDPDisplayScaleFactors(backingScaleFactor: 2))
+        for layout in [[], monitors] {
+            XCTAssertNil(remoteDisplayKeyframeRequest(monitors: layout, graphicsOutputRect: nil,
+                                                      initialScaleFactors: previous.scaleFactors, lastRequest: previous))
+        }
+    }
+
+    func testKeyframeRecoveryUsesWholeReportedDesktopAndPreservesMatchingScale() throws {
+        let monitor = RDPRemoteMonitor(rect: RDPFrameRect(left: 0, top: 0, right: 1920, bottom: 1080), isPrimary: true)
+        let scale = RDPDisplayScaleFactors(backingScaleFactor: 2)
+        let old = RDPDisplayRequest(width: 1280, height: 800, scaleFactors: scale)
+        let request = try XCTUnwrap(remoteDisplayKeyframeRequest(monitors: [monitor], graphicsOutputRect: monitor.rect,
+                                                                initialScaleFactors: scale, lastRequest: old))
+        XCTAssertEqual(request.width, 1920)
+        XCTAssertEqual(request.height, 1080)
+        XCTAssertEqual(request.scaleFactors, scale)
+        let matched = RDPDisplayRequest(width: 1920, height: 1080, scaleFactors: RDPDisplayScaleFactors(backingScaleFactor: 1))
+        XCTAssertEqual(remoteDisplayKeyframeRequest(monitors: [monitor], graphicsOutputRect: nil,
+                                                    initialScaleFactors: scale, lastRequest: matched), matched)
+    }
+
+    func testKeyframeRecoveryRejectsIncompleteOrUnrepresentableLayouts() {
+        let scale = RDPDisplayScaleFactors(backingScaleFactor: 1)
+        for rect in [
+            RDPFrameRect(left: 0, top: 0, right: 99, bottom: 100),
+            RDPFrameRect(left: 0, top: 0, right: 1921, bottom: 1080),
+            RDPFrameRect(left: 0, top: 0, right: 9000, bottom: 1080),
+            RDPFrameRect(left: 100, top: 0, right: 2020, bottom: 1080),
+        ] {
+            XCTAssertNil(remoteDisplayKeyframeRequest(monitors: [RDPRemoteMonitor(rect: rect, isPrimary: true)],
+                                                      graphicsOutputRect: nil, initialScaleFactors: scale, lastRequest: nil))
+        }
+        let monitor = RDPRemoteMonitor(rect: RDPFrameRect(left: 0, top: 0, right: 1920, bottom: 1080), isPrimary: true)
+        XCTAssertNil(remoteDisplayKeyframeRequest(monitors: [monitor],
+                                                  graphicsOutputRect: RDPFrameRect(left: 0, top: 0, right: 3840, bottom: 1080),
+                                                  initialScaleFactors: scale, lastRequest: nil))
+    }
+
 }

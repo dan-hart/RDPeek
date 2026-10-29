@@ -1,28 +1,26 @@
 import SwiftUI
 
-enum NewDeviceDefaultsKey {
-    static let clipboard = "new-device-clipboard"
-    static let audio = "new-device-audio"
-    static let hideCertificateWarnings = "new-device-hide-cert-warnings"
-    static let timeout = "new-device-timeout"
-}
-
 struct SettingsView: View {
-    @AppStorage(NewDeviceDefaultsKey.clipboard) private var clipboardSharingEnabled = true
-    @AppStorage(NewDeviceDefaultsKey.audio) private var audioPlaybackEnabled = false
-    @AppStorage(NewDeviceDefaultsKey.hideCertificateWarnings) private var hideCertificateWarnings = false
-    @AppStorage(NewDeviceDefaultsKey.timeout) private var timeoutSeconds = 10
+    @AppStorage(NewDeviceDefaults.clipboardSharingKey)
+    private var clipboardSharingEnabled = NewDeviceDefaults.clipboardSharingEnabled
+    @AppStorage(NewDeviceDefaults.audioPlaybackKey)
+    private var audioPlaybackEnabled = NewDeviceDefaults.audioPlaybackEnabled
+    @AppStorage(NewDeviceDefaults.hideCertificateWarningsKey)
+    private var hideCertificateWarnings = NewDeviceDefaults.hideCertificateWarnings
+    @AppStorage(NewDeviceDefaults.timeoutSecondsKey)
+    private var timeoutSeconds = NewDeviceDefaults.timeoutSeconds
 
     var body: some View {
         Form {
             Section {
                 Toggle("Share clipboard", isOn: $clipboardSharingEnabled)
                 Toggle("Play remote audio", isOn: $audioPlaybackEnabled)
-                Toggle("Hide certificate warnings", isOn: $hideCertificateWarnings)
+                Toggle(UntrustedCertificatesOption.title, isOn: $hideCertificateWarnings)
+                    .help(UntrustedCertificatesOption.help)
                 Stepper(
                     "Connection timeout: \(timeoutSeconds)s",
                     value: $timeoutSeconds,
-                    in: 3 ... 60,
+                    in: DeviceProfile.timeoutSecondsRange,
                     step: 1
                 )
             } header: {

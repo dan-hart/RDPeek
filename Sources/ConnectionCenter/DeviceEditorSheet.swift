@@ -3,9 +3,9 @@ import SwiftUI
 /// Add/edit sheet for a saved PC.
 struct DeviceEditorSheet: View {
     var editorState: DeviceEditorState
+    var onConnect: (DeviceProfile) -> Void
 
     @EnvironmentObject private var deviceList: DeviceListModel
-    @EnvironmentObject private var launchStore: SessionLaunchStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var name: String
@@ -13,26 +13,32 @@ struct DeviceEditorSheet: View {
     @State private var portText: String
     @State private var username: String
     @State private var domain: String
-    @State private var password: String
+    @State private var password = ""
     @State private var rememberPassword: Bool
     @State private var clipboardSharingEnabled: Bool
     @State private var audioPlaybackEnabled: Bool
     @State private var hideCertificateWarnings: Bool
+    @State private var timeoutSeconds: Int
     @State private var validationMessage: String?
+    @State private var isLoadingPassword: Bool
+    @State private var loadedPassword: String?
+    @State private var hadRememberedPassword = false
 
-    init(editorState: DeviceEditorState) {
+    init(editorState: DeviceEditorState, onConnect: @escaping (DeviceProfile) -> Void) {
         self.editorState = editorState
+        self.onConnect = onConnect
         let device = editorState.device
         _name = State(initialValue: device.name)
         _host = State(initialValue: device.host)
         _portText = State(initialValue: String(device.port))
         _username = State(initialValue: device.username)
         _domain = State(initialValue: device.domain)
-        _password = State(initialValue: editorState.initialPassword)
         _rememberPassword = State(initialValue: device.rememberPassword)
         _clipboardSharingEnabled = State(initialValue: device.clipboardSharingEnabled)
         _audioPlaybackEnabled = State(initialValue: device.audioPlaybackEnabled)
         _hideCertificateWarnings = State(initialValue: device.hideCertificateWarnings)
+        _timeoutSeconds = State(initialValue: device.timeoutSeconds)
+        _isLoadingPassword = State(initialValue: device.rememberPassword)
     }
 
     var body: some View {
@@ -49,26 +55,26 @@ struct DeviceEditorSheet: View {
                 Section("Credentials") {
                     TextField("Username", text: $username)
                     TextField("Domain", text: $domain, prompt: Text("Optional"))
-                    SecureField("Password", text: $password)
+                    SecureField(
+                        "Password",
+                        text: $password,
+                        prompt: isLoadingPassword ? Text("Reading Keychain…") : nil
+                    )
+                    .disabled(isLoadingPassword)
                     Toggle("Remember password in Keychain", isOn: $rememberPassword)
                 }
 
                 Section("Options") {
                     Toggle("Share clipboard", isOn: $clipboardSharingEnabled)
                     Toggle("Play remote audio", isOn: $audioPlaybackEnabled)
-                    Toggle("Hide certificate warnings", isOn: $hideCertificateWarnings)
-                }
-
-                if let validationMessage {
-                    Section {
-                        Label {
-                            Text(verbatim: validationMessage)
-                        } icon: {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.yellow)
-                        }
-                        .font(.callout)
-                    }
+                    Toggle(UntrustedCertificatesOption.title, isOn: $hideCertificateWarnings)
+                        .help(UntrustedCertificatesOption.help)
+                    Stepper(
+                        "Connection timeout: \(timeoutSeconds)s",
+                        value: $timeoutSeconds,
+                        in: DeviceProfile.timeoutSecondsRange,
+                        step: 1
+                    )
                 }
             }
             .formStyle(.grouped)
@@ -76,6 +82,31 @@ struct DeviceEditorSheet: View {
             footer
         }
         .frame(width: 460, height: 540)
+        .task {
+            await loadSavedPassword()
+        }
+    }
+
+    /// Fills in the remembered password. Save waits for it: whether one was
+    /// found decides which keychain entries saving may delete.
+    private func loadSavedPassword() async {
+        guard isLoadingPassword else {
+            return
+        }
+        switch await deviceList.savedPassword(for: editorState.device) {
+        case let .success(savedPassword?):
+            password = savedPassword
+            loadedPassword = savedPassword
+            hadRememberedPassword = true
+        case .success(nil):
+            break
+        case let .failure(error):
+            // The item may exist all the same: count it, so turning
+            // Remember off still deletes it.
+            hadRememberedPassword = true
+            validationMessage = "Password not read from Keychain: \(error)"
+        }
+        isLoadingPassword = false
     }
 
     private var header: some View {
@@ -116,37 +147,52 @@ struct DeviceEditorSheet: View {
     }
 
     private var footer: some View {
-        HStack {
-            Button("Cancel", role: .cancel) {
-                dismiss()
+        VStack(alignment: .leading, spacing: 12) {
+            // In the footer, not the form: the form scrolls, and a message
+            // at its end would be out of view.
+            if let validationMessage {
+                Label {
+                    Text(verbatim: validationMessage)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                }
+                .font(.callout)
             }
-            .keyboardShortcut(.cancelAction)
 
-            Spacer()
-
-            Button("Save") {
-                if saveChanges() != nil {
+            HStack {
+                Button("Cancel", role: .cancel) {
                     dismiss()
                 }
-            }
-            .disabled(canSave == false)
+                .keyboardShortcut(.cancelAction)
 
-            Button("Save & Connect") {
-                if let device = saveChanges() {
-                    dismiss()
-                    deviceList.connect(device, using: launchStore)
+                Spacer()
+
+                Button("Save") {
+                    if saveChanges() != nil {
+                        dismiss()
+                    }
                 }
+                .disabled(canSave == false)
+
+                Button("Save & Connect") {
+                    if let device = saveChanges() {
+                        dismiss()
+                        onConnect(device)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(canSave == false)
             }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.defaultAction)
-            .disabled(canSave == false)
         }
         .padding(16)
         .background(.bar)
     }
 
     private var canSave: Bool {
-        host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        isLoadingPassword == false && host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     private func saveChanges() -> DeviceProfile? {
@@ -165,8 +211,15 @@ struct DeviceEditorSheet: View {
             device.clipboardSharingEnabled = clipboardSharingEnabled
             device.audioPlaybackEnabled = audioPlaybackEnabled
             device.hideCertificateWarnings = hideCertificateWarnings
+            device.timeoutSeconds = timeoutSeconds
 
-            return try deviceList.save(editor: editorState, editedDevice: device, password: password)
+            return try deviceList.save(
+                editor: editorState,
+                editedDevice: device,
+                password: password,
+                loadedPassword: loadedPassword,
+                hadRememberedPassword: hadRememberedPassword
+            )
         } catch {
             validationMessage = String(describing: error)
             return nil

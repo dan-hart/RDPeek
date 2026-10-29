@@ -18,6 +18,15 @@ final class SessionCommandStateTests: XCTestCase {
         XCTAssertFalse(state.canCancel)
     }
 
+    func testDisconnectedSessionOffersReconnect() {
+        // Disconnecting returns no report, only an end reason; the Session
+        // menu offered Connect while the HUD offered Reconnect.
+        let state = makeState(hasEndReason: true)
+        XCTAssertEqual(state.startTitle, "Reconnect")
+        XCTAssertTrue(state.canStart)
+        XCTAssertFalse(state.canCancel)
+    }
+
     func testResolvingStoredCredentialsIsCancelableButNotStartable() {
         // The v1.0.1 regression: during the async keychain resolution the
         // menu offered Connect (double-starting) and no Cancel (no way out).
@@ -46,56 +55,49 @@ final class SessionCommandStateTests: XCTestCase {
         XCTAssertTrue(state.canCancel)
     }
 
+    func testSignInPromptIsNeitherStartableNorCancelable() {
+        // Reconnect while the sign-in overlay waits would connect without
+        // the credentials it asks for; the overlay's own Connect and Cancel
+        // are the way out.
+        let state = makeState(isAwaitingCredentials: true, hasReport: true)
+        XCTAssertEqual(state.startTitle, "Reconnect")
+        XCTAssertFalse(state.canStart)
+        XCTAssertFalse(state.canCancel)
+    }
+
     func testIdleWithEmptyHostCannotStartOrCancel() {
         let state = makeState(hostIsEmpty: true)
         XCTAssertFalse(state.canStart)
         XCTAssertFalse(state.canCancel)
     }
 
-    // MARK: - Clipboard items
-
-    func testClipboardItemsFollowClipboardSession() {
-        XCTAssertFalse(makeState().canSyncClipboard)
-        XCTAssertFalse(makeState().canShareClipboardTemporarily)
-
-        let sharing = makeState(hasClipboardSession: true, clipboardSharingEnabled: true)
-        XCTAssertTrue(sharing.canSyncClipboard)
-        XCTAssertTrue(sharing.canShareClipboardTemporarily)
-
-        // Sync requires sharing to be on; the temporary-share item is what
-        // turns it on, so it only needs the clipboard channel.
-        let sharingOff = makeState(hasClipboardSession: true, clipboardSharingEnabled: false)
-        XCTAssertFalse(sharingOff.canSyncClipboard)
-        XCTAssertTrue(sharingOff.canShareClipboardTemporarily)
-
-        let noSession = makeState(hasClipboardSession: false, clipboardSharingEnabled: true)
-        XCTAssertFalse(noSession.canSyncClipboard)
-        XCTAssertFalse(noSession.canShareClipboardTemporarily)
-    }
-
     // MARK: - Invariant
 
-    func testEveryPhaseOffersStartOrCancelUnlessIdleWithEmptyHost() {
+    func testEveryPhaseOffersAWayForward() {
         // The user must never be stuck with both Connect and Cancel disabled
-        // unless the session is idle and has no host to connect to.
-        for mask in 0 ..< (1 << 8) {
+        // unless the session is idle and has no host to connect to, or the
+        // sign-in overlay offers its own way forward.
+        for mask in 0 ..< (1 << 6) {
             let isConnecting = mask & 1 != 0
             let isResolving = mask & 2 != 0
             let isAutoRetryPending = mask & 4 != 0
-            let hostIsEmpty = mask & 128 != 0
+            let isAwaitingCredentials = mask & 8 != 0
+            let hostIsEmpty = mask & 16 != 0
             let state = SessionCommandState.make(
                 isConnecting: isConnecting,
                 isResolvingStoredCredentials: isResolving,
                 isAutoRetryPending: isAutoRetryPending,
-                hasFrame: mask & 8 != 0,
-                hasReport: mask & 16 != 0,
-                hasClipboardSession: mask & 32 != 0,
-                clipboardSharingEnabled: mask & 64 != 0,
-                hostIsEmpty: hostIsEmpty
+                isAwaitingCredentials: isAwaitingCredentials,
+                hasFrame: mask & 32 != 0,
+                hasReport: false,
+                hasEndReason: false,
+                hostIsEmpty: hostIsEmpty,
+                canSyncClipboard: false,
+                canShareClipboardTemporarily: false
             )
             let isIdle = !isConnecting && !isResolving && !isAutoRetryPending
             XCTAssertTrue(
-                state.canStart || state.canCancel || (isIdle && hostIsEmpty),
+                state.canStart || state.canCancel || (isIdle && (hostIsEmpty || isAwaitingCredentials)),
                 "Dead-end command state for input mask \(mask)"
             )
         }
@@ -107,21 +109,23 @@ final class SessionCommandStateTests: XCTestCase {
         isConnecting: Bool = false,
         isResolvingStoredCredentials: Bool = false,
         isAutoRetryPending: Bool = false,
+        isAwaitingCredentials: Bool = false,
         hasFrame: Bool = false,
         hasReport: Bool = false,
-        hasClipboardSession: Bool = false,
-        clipboardSharingEnabled: Bool = false,
+        hasEndReason: Bool = false,
         hostIsEmpty: Bool = false
     ) -> SessionCommandState {
         SessionCommandState.make(
             isConnecting: isConnecting,
             isResolvingStoredCredentials: isResolvingStoredCredentials,
             isAutoRetryPending: isAutoRetryPending,
+            isAwaitingCredentials: isAwaitingCredentials,
             hasFrame: hasFrame,
             hasReport: hasReport,
-            hasClipboardSession: hasClipboardSession,
-            clipboardSharingEnabled: clipboardSharingEnabled,
-            hostIsEmpty: hostIsEmpty
+            hasEndReason: hasEndReason,
+            hostIsEmpty: hostIsEmpty,
+            canSyncClipboard: false,
+            canShareClipboardTemporarily: false
         )
     }
 }

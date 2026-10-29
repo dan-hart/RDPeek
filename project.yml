@@ -7,12 +7,13 @@ options:
 settings:
   base:
     DEAD_CODE_STRIPPING: YES
+    SWIFT_VERSION: "6.0"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+    CODE_SIGN_STYLE: Automatic
 packages:
   RDPKit:
-    # Based on steelbrain/RDPKit 0.3.1; monitor layouts and graphics stream fixes.
-    # Restore the upstream URL after that API is released upstream.
-    url: https://github.com/dan-hart/RDPKit.git
-    revision: 75a41b269c2b795e3565b40cabe714ffabc81299
+    url: https://github.com/steelbrain/RDPKit.git
+    exactVersion: 0.5.0
 targets:
   RDPeek:
     type: application
@@ -28,31 +29,22 @@ targets:
     dependencies:
       - package: RDPKit
         product: RDPKit
-      - sdk: AVFoundation.framework
-      - sdk: CoreMedia.framework
     info:
       path: Generated/Info.plist
       properties:
         CFBundleDisplayName: RDPeek
-        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
-        CFBundleName: $(PRODUCT_NAME)
-        CFBundlePackageType: APPL
-        CFBundleShortVersionString: "1.1.1"
-        CFBundleVersion: "4"
-        LSMinimumSystemVersion: "14.0"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         LSApplicationCategoryType: public.app-category.productivity
         NSHumanReadableCopyright: Copyright © 2026 Anees Iqbal.
+        NSLocalNetworkUsageDescription: RDPeek connects to the remote desktops you add on your local network.
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.aneesiqbal.rdpeek
         PRODUCT_NAME: RDPeek
-        SWIFT_VERSION: "6.0"
-        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
-        GCC_TREAT_WARNINGS_AS_ERRORS: YES
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
         ENABLE_HARDENED_RUNTIME: YES
-        CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CURRENT_PROJECT_VERSION: "4"
         MARKETING_VERSION: "1.1.1"
@@ -66,18 +58,29 @@ targets:
       # Unhosted test bundle: compiles the files under test directly so the
       # hardened-runtime app does not need to host the tests.
       - path: Tests
+      - path: Sources/ConnectionCenter/DeviceGridNavigation.swift
       - path: Sources/ConnectionCenter/DeviceListModel.swift
       - path: Sources/Session/RemoteDisplaySelection.swift
+      - path: Sources/Diagnostics/DiagnosticsView.swift
+      - path: Sources/Session/FramePacing.swift
+      - path: Sources/Session/FramePresentationClockView.swift
+      - path: Sources/Session/KeyboardLayouts.swift
+      - path: Sources/Session/RemoteDesktopCanvasView.swift
       - path: Sources/Session/RemoteDesktopRenderer.swift
       - path: Sources/Session/RemoteInputCaptureView.swift
+      - path: Sources/Session/SessionClipboard.swift
       - path: Sources/Session/SessionCommandState.swift
       - path: Sources/Session/SessionHUD.swift
+      - path: Sources/Session/SessionCredentialPolicy.swift
       - path: Sources/Session/SessionModels.swift
       - path: Sources/Session/SessionWindowPlacement.swift
+      - path: Sources/Session/WindowsKeyboardLayoutTables.swift
       - path: Sources/Storage/DeviceProfileStore.swift
       - path: Sources/Storage/ClientLicenseStore.swift
       - path: Sources/Storage/InMemoryCredentialCache.swift
       - path: Sources/Storage/KeychainCredentialStore.swift
+      - path: Sources/Storage/KeychainService.swift
+      - path: Sources/Storage/TrustedCertificateStore.swift
     dependencies:
       - package: RDPKit
         product: RDPKit
@@ -85,8 +88,3 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.aneesiqbal.rdpeek-tests
         GENERATE_INFOPLIST_FILE: YES
-        SWIFT_VERSION: "6.0"
-        SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
-        GCC_TREAT_WARNINGS_AS_ERRORS: YES
-        MACOSX_DEPLOYMENT_TARGET: "14.0"
-        CODE_SIGN_STYLE: Automatic

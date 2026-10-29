@@ -1,15 +1,17 @@
 import AppKit
-import SwiftUI
+import Combine
 
 /// The remote desktop window: full-bleed canvas under a transparent titlebar,
 /// with a status pill and session menu as a titlebar accessory.
 @MainActor
 final class SessionWindowController: NSWindowController, NSWindowDelegate {
     let sessionID: UUID
-    let deviceID: UUID?
+    let deviceID: UUID
+    let sessionController: SessionViewController
     var onClose: ((UUID) -> Void)?
     private weak var launchStore: SessionLaunchStore?
     private var firstShowGuard = SessionWindowFirstShowGuard()
+    private var titleSubscription: AnyCancellable?
 
     init(
         sessionID: UUID,
@@ -21,7 +23,7 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         deviceID = draft.deviceID
         self.launchStore = launchStore
 
-        let sessionController = SessionViewController(
+        sessionController = SessionViewController(
             sessionID: sessionID,
             draft: draft,
             launchStore: launchStore
@@ -37,7 +39,12 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
         window.titlebarAppearsTransparent = true
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 760, height: 500)
+        // The content runs under the titlebar but the canvas starts below
+        // it. Keep the canvas at least 480 points tall, the smallest
+        // desktop the server is asked for, so a 1x display never has to
+        // shrink the desktop to fit.
+        let titlebarHeight = NSWindow.frameRect(forContentRect: .zero, styleMask: [.titled]).height
+        window.contentMinSize = NSSize(width: 760, height: 480 + titlebarHeight)
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = .black
         window.tabbingMode = .disallowed
@@ -55,6 +62,12 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
 
         super.init(window: window)
         window.delegate = self
+        // The title follows the PC's name when the PC is renamed.
+        titleSubscription = sessionController.hudModel.$deviceName
+            .dropFirst()
+            .sink { [weak window] name in
+                window?.title = name
+            }
     }
 
     @available(*, unavailable)
@@ -74,19 +87,18 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowDidBecomeKey(_: Notification) {
-        launchStore?.noteSessionWindowKey(true)
-        (contentViewController as? SessionViewController)?.publishSessionCommandStateIfKey()
+        sessionController.publishSessionCommandStateIfKey()
     }
 
     func windowDidResignKey(_: Notification) {
-        launchStore?.noteSessionWindowKey(false)
+        launchStore?.updateKeySessionCommands(nil)
     }
 
     func windowWillClose(_: Notification) {
+        sessionController.closeSession()
         if SessionWindowKeyFlagPolicy.shouldClearOnClose(of: window) {
-            launchStore?.noteSessionWindowKey(false)
+            launchStore?.updateKeySessionCommands(nil)
         }
-        (contentViewController as? SessionViewController)?.closeSession()
         onClose?(sessionID)
     }
 }

@@ -1,19 +1,19 @@
 import AppKit
+import Combine
 import Foundation
 import RDPKit
-import SwiftUI
 
 /// Opens and tracks remote session windows and their diagnostics windows.
 @MainActor
 final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
-    @Published private(set) var openSessionCount = 0
-
-    /// True while a remote session window is the key window; drives the
-    /// contextual Session menu in the menu bar.
-    @Published private(set) var isSessionWindowKey = false
-
-    /// Command state of the key session window; nil while none is key.
+    /// Command state of the key session window, published while it is key
+    /// and nil while no session window is; drives the contextual Session
+    /// menu in the menu bar.
     @Published private(set) var keySessionCommands: SessionCommandState?
+
+    var isSessionWindowKey: Bool {
+        keySessionCommands != nil
+    }
 
     func updateKeySessionCommands(_ state: SessionCommandState?) {
         if keySessionCommands != state {
@@ -21,18 +21,8 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
         }
     }
 
-    private var sessionWindowControllers: [UUID: SessionWindowController] = [:] {
-        didSet {
-            openSessionCount = sessionWindowControllers.count
-        }
-    }
-
-    func noteSessionWindowKey(_ isKey: Bool) {
-        if isSessionWindowKey != isKey {
-            isSessionWindowKey = isKey
-        }
-    }
-
+    private var sessionWindowControllers: [UUID: SessionWindowController] = [:]
+    private var savedDevicesSubscription: AnyCancellable?
     private var diagnosticsWindowControllers: [UUID: DiagnosticsWindowController] = [:]
     private var diagnosticsModels: [UUID: RemoteSessionDiagnosticsModel] = [:]
 
@@ -47,15 +37,19 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
     /// have its flag updated.
     var onCredentialPersistence: ((UUID, RDPConnectionIdentity, _ remembered: Bool) -> Void)?
 
+    /// Whether a profile other than the given one remembers its password
+    /// under the identity, so the Keychain item must stay.
+    var passwordRememberedElsewhere: ((RDPConnectionIdentity, _ excludingDeviceID: UUID) -> Bool)?
+
     /// Opens a session window for the draft, or focuses the existing window if
-    /// this device already has one.
-    @discardableResult
-    func openRemoteSession(_ draft: RDPConnectionDraft) -> UUID {
-        if let deviceID = draft.deviceID,
-           let existing = sessionWindowControllers.values.first(where: { $0.deviceID == deviceID })
-        {
+    /// this device already has one; that window connects again, with the
+    /// PC as saved, when its session ended.
+    func openRemoteSession(_ draft: RDPConnectionDraft) {
+        if let existing = sessionWindowControllers.values.first(where: { $0.deviceID == draft.deviceID }) {
+            existing.sessionController.followSavedDevice(draft)
             existing.showWindow(nil)
-            return existing.sessionID
+            existing.sessionController.connectFromSavedDevice()
+            return
         }
 
         let id = UUID()
@@ -71,25 +65,37 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
         }
         sessionWindowControllers[id] = controller
         controller.showWindow(nil)
-        return id
     }
 
-    func recordConnectionStart(for deviceID: UUID?) {
-        guard let deviceID else {
-            return
+    /// Keeps open session windows in step with the saved PCs: each follows
+    /// its PC's saved settings, and one whose PC was deleted keeps no
+    /// password for it.
+    func followSavedDevices(_ devices: some Publisher<[DeviceProfile], Never>) {
+        savedDevicesSubscription = devices.sink { [weak self] devices in
+            self?.savedDevicesChanged(devices)
         }
+    }
+
+    private func savedDevicesChanged(_ devices: [DeviceProfile]) {
+        for controller in sessionWindowControllers.values {
+            if let device = devices.first(where: { $0.id == controller.deviceID }) {
+                controller.sessionController.followSavedDevice(RDPConnectionDraft(device: device))
+            } else {
+                controller.sessionController.savedDeviceWasDeleted()
+            }
+        }
+    }
+
+    func recordConnectionStart(for deviceID: UUID) {
         onConnectionStart?(deviceID)
     }
 
-    func recordCredentialPersistence(for deviceID: UUID?, identity: RDPConnectionIdentity, remembered: Bool) {
-        guard let deviceID else {
-            return
-        }
-        onCredentialPersistence?(deviceID, identity, remembered)
+    func isPasswordRemembered(for identity: RDPConnectionIdentity, byOtherThan deviceID: UUID) -> Bool {
+        passwordRememberedElsewhere?(identity, deviceID) ?? false
     }
 
-    var hasOpenSessions: Bool {
-        openSessionCount > 0
+    func recordCredentialPersistence(for deviceID: UUID, identity: RDPConnectionIdentity, remembered: Bool) {
+        onCredentialPersistence?(deviceID, identity, remembered)
     }
 
     func registerDiagnostics(_ model: RemoteSessionDiagnosticsModel, for id: UUID) {
@@ -116,6 +122,10 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
         }
         diagnosticsWindowControllers[id] = controller
         controller.showWindow(nil)
+    }
+
+    func isShowingDiagnostics(for id: UUID) -> Bool {
+        diagnosticsWindowControllers[id] != nil
     }
 
     func unregisterDiagnostics(for id: UUID) {

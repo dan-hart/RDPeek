@@ -48,6 +48,10 @@ final class RemoteDesktopSampleBufferNSView: NSView {
     }
     private let sampleBufferFactory = RDPFrameSampleBufferFactory()
     private var lastPresentationID: Int?
+    /// Shown again when the layer fails between frames; an idle remote screen sends no new one.
+    private var lastPresentation: RDPDecodedFramePresentation?
+    private var didResendLastPresentation = false
+    private var displayLayerObservers: [any NSObjectProtocol] = []
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -62,6 +66,7 @@ final class RemoteDesktopSampleBufferNSView: NSView {
     deinit {
         MainActor.assumeIsolated {
             clear()
+            displayLayerObservers.forEach(NotificationCenter.default.removeObserver)
         }
     }
 
@@ -109,11 +114,28 @@ final class RemoteDesktopSampleBufferNSView: NSView {
         guard lastPresentationID != id else {
             return true
         }
+        guard enqueue(presentation) else { return false }
+        lastPresentationID = id
+        lastPresentation = presentation
+        didResendLastPresentation = false
+        return true
+    }
 
+    /// Also removes the shown image, so a later session never flashes the
+    /// last one's desktop and its pixel buffer is released.
+    func clear() {
+        flushQueuedSamples(removingImage: true)
+        lastPresentationID = nil
+        lastPresentation = nil
+        didResendLastPresentation = false
+        sampleBufferFactory.reset()
+    }
+
+    private func enqueue(_ presentation: RDPDecodedFramePresentation) -> Bool {
         let disposition = rdpSampleBufferDisplayDisposition(
             displayFormatWillChange: sampleBufferFactory.willChangeDisplayFormat(for: presentation),
-            rendererFailed: displayLayer.status == .failed,
-            requiresFlushToResume: displayLayer.requiresFlushToResumeDecoding
+            rendererFailed: rendererFailed,
+            requiresFlushToResume: rendererRequiresFlushToResume
         )
         switch disposition {
         case .flushAndEnqueue:
@@ -123,9 +145,7 @@ final class RemoteDesktopSampleBufferNSView: NSView {
         }
 
         do {
-            let sampleBuffer = try sampleBufferFactory.makeSampleBuffer(for: presentation)
-            displayLayer.enqueue(sampleBuffer)
-            lastPresentationID = id
+            try enqueueSampleBuffer(sampleBufferFactory.makeSampleBuffer(for: presentation))
             return true
         } catch {
             flushQueuedSamples()
@@ -133,10 +153,21 @@ final class RemoteDesktopSampleBufferNSView: NSView {
         }
     }
 
-    func clear() {
-        flushQueuedSamples()
-        lastPresentationID = nil
-        sampleBufferFactory.reset()
+    /// Shows the last frame again once, so a layer that failed or needs a flush does not stay
+    /// blank until the remote screen changes.
+    private func displayLayerNeedsRecovery() {
+        guard rdpShouldResendLastPresentation(
+            hasLastPresentation: lastPresentation != nil,
+            didResendLastPresentation: didResendLastPresentation,
+            rendererFailed: rendererFailed,
+            requiresFlushToResume: rendererRequiresFlushToResume
+        ),
+            let lastPresentation
+        else {
+            return
+        }
+        didResendLastPresentation = true
+        _ = enqueue(lastPresentation)
     }
 
     private func configureLayers() {
@@ -149,16 +180,80 @@ final class RemoteDesktopSampleBufferNSView: NSView {
         layer?.addSublayer(viewportLayer)
         viewportLayer.addSublayer(displayLayer)
         updateContentsScale()
+        observeDisplayLayer()
+    }
+
+    /// AVFoundation can post these on its own threads. The observer runs on the posting thread
+    /// and only schedules the recovery on the main thread, so the post never waits for it.
+    private func observeDisplayLayer() {
+        let names: [NSNotification.Name]
+        let object: AnyObject
+        if #available(macOS 15, *) {
+            names = [
+                AVSampleBufferVideoRenderer.didFailToDecodeNotification,
+                AVSampleBufferVideoRenderer.requiresFlushToResumeDecodingDidChangeNotification,
+            ]
+            object = displayLayer.sampleBufferRenderer
+        } else {
+            names = [
+                .AVSampleBufferDisplayLayerFailedToDecode,
+                .AVSampleBufferDisplayLayerRequiresFlushToResumeDecodingDidChange,
+            ]
+            object = displayLayer
+        }
+        displayLayerObservers = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: object, queue: nil) { [weak self] _ in
+                DispatchQueue.main.async {
+                    self?.displayLayerNeedsRecovery()
+                }
+            }
+        }
     }
 
     private func updateContentsScale() {
         displayLayer.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
     }
 
-    private func flushQueuedSamples() {
-        displayLayer.flush()
+    // macOS 15 deprecates the layer's own queue for its `sampleBufferRenderer`, which these use
+    // there; macOS 14 keeps the layer's calls.
+
+    private var rendererFailed: Bool {
+        if #available(macOS 15, *) {
+            displayLayer.sampleBufferRenderer.status == .failed
+        } else {
+            displayLayer.status == .failed
+        }
     }
 
+    private var rendererRequiresFlushToResume: Bool {
+        if #available(macOS 15, *) {
+            displayLayer.sampleBufferRenderer.requiresFlushToResumeDecoding
+        } else {
+            displayLayer.requiresFlushToResumeDecoding
+        }
+    }
+
+    private func enqueueSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        if #available(macOS 15, *) {
+            displayLayer.sampleBufferRenderer.enqueue(sampleBuffer)
+        } else {
+            displayLayer.enqueue(sampleBuffer)
+        }
+    }
+
+    private func flushQueuedSamples(removingImage: Bool = false) {
+        if #available(macOS 15, *) {
+            if removingImage {
+                displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
+            } else {
+                displayLayer.sampleBufferRenderer.flush()
+            }
+        } else if removingImage {
+            displayLayer.flushAndRemoveImage()
+        } else {
+            displayLayer.flush()
+        }
+    }
 }
 
 enum RDPRemoteDesktopSampleBufferDisplayDisposition: Equatable {
@@ -175,4 +270,37 @@ func rdpSampleBufferDisplayDisposition(
         return .flushAndEnqueue
     }
     return .enqueue
+}
+
+/// Once per frame: a layer that fails again on the same frame waits for the next one rather than
+/// retrying in a loop.
+func rdpShouldResendLastPresentation(
+    hasLastPresentation: Bool,
+    didResendLastPresentation: Bool,
+    rendererFailed: Bool,
+    requiresFlushToResume: Bool
+) -> Bool {
+    hasLastPresentation && !didResendLastPresentation && (rendererFailed || requiresFlushToResume)
+}
+
+/// Holds the one decoded frame waiting for the next display-link tick.
+@MainActor
+final class RDPFramePresentationBuffer {
+    private var pendingPresentation: RDPDecodedFramePresentation?
+
+    func replacePendingPresentation(_ presentation: RDPDecodedFramePresentation) -> Bool {
+        let replacedPendingPresentation = pendingPresentation != nil
+        pendingPresentation = presentation
+        return replacedPendingPresentation
+    }
+
+    func takePendingPresentation() -> RDPDecodedFramePresentation? {
+        let presentation = pendingPresentation
+        pendingPresentation = nil
+        return presentation
+    }
+
+    func clear() {
+        pendingPresentation = nil
+    }
 }

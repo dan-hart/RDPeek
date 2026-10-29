@@ -6,8 +6,8 @@ const appShortcuts: { keys: string[]; action: string }[] = [
   { keys: ["⌘", "N"], action: "Add PC" },
   { keys: ["Return"], action: "Connect to the selected PC" },
   { keys: ["Delete"], action: "Delete the selected PC" },
-  { keys: ["⌘", "."], action: "Disconnect / cancel connecting" },
-  { keys: ["⇧", "⌘", "D"], action: "Stats for Nerds" },
+  { keys: ["⌘", "R"], action: "Reconnect a session that ended" },
+  { keys: ["⌘", "."], action: "Cancel connecting" },
   { keys: ["⌘", ","], action: "Settings" },
 ];
 
@@ -17,7 +17,7 @@ export function InputSection() {
       id="input"
       eyebrow="Input done right"
       title="Your shortcuts, their desktop"
-      lede="Inside a session, shortcuts that include ⌘ or ⌃ are sent to the remote desktop as scancodes — so Windows and Linux shortcuts just work. Plain typing arrives as Unicode, exactly as you typed it."
+      lede="Inside a session, shortcuts that include ⌘ or ⌃ are sent to the remote desktop as scancodes — so Windows and Linux shortcuts just work. Plain typing lands exactly as you typed it: as the key itself when your Mac's keyboard layout types the same character there, so remote input methods see it, and as Unicode otherwise."
     >
       <Reveal className="mt-12" delay={0.06}>
         <div className="glass mx-auto flex max-w-2xl flex-col items-center gap-4 rounded-2xl px-6 py-8 sm:flex-row sm:justify-center sm:gap-6">
@@ -34,7 +34,9 @@ export function InputSection() {
 
       <Reveal className="mx-auto mt-6 max-w-2xl text-center text-[15px] text-muted" delay={0.1}>
         <p>
-          ⌘ becomes ⊞ Win, ⌃ becomes Ctrl. Modifier state is reconciled on every
+          ⌘ becomes ⊞ Win, ⌃ becomes Ctrl, and left ⌥ becomes Alt, while right ⌥
+          still types the characters your Mac layout puts on it, like @ on a
+          German keyboard. Modifier state is reconciled on every
           event and released when the window loses focus, so nothing ever gets
           stuck down on the remote.
         </p>

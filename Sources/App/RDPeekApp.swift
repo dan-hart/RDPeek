@@ -3,14 +3,40 @@ import SwiftUI
 
 @main
 struct RDPeekApp: App {
+    // Read by nothing: declaring it is what installs the app delegate.
+    // swiftlint:disable:next unused_declaration
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var launchStore = SessionLaunchStore()
-    @StateObject private var deviceList = DeviceListModel()
+    @StateObject private var launchStore: SessionLaunchStore
+    @StateObject private var deviceList: DeviceListModel
+
+    init() {
+        let launchStore = SessionLaunchStore()
+        let deviceList = DeviceListModel()
+        // Sessions record each connection and saved credential on the
+        // device list, whether or not the Connection Center is open.
+        launchStore.onConnectionStart = { [weak deviceList] deviceID in
+            deviceList?.touchLastConnected(deviceID: deviceID)
+        }
+        launchStore.onCredentialPersistence = { [weak deviceList] deviceID, identity, remembered in
+            deviceList?.recordCredentialPersistence(
+                deviceID: deviceID,
+                identity: identity,
+                remembered: remembered
+            )
+        }
+        launchStore.passwordRememberedElsewhere = { [weak deviceList] identity, deviceID in
+            deviceList?.rememberedPasswordIsShared(identity, excluding: deviceID) ?? false
+        }
+        // Open session windows follow edits to their PC from the next
+        // connection, and keep no password for a PC that was deleted.
+        launchStore.followSavedDevices(deviceList.$devices)
+        _launchStore = StateObject(wrappedValue: launchStore)
+        _deviceList = StateObject(wrappedValue: deviceList)
+    }
 
     var body: some Scene {
         Window("RDPeek", id: "connection-center") {
-            ConnectionCenterView()
-                .environmentObject(launchStore)
+            ConnectionCenterView(launchStore: launchStore)
                 .environmentObject(deviceList)
         }
         .defaultSize(width: 880, height: 600)
@@ -112,56 +138,53 @@ private struct DeviceCommands: Commands {
 }
 
 /// Session commands target the key window's session controller, so they work
-/// for every open remote desktop window. The menu only exists while at least
-/// one session window is open.
+/// for every open remote desktop window. The menu exists only while a session
+/// window is key.
 private struct SessionCommands: Commands {
     @ObservedObject var launchStore: SessionLaunchStore
 
     var body: some Commands {
-        if launchStore.isSessionWindowKey {
-            sessionMenu
+        if let commands = launchStore.keySessionCommands {
+            sessionMenu(commands)
         }
     }
 
-    private var sessionMenu: some Commands {
-        // A nil command state (none published yet) leaves items enabled so
-        // the menu degrades to its old behavior rather than locking up.
-        let commands = launchStore.keySessionCommands
-        return CommandMenu("Session") {
-            Button(commands?.startTitle ?? "Reconnect") {
-                sessionController?.rdpStartSession()
+    private func sessionMenu(_ commands: SessionCommandState) -> some Commands {
+        CommandMenu("Session") {
+            Button(commands.startTitle) {
+                sessionController?.startConnection()
             }
             .keyboardShortcut("r", modifiers: [.command])
-            .disabled(commands?.canStart == false)
+            .disabled(commands.canStart == false)
 
             Button("Disconnect") {
-                sessionController?.rdpCancelSession()
+                sessionController?.cancelConnection()
             }
             .keyboardShortcut(".", modifiers: [.command])
-            .disabled(commands?.canCancel == false)
+            .disabled(commands.canCancel == false)
 
             Divider()
 
             Button("Sync Clipboard Now") {
-                sessionController?.rdpSyncClipboard()
+                sessionController?.syncClipboardNow()
             }
-            .disabled(commands?.canSyncClipboard == false)
+            .disabled(commands.canSyncClipboard == false)
 
             Button("Share Clipboard for 30 Seconds") {
-                sessionController?.rdpStartTemporaryClipboardSharing()
+                sessionController?.startTemporaryClipboardSharing()
             }
-            .disabled(commands?.canShareClipboardTemporarily == false)
+            .disabled(commands.canShareClipboardTemporarily == false)
 
             Divider()
 
             Button("Stats for Nerds") {
-                sessionController?.rdpOpenDiagnostics()
+                sessionController?.openDiagnosticsWindow()
             }
             .keyboardShortcut("d", modifiers: [.command, .shift])
         }
     }
 
-    private var sessionController: RDPSessionCommandHandling? {
-        NSApp.keyWindow?.contentViewController as? RDPSessionCommandHandling
+    private var sessionController: SessionViewController? {
+        NSApp.keyWindow?.contentViewController as? SessionViewController
     }
 }

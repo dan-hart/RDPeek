@@ -41,10 +41,10 @@ struct SessionWindowFirstShowGuard {
     }
 }
 
-/// Close-time decision for the global session-menu key flag: the
+/// Close-time decision for the key session's published menu state: the
 /// traffic-light close button works on background windows without making
-/// them key, so only a key window may clear the flag — otherwise closing
-/// window B would kill the Session menu for the still-key window A.
+/// them key, so only a key window may clear it — otherwise closing window B
+/// would kill the Session menu for the still-key window A.
 enum SessionWindowKeyFlagPolicy {
     @MainActor
     static func shouldClearOnClose(of window: NSWindow?) -> Bool {
