@@ -166,6 +166,69 @@ final class DeviceProfileStoreTests: XCTestCase {
         )
     }
 
+    func testSavingAnotherProfileKeepsKeysFromNewerVersion() throws {
+        let store = DeviceProfileStore(defaults: defaults)
+        let newerID = UUID()
+        storeNewerVersionProfile(id: newerID)
+
+        var other = DeviceProfile.makeNew(defaults: defaults)
+        other.host = "other.example"
+        try store.save(other)
+
+        XCTAssertEqual(try store.devices().count, 2)
+        let element = try storedElement(id: newerID)
+        XCTAssertEqual(element["gatewayHost"] as? String, "gateway.example")
+        XCTAssertEqual(element["displays"] as? [Int], [1, 2])
+        XCTAssertEqual(element["options"] as? [String: Bool], ["hdr": true])
+        XCTAssertEqual(element["name"] as? String, "Newer")
+    }
+
+    func testSavingProfileFromNewerVersionKeepsItsKeysAndUpdatesKnownOnes() throws {
+        let store = DeviceProfileStore(defaults: defaults)
+        let newerID = UUID()
+        storeNewerVersionProfile(id: newerID)
+        var device = try XCTUnwrap(store.devices().first)
+        device.name = "Renamed"
+        device.port = 3391
+        device.lastConnectedAt = nil
+
+        try store.save(device)
+        try store.touchLastConnected(id: newerID, at: Date(timeIntervalSinceReferenceDate: 4000))
+
+        let element = try storedElement(id: newerID)
+        XCTAssertEqual(element["gatewayHost"] as? String, "gateway.example")
+        XCTAssertEqual(element["displays"] as? [Int], [1, 2])
+        XCTAssertEqual(element["options"] as? [String: Bool], ["hdr": true])
+        XCTAssertEqual(element["name"] as? String, "Renamed")
+        XCTAssertEqual(element["port"] as? Int, 3391)
+        XCTAssertEqual(element["lastConnectedAt"] as? Double, 4000)
+        XCTAssertEqual(try store.devices().first?.name, "Renamed")
+
+        // A known key the profile no longer has is dropped, not kept stale.
+        device.lastConnectedAt = nil
+        try store.save(device)
+        XCTAssertNil(try storedElement(id: newerID)["lastConnectedAt"])
+    }
+
+    /// A profile as a newer release might write it: readable here, with
+    /// keys this version does not know.
+    private func storeNewerVersionProfile(id: UUID) {
+        storeJSON("""
+        [{"id": "\(id.uuidString)", "name": "Newer", "host": "newer.example", "port": 3390,
+          "username": "anees", "rememberPassword": false, "createdAt": 1000, "updatedAt": 2000,
+          "lastConnectedAt": 3000, "gatewayHost": "gateway.example", "displays": [1, 2],
+          "options": {"hdr": true}}]
+        """)
+    }
+
+    private func storedElement(id: UUID) throws -> [String: Any] {
+        try XCTUnwrap(
+            storedJSON()
+                .compactMap { $0 as? [String: Any] }
+                .first { $0["id"] as? String == id.uuidString }
+        )
+    }
+
     private func storeJSON(_ json: String) {
         defaults.set(Data(json.utf8), forKey: storageKey)
     }

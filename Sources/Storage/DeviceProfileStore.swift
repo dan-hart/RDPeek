@@ -111,6 +111,11 @@ extension DeviceProfile {
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .distantPast
         lastConnectedAt = try container.decodeIfPresent(Date.self, forKey: .lastConnectedAt)
     }
+
+    /// Whether `key` names a field this version reads and writes.
+    fileprivate static func isKnownKey(_ key: String) -> Bool {
+        CodingKeys(stringValue: key) != nil
+    }
 }
 
 enum DeviceProfileStoreError: Error, CustomStringConvertible {
@@ -141,43 +146,40 @@ struct DeviceProfileStore {
 
     @discardableResult
     func save(_ device: DeviceProfile) throws -> [DeviceProfile] {
-        try update { devices in
-            if let index = devices.firstIndex(where: { $0.id == device.id }) {
-                devices[index] = device
+        try update { stored in
+            if let index = stored.firstIndex(where: { $0.device?.id == device.id }) {
+                stored[index].device = device
             } else {
-                devices.append(device)
+                stored.append(StoredDevice(device: device))
             }
         }
     }
 
     @discardableResult
     func delete(id: UUID) throws -> [DeviceProfile] {
-        try update { devices in
-            devices.removeAll { $0.id == id }
+        try update { stored in
+            stored.removeAll { $0.device?.id == id }
         }
     }
 
     @discardableResult
     func touchLastConnected(id: UUID, at date: Date = Date()) throws -> [DeviceProfile] {
-        try update { devices in
-            if let index = devices.firstIndex(where: { $0.id == id }) {
-                devices[index].lastConnectedAt = date
+        try update { stored in
+            if let index = stored.firstIndex(where: { $0.device?.id == id }) {
+                stored[index].device?.lastConnectedAt = date
             }
         }
     }
 
     /// Every mutation is a read-modify-write through here. An unreadable
-    /// list throws instead of being treated as empty, and elements this
-    /// version cannot read are written back as they were — a decode
-    /// failure must never cause a write to drop saved profiles.
-    private func update(_ change: (inout [DeviceProfile]) -> Void) throws -> [DeviceProfile] {
-        let stored = try loadStoredDevices()
-        var devices = stored.compactMap(\.device)
-        change(&devices)
-        let unreadable = stored.filter { $0.device == nil }
-        let data = try JSONEncoder().encode(devices.map(StoredDevice.readable) + unreadable)
-        defaults.set(data, forKey: storageKey)
-        return sorted(devices)
+    /// list throws instead of being treated as empty, and each element is
+    /// written back over the JSON it was read from — a decode failure or a
+    /// newer format must never cause a write to drop saved data.
+    private func update(_ change: (inout [StoredDevice]) -> Void) throws -> [DeviceProfile] {
+        var stored = try loadStoredDevices()
+        change(&stored)
+        defaults.set(try JSONEncoder().encode(stored), forKey: storageKey)
+        return sorted(stored.compactMap(\.device))
     }
 
     private func loadStoredDevices() throws -> [StoredDevice] {
@@ -198,32 +200,42 @@ struct DeviceProfileStore {
     }
 }
 
-/// One element of the stored list. An element this version cannot read as
-/// a profile (damaged, or from a newer format) is kept as raw JSON, so one
-/// bad element neither hides the other PCs nor is lost on the next save.
-private enum StoredDevice: Codable {
-    case readable(DeviceProfile)
-    case unreadable(JSONValue)
+/// One element of the stored list, kept as the JSON it was read from. An
+/// element this version cannot read as a profile (damaged, or from a newer
+/// format) is written back unchanged, so one bad element neither hides the
+/// other PCs nor is lost on the next save. A readable one keeps the keys
+/// only a newer version knows.
+private struct StoredDevice: Codable {
+    /// The element as stored; an empty object for a profile new to the list.
+    private let json: JSONValue
+    /// The profile in the element, or nil when this version cannot read it.
+    var device: DeviceProfile?
 
-    var device: DeviceProfile? {
-        if case let .readable(device) = self { device } else { nil }
+    init(device: DeviceProfile) {
+        json = .object([:])
+        self.device = device
     }
 
     init(from decoder: Decoder) throws {
-        if let device = try? DeviceProfile(from: decoder) {
-            self = .readable(device)
-        } else {
-            self = try .unreadable(JSONValue(from: decoder))
-        }
+        json = try JSONValue(from: decoder)
+        device = try? DeviceProfile(from: decoder)
     }
 
     func encode(to encoder: Encoder) throws {
-        switch self {
-        case let .readable(device):
-            try device.encode(to: encoder)
-        case let .unreadable(value):
-            try value.encode(to: encoder)
+        guard let device else {
+            try json.encode(to: encoder)
+            return
         }
+        // Both write into the same object: first the keys this version
+        // doesn't know, then the profile's own. A known key the profile now
+        // leaves out, such as a nil date, is dropped rather than kept stale.
+        if case let .object(fields) = json {
+            var container = encoder.container(keyedBy: JSONValue.Key.self)
+            for (key, value) in fields where DeviceProfile.isKnownKey(key) == false {
+                try container.encode(value, forKey: JSONValue.Key(stringValue: key))
+            }
+        }
+        try device.encode(to: encoder)
     }
 }
 
@@ -235,6 +247,23 @@ private enum JSONValue: Codable {
     case string(String)
     case array([JSONValue])
     case object([String: JSONValue])
+
+    /// An object key of any name.
+    struct Key: CodingKey {
+        let stringValue: String
+
+        var intValue: Int? {
+            nil
+        }
+
+        init(stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(intValue _: Int) {
+            nil
+        }
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
