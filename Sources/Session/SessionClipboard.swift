@@ -9,15 +9,6 @@ private let sessionMaximumFileRangeByteCount: UInt64 = 1024 * 1024
 /// fails. The server answers a whole range at once, so this allows a full
 /// range over a link of about 9 KB/s.
 private let sessionFileContentsRequestTimeout: TimeInterval = 120
-/// Characters Windows does not allow in a file name: these and U+0000 to
-/// U+001F. A pasted file whose name has one fails to paste there.
-private let windowsInvalidFileNameCharacters = CharacterSet(charactersIn: "/\\:*?\"<>|")
-    .union(CharacterSet(charactersIn: Unicode.Scalar(0x00) ... Unicode.Scalar(0x1F)))
-/// Device names Windows reserves, with any extension and in any case.
-private let windowsReservedFileNames: Set<String> = Set(["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"])
-    .union(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "\u{B9}", "\u{B2}", "\u{B3}"].flatMap {
-        ["COM\($0)", "LPT\($0)"]
-    })
 
 /// Where the clipboard bridge sends: the session's `RDPClipboardSession`, or
 /// a test's recorder.
@@ -511,11 +502,14 @@ final class SessionClipboard {
     private nonisolated static func localFiles(from urls: [URL]) -> SessionLocalClipboardPayload {
         var files: [RDPClipboardLocalFile] = []
         var totalByteCount = 0
-        var usedFileNames = Set<String>()
 
         for url in urls {
             let fileURL = url.standardizedFileURL
-            let fileName = fileURL.lastPathComponent
+            // RDPKit offers each name under one Windows accepts, numbered
+            // where two clash, and takes "\" as a folder separator. A Mac
+            // file name may hold one, and each copied file is shared on its
+            // own, so it is kept out of any folder.
+            let fileName = fileURL.lastPathComponent.replacingOccurrences(of: "\\", with: "_")
             guard fileName.isEmpty == false else {
                 return .unsupported("Local file clipboard was not shared")
             }
@@ -544,51 +538,13 @@ final class SessionClipboard {
                     return .unsupported("Local clipboard files exceed 32 MiB; remote clipboard cleared")
                 }
                 totalByteCount += contents.count
-                files.append(RDPClipboardLocalFile(
-                    fileName: windowsFileName(fileName, usedFileNames: &usedFileNames),
-                    contents: contents
-                ))
+                files.append(RDPClipboardLocalFile(fileName: fileName, contents: contents))
             } catch {
                 return .unsupported("Local file clipboard could not be read; remote clipboard cleared")
             }
         }
 
         return files.isEmpty ? .empty : .files(files)
-    }
-
-    /// `fileName` as Windows accepts it, and unlike the names in
-    /// `usedFileNames`, which it joins. Windows compares names ignoring
-    /// case, and copied files from different folders can share one.
-    nonisolated static func windowsFileName(_ fileName: String, usedFileNames: inout Set<String>) -> String {
-        var scalars = String.UnicodeScalarView()
-        for scalar in fileName.unicodeScalars {
-            scalars.append(windowsInvalidFileNameCharacters.contains(scalar) ? "_" : scalar)
-        }
-        var name = String(scalars)
-        // Windows drops these from the end of a name.
-        while name.hasSuffix(".") || name.hasSuffix(" ") {
-            name.removeLast()
-        }
-        if name.isEmpty {
-            name = "file"
-        }
-        // Windows also ignores spaces before the extension: "CON .txt" is
-        // CON.
-        let stem = name.prefix { $0 != "." }
-        if windowsReservedFileNames.contains(stem.trimmingCharacters(in: .whitespaces).uppercased()) {
-            name.insert("_", at: stem.endIndex)
-        }
-
-        let baseName = (name as NSString).deletingPathExtension
-        let pathExtension = (name as NSString).pathExtension
-        var candidate = name
-        var suffix = 2
-        while usedFileNames.contains(candidate.lowercased()) {
-            candidate = pathExtension.isEmpty ? "\(baseName)-\(suffix)" : "\(baseName)-\(suffix).\(pathExtension)"
-            suffix += 1
-        }
-        usedFileNames.insert(candidate.lowercased())
-        return candidate
     }
 
     // MARK: - Remote file downloads
