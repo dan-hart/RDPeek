@@ -6,8 +6,9 @@ private let sessionMaximumLocalClipboardFileBytes = 32 * 1024 * 1024
 /// less anyway.
 private let sessionMaximumFileRangeByteCount: UInt64 = 1024 * 1024
 /// How long a FILECONTENTS request may go unanswered before the download
-/// fails.
-private let sessionFileContentsRequestTimeout: TimeInterval = 30
+/// fails. The server answers a whole range at once, so this allows a full
+/// range over a link of about 9 KB/s.
+private let sessionFileContentsRequestTimeout: TimeInterval = 120
 /// Characters Windows does not allow in a file name; a pasted file whose
 /// name has one fails to paste there.
 private let windowsInvalidFileNameCharacters = CharacterSet(charactersIn: "/\\:*?\"<>|")

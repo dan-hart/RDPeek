@@ -325,6 +325,34 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: fileURL), Data())
     }
 
+    /// A full range takes over a minute on a slow link.
+    func testSlowRangeAnswersFinishTheDownload() throws {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+        let contents = Data(count: 1_500_000)
+
+        try startRemoteFileDownload(contents, to: clipboard, from: session)
+        var received = 0
+        while received < contents.count {
+            clipboard.poll(now: Date().addingTimeInterval(110))
+            let request = try XCTUnwrap(session.rangeRequests.last)
+            session.rangeRequests.removeAll()
+            let end = received + Int(request.requestedByteCount)
+            clipboard.receiveFileContents(RDPClipboardFileContentsResponse(
+                streamID: request.streamID,
+                ok: true,
+                data: contents.subdata(in: received ..< end)
+            ))
+            received = end
+        }
+
+        XCTAssertFalse(toasts.contains("Remote file transfer timed out"))
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(copiedFileURL())), contents)
+    }
+
     func testUnansweredFileRequestTimesOut() throws {
         let session = RecordedClipboard()
         let clipboard = makeClipboard()
@@ -333,9 +361,9 @@ final class SessionClipboardTests: XCTestCase {
         clipboard.attach(session)
         try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
 
-        clipboard.poll(now: Date().addingTimeInterval(29))
+        clipboard.poll(now: Date().addingTimeInterval(119))
         XCTAssertFalse(toasts.contains("Remote file transfer timed out"))
-        clipboard.poll(now: Date().addingTimeInterval(31))
+        clipboard.poll(now: Date().addingTimeInterval(121))
         XCTAssertEqual(toasts.last, "Remote file transfer timed out")
 
         // An answer after the timeout is dropped.
