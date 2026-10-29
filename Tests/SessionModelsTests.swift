@@ -134,18 +134,27 @@ final class SessionModelsTests: XCTestCase {
         )
     }
 
-    func testUnreachableRedirectTargetIsNotRetried() {
-        let outcome = SessionAttemptOutcome.afterConnectionError(
-            RDPConnectionError.connect("Connection refused"),
-            host: "broker",
-            retriesSpent: 0,
-            reachedServer: true
-        )
+    func testRedirectTargetFailuresBlameThePassingServerAndAreNotRetried() {
+        // After a Server Redirection the server typed in took the sign-in,
+        // so it is neither blamed nor retried, whatever the target did.
+        func outcome(_ error: RDPConnectionError) -> SessionAttemptOutcome {
+            SessionAttemptOutcome.afterConnectionError(error, host: "broker", retriesSpent: 0, reachedServer: true)
+        }
 
-        XCTAssertEqual(outcome, .end(RDPSessionEndReason(
+        XCTAssertEqual(outcome(.connect("Connection refused")), .end(RDPSessionEndReason(
             kind: .failed,
-            message: "“broker” redirected the connection to a server that could not be reached."
+            message: "“broker” passed the session on to a server this Mac could not reach."
         )))
+        XCTAssertEqual(outcome(.addressResolution("nodename nor servname provided")), .end(RDPSessionEndReason(
+            kind: .failed,
+            message: "“broker” passed the session on to a server this Mac could not find."
+        )))
+        XCTAssertEqual(outcome(.receive("connection closed before receiving X224 Connection Confirm")), .end(
+            RDPSessionEndReason(
+                kind: .failed,
+                message: "“broker” passed the session on to a server that did not answer as a Remote Desktop server."
+            )
+        ))
     }
 
     func testUnresolvableHostIsNeverRetried() {
@@ -262,6 +271,17 @@ final class SessionModelsTests: XCTestCase {
         XCTAssertEqual(report.target, "winbox:3389")
         XCTAssertNil(report.nextStage)
         XCTAssertEqual(report.error, "address resolution failed: nodename nor servname provided")
+    }
+
+    func testFailureReportAfterARedirectDoesNotNameTheServerTypedInAsTarget() {
+        let report = RDPConnectionReport(
+            connectionError: RDPConnectionError.connect("Connection refused"),
+            configuration: RDPConnectionConfiguration(host: "broker"),
+            redirected: true
+        )
+
+        XCTAssertEqual(report.target, "unknown (passed on by broker:3389)")
+        XCTAssertEqual(report.error, "connect failed: Connection refused")
     }
 
     // MARK: - Logon names

@@ -1028,7 +1028,11 @@ final class SessionViewController: NSViewController {
                 reachedServer: reachedServer
             )
         case let .failure(error):
-            finishedReport = RDPConnectionReport(connectionError: error, configuration: configuration)
+            finishedReport = RDPConnectionReport(
+                connectionError: error,
+                configuration: configuration,
+                redirected: reachedServer
+            )
             outcome = .afterConnectionError(
                 error,
                 host: configuration.host,

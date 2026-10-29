@@ -238,21 +238,33 @@ enum SessionAttemptOutcome: Equatable {
 
     /// After `RDPSessionClient.connect` threw. Only an unreachable server is
     /// retried — a host name that does not resolve stays wrong. `connect`
-    /// also throws when a server redirects to one it cannot reach, after
-    /// the sign-in; `reachedServer` (a certificate arrived) tells that
-    /// apart, and it is not retried, so the sign-in is not repeated.
+    /// also throws when a server passes the session on (Server Redirection)
+    /// to one that fails, after the sign-in; `reachedServer` (a certificate
+    /// arrived) tells that apart. The server typed in was fine then, and it
+    /// is not retried, so the sign-in is not repeated. RDPKit does not name
+    /// the server the session was passed on to.
     static func afterConnectionError(
         _ error: any Error,
         host: String,
         retriesSpent: Int,
         reachedServer: Bool = false
     ) -> Self {
-        switch error as? RDPConnectionError {
-        case .connect? where reachedServer:
+        let connectionError = error as? RDPConnectionError
+        if reachedServer {
+            let failure = switch connectionError {
+            case .addressResolution?:
+                "this Mac could not find"
+            case .connect?:
+                "this Mac could not reach"
+            default:
+                "that did not answer as a Remote Desktop server"
+            }
             return .end(RDPSessionEndReason(
                 kind: .failed,
-                message: "“\(host)” redirected the connection to a server that could not be reached."
+                message: "“\(host)” passed the session on to a server \(failure)."
             ))
+        }
+        switch connectionError {
         case .connect?:
             guard retriesSpent >= maximumUnreachableRetries else {
                 return .retry
@@ -326,9 +338,14 @@ enum SessionAttemptOutcome: Equatable {
 
 extension RDPConnectionReport {
     /// The report for an attempt `RDPSessionClient.connect` threw on, shaped
-    /// as `run` reports it, so Diagnostics keeps the raw error.
-    init(connectionError: any Error, configuration: RDPConnectionConfiguration) {
+    /// as `run` reports it, so Diagnostics keeps the raw error. When the
+    /// server typed in passed the session on, the server that failed is
+    /// the target, which RDPKit does not name.
+    init(connectionError: any Error, configuration: RDPConnectionConfiguration, redirected: Bool = false) {
         self = RDPSessionClient().dryRun(configuration: configuration)
+        if redirected {
+            target = "unknown (passed on by \(configuration.host):\(configuration.port))"
+        }
         status = "failure"
         stage = "x224-rdp-negotiation"
         nextStage = nil
