@@ -17,7 +17,7 @@ export function InputSection() {
       id="input"
       eyebrow="Input done right"
       title="Your shortcuts, their desktop"
-      lede="Inside a session, shortcuts that include ⌘ or ⌃ are sent to the remote desktop as scancodes — so Windows and Linux shortcuts just work. Plain typing arrives as Unicode, exactly as you typed it."
+      lede="Inside a session, shortcuts that include ⌘ or ⌃ are sent to the remote desktop as scancodes — so Windows and Linux shortcuts just work. Plain typing lands exactly as you typed it: as the key itself when your Mac's keyboard layout types the same character there, so remote input methods see it, and as Unicode otherwise."
     >
       <Reveal className="mt-12" delay={0.06}>
         <div className="glass mx-auto flex max-w-2xl flex-col items-center gap-4 rounded-2xl px-6 py-8 sm:flex-row sm:justify-center sm:gap-6">
