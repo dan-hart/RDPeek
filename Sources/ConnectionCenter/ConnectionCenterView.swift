@@ -9,9 +9,14 @@ struct ConnectionCenterView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedDeviceID: UUID?
     @FocusState private var isGridFocused: Bool
+    /// How many cards a grid row holds, for moving the selection up and down.
+    @State private var columnCount = 1
 
     private let columns = [
-        GridItem(.adaptive(minimum: 230, maximum: 320), spacing: 18),
+        GridItem(
+            .adaptive(minimum: DeviceGridNavigation.cardMinimumWidth, maximum: DeviceGridNavigation.cardMaximumWidth),
+            spacing: DeviceGridNavigation.spacing
+        ),
     ]
 
     var body: some View {
@@ -102,55 +107,75 @@ struct ConnectionCenterView: View {
 
     /// `devices` is `filteredDevices`, which `body` computes once per update.
     private func deviceGrid(_ devices: [DeviceProfile]) -> some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 18) {
-                ForEach(devices) { device in
-                    DeviceCardView(
-                        device: device,
-                        isSelected: selectedDeviceID == device.id,
-                        onSelect: { select(device.id) },
-                        onConnect: { connect(device) },
-                        onEdit: { deviceList.edit(device) },
-                        onDuplicate: { deviceList.duplicate(device) },
-                        onDelete: { deviceList.requestDeletion(of: device) }
-                    )
-                    .transition(reduceMotion ? .opacity : .scale(scale: 0.92).combined(with: .opacity))
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: DeviceGridNavigation.spacing) {
+                    ForEach(devices) { device in
+                        DeviceCardView(
+                            device: device,
+                            isSelected: selectedDeviceID == device.id,
+                            onSelect: { select(device.id) },
+                            onConnect: { connect(device) },
+                            onEdit: { deviceList.edit(device) },
+                            onDuplicate: { deviceList.duplicate(device) },
+                            onDelete: { deviceList.requestDeletion(of: device) }
+                        )
+                        .transition(reduceMotion ? .opacity : .scale(scale: 0.92).combined(with: .opacity))
+                    }
+                }
+                .onGeometryChange(for: Int.self) { geometry in
+                    DeviceGridNavigation.columnCount(forWidth: geometry.size.width)
+                } action: { count in
+                    columnCount = count
+                }
+                .padding(20)
+                .animation(.spring(duration: 0.35, bounce: 0.15), value: devices.map(\.id))
+            }
+            .overlay {
+                if devices.isEmpty {
+                    ContentUnavailableView.search(text: deviceList.searchText)
                 }
             }
-            .padding(20)
-            .animation(.spring(duration: 0.35, bounce: 0.15), value: devices.map(\.id))
-        }
-        .overlay {
-            if devices.isEmpty {
-                ContentUnavailableView.search(text: deviceList.searchText)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                select(nil)
             }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            select(nil)
-        }
-        // Return connects the selection and Delete asks to remove it, only
-        // while the grid has keyboard focus: as window-wide shortcuts they
-        // also fired while typing in the search field.
-        .focusable(interactions: .edit)
-        .focusEffectDisabled()
-        .focused($isGridFocused)
-        .onKeyPress(.return) {
-            guard let device = devices.first(where: { $0.id == selectedDeviceID }) else {
-                return .ignored
+            // Return connects the selection and Delete asks to remove it, only
+            // while the grid has keyboard focus: as window-wide shortcuts they
+            // also fired while typing in the search field. The arrow keys
+            // move the selection.
+            .focusable(interactions: .edit)
+            .focusEffectDisabled()
+            .focused($isGridFocused)
+            .onKeyPress(.return) {
+                guard let device = devices.first(where: { $0.id == selectedDeviceID }) else {
+                    return .ignored
+                }
+                connect(device)
+                return .handled
             }
-            connect(device)
-            return .handled
-        }
-        .onDeleteCommand {
-            if let device = devices.first(where: { $0.id == selectedDeviceID }) {
-                deviceList.requestDeletion(of: device)
+            .onDeleteCommand {
+                if let device = devices.first(where: { $0.id == selectedDeviceID }) {
+                    deviceList.requestDeletion(of: device)
+                }
+            }
+            .onMoveCommand { direction in
+                guard let index = DeviceGridNavigation.index(
+                    after: direction,
+                    from: devices.firstIndex { $0.id == selectedDeviceID },
+                    count: devices.count,
+                    columns: columnCount
+                ) else {
+                    return
+                }
+                select(devices[index].id)
+                scrollProxy.scrollTo(devices[index].id)
             }
         }
     }
 
     /// Selecting, or clicking the empty grid, also gives the grid keyboard
-    /// focus, so Return and Delete act on the selection.
+    /// focus, so Return, Delete and the arrow keys act on the selection.
     private func select(_ deviceID: UUID?) {
         selectedDeviceID = deviceID
         isGridFocused = true

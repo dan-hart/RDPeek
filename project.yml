@@ -58,6 +58,7 @@ targets:
       # Unhosted test bundle: compiles the files under test directly so the
       # hardened-runtime app does not need to host the tests.
       - path: Tests
+      - path: Sources/ConnectionCenter/DeviceGridNavigation.swift
       - path: Sources/ConnectionCenter/DeviceListModel.swift
       - path: Sources/Diagnostics/DiagnosticsView.swift
       - path: Sources/Session/FramePacing.swift

@@ -76,6 +76,7 @@ struct HelpView: View {
                 HelpSection(title: "Keyboard Shortcuts", systemImage: "keyboard") {
                     Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 7) {
                         HelpShortcutRow("⌘N", "Add PC")
+                        HelpShortcutRow("Arrow keys", "Select another PC")
                         HelpShortcutRow("Return", "Connect to the selected PC")
                         HelpShortcutRow("Delete", "Delete the selected PC")
                         HelpShortcutRow("⌘R", "Reconnect a session that ended")
