@@ -10,6 +10,20 @@ private final class RecordedClipboard: SessionClipboardSending {
         var requestedByteCount: UInt32
     }
 
+    /// Turned on, fetches `unfetchedRemoteCopy` as RDPClipboardSession does.
+    var fetchesRemoteCopies = true {
+        didSet {
+            if fetchesRemoteCopies, !oldValue, unfetchedRemoteCopy {
+                isAwaitingRemoteCopy = true
+                unfetchedRemoteCopy = false
+            }
+        }
+    }
+
+    /// Whether the server announced a copy while fetching was off that no
+    /// publish has replaced.
+    var unfetchedRemoteCopy = false
+    var isAwaitingRemoteCopy = false
     var publishedTexts: [String?] = []
     var publishedFiles: [[RDPClipboardLocalFile]] = []
     var sizeRequests: [UInt32] = []
@@ -17,10 +31,12 @@ private final class RecordedClipboard: SessionClipboardSending {
     var rangeRequests: [RangeRequest] = []
 
     func publishLocalUnicodeText(_ text: String?) {
+        unfetchedRemoteCopy = false
         publishedTexts.append(text)
     }
 
     func publishLocalFiles(_ files: [RDPClipboardLocalFile]) {
+        unfetchedRemoteCopy = false
         publishedFiles.append(files)
     }
 
@@ -173,6 +189,93 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(session.publishedTexts.last, "newer local")
     }
 
+    /// Off, the server's copies are not even fetched; on, they are.
+    func testOnlySharingFetchesTheServersCopies() {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard(isSharingEnabled: false)
+        clipboard.attach(session)
+        XCTAssertFalse(session.fetchesRemoteCopies)
+
+        clipboard.startTemporarySharing()
+        XCTAssertTrue(session.fetchesRemoteCopies)
+        clipboard.poll(now: Date().addingTimeInterval(31))
+        XCTAssertFalse(session.fetchesRemoteCopies)
+        clipboard.setSharingEnabled(true)
+        XCTAssertTrue(session.fetchesRemoteCopies)
+        clipboard.setSharingEnabled(false)
+        XCTAssertFalse(session.fetchesRemoteCopies)
+
+        clipboard.detach()
+        clipboard.setSharingEnabled(true)
+        session.fetchesRemoteCopies = false
+        clipboard.attach(session)
+        XCTAssertTrue(session.fetchesRemoteCopies)
+    }
+
+    /// The session fetches nothing until the bridge attaches. The server's
+    /// first copy, announced before then, reaches the pasteboard, and the
+    /// pasteboard the Mac had does not replace it on the server.
+    func testTheServersFirstCopyWinsOverThePasteboard() {
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        let session = RecordedClipboard()
+        session.fetchesRemoteCopies = false
+        session.unfetchedRemoteCopy = true
+        let clipboard = makeClipboard()
+
+        clipboard.attach(session)
+        XCTAssertTrue(session.isAwaitingRemoteCopy)
+        XCTAssertTrue(session.publishedTexts.isEmpty)
+        clipboard.receiveText("remote")
+        clipboard.poll()
+        clipboard.syncNow()
+        XCTAssertEqual(pasteboard.string(forType: .string), "remote")
+        XCTAssertTrue(session.publishedTexts.isEmpty)
+    }
+
+    /// Should the server's first copy never arrive, Sync Now sends the
+    /// pasteboard instead; the poll does not.
+    func testSyncNowSendsThePasteboardWhenTheServersFirstCopyNeverArrives() {
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        let session = RecordedClipboard()
+        session.fetchesRemoteCopies = false
+        session.unfetchedRemoteCopy = true
+        let clipboard = makeClipboard()
+
+        clipboard.attach(session)
+        clipboard.poll()
+        XCTAssertTrue(session.publishedTexts.isEmpty)
+        clipboard.syncNow()
+        XCTAssertEqual(session.publishedTexts, ["local"])
+    }
+
+    /// Turning sharing on sends the pasteboard over a copy the server
+    /// announced while sharing was off, which is not fetched. Copied files
+    /// take a read, during which an empty clipboard stands in for them.
+    func testSharingThatStartsSendsThePasteboardOverACopyMadeWhileOff() async throws {
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard(isSharingEnabled: false)
+        clipboard.attach(session)
+        session.unfetchedRemoteCopy = true
+        clipboard.setSharingEnabled(true)
+        XCTAssertFalse(session.isAwaitingRemoteCopy)
+        XCTAssertEqual(session.publishedTexts, [nil, "local"])
+
+        let fileURL = try makeLocalFile(named: "notes.txt", contents: Data("hello".utf8))
+        pasteboard.clearContents()
+        pasteboard.writeObjects([fileURL as NSURL])
+        clipboard.setSharingEnabled(false)
+        session.unfetchedRemoteCopy = true
+        clipboard.startTemporarySharing()
+        XCTAssertFalse(session.isAwaitingRemoteCopy)
+        XCTAssertEqual(session.publishedTexts, [nil, "local", nil, nil])
+        try await XCTUnwrap(clipboard.localFileRead).value
+        XCTAssertEqual(session.publishedFiles.map { $0.map(\.contents) }, [[Data("hello".utf8)]])
+    }
+
     func testOnlySyncNowSaysTheClipboardSynced() {
         pasteboard.clearContents()
         pasteboard.setString("hello", forType: .string)
@@ -280,7 +383,7 @@ final class SessionClipboardTests: XCTestCase {
         pasteboard.writeObjects([fileURL as NSURL])
         clipboard.startTemporarySharing()
         try await XCTUnwrap(clipboard.localFileRead).value
-        XCTAssertEqual(session.publishedTexts, [nil, nil])
+        XCTAssertEqual(session.publishedTexts, [nil, nil, nil])
         try Data("first".utf8).write(to: fileURL)
         clipboard.poll()
         XCTAssertNil(clipboard.localFileRead, "The poll does not try again")

@@ -959,6 +959,11 @@ final class SessionViewController: NSViewController {
                         }
                     },
                     onClipboardReady: { session in
+                        // The server's first copy can come before the
+                        // bridge attaches on the main thread, so nothing is
+                        // fetched until it applies the sharing choice; on,
+                        // fetching then gets a copy that came in between.
+                        session.fetchesRemoteCopies = false
                         sink.apply { controller in
                             controller.clipboard.attach(session)
                             controller.render()

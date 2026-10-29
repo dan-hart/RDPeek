@@ -22,6 +22,12 @@ private let windowsReservedFileNames: Set<String> = Set(["CON", "PRN", "AUX", "N
 /// Where the clipboard bridge sends: the session's `RDPClipboardSession`, or
 /// a test's recorder.
 protocol SessionClipboardSending: AnyObject {
+    /// Off while sharing is off, so the server's copies are not even
+    /// fetched. Turned on, it fetches a copy the server announced while it
+    /// was off, unless a publish has replaced that copy since.
+    var fetchesRemoteCopies: Bool { get set }
+    /// Whether a copy the server announced is being fetched.
+    var isAwaitingRemoteCopy: Bool { get }
     func publishLocalUnicodeText(_ text: String?)
     func publishLocalFiles(_ files: [RDPClipboardLocalFile])
     func requestRemoteFileSize(streamID: UInt32, fileIndex: Int32) throws
@@ -114,12 +120,24 @@ final class SessionClipboard {
         return max(0, Int(ceil(remainingSeconds)))
     }
 
+    /// `onClipboardReady` turned the session's fetching off until this
+    /// applies the sharing choice.
     func attach(_ session: any SessionClipboardSending) {
         self.session = session
         // Joining the channel sent an empty Format List.
         serverHoldsLocalCopy = false
+        session.fetchesRemoteCopies = isSharingEnabled
         guard isSharingEnabled else {
             session.publishLocalUnicodeText(nil)
+            return
+        }
+        // Turning fetching on fetches a copy the server announced before
+        // the bridge attached. It is newer than the pasteboard, which
+        // publishing now would put in its place on the server; should it
+        // never arrive, Sync Now sends the pasteboard.
+        guard session.isAwaitingRemoteCopy == false else {
+            pasteboardChangeCount = pasteboard.changeCount
+            localCopyIsUnsent = true
             return
         }
         publishPasteboardIfChanged(force: true)
@@ -142,6 +160,7 @@ final class SessionClipboard {
         isSharingEnabled = enabled
         temporarySharingExpiresAt = nil
         guard enabled else {
+            session?.fetchesRemoteCopies = false
             discardFileTransfer()
             cancelLocalFileRead()
             // Takes back the local copy. Windows empties its clipboard for
@@ -160,7 +179,15 @@ final class SessionClipboard {
             publishPasteboardIfChanged(force: resendsUnsentLocalCopy)
             return
         }
+        // The pasteboard replaces on the server a copy announced while
+        // sharing was off, which turning fetching on would fetch. Copied
+        // files go once read, so an empty clipboard replaces it meanwhile; a
+        // remote copy made during the read is newer and is fetched.
         publishPasteboardIfChanged(force: true)
+        if localFileRead != nil {
+            session?.publishLocalUnicodeText(nil)
+        }
+        session?.fetchesRemoteCopies = true
     }
 
     /// Sends a local copy the poll has not yet, or again one that has not
