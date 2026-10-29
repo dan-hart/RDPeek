@@ -116,6 +116,53 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertTrue(isPointerButton(harness.recorder.events.last, button: .left, isDown: true))
     }
 
+    func testMovesAndScrollsReleaseModifiersTheViewMissed() {
+        // A modifier released while a menu is open never reaches the view as
+        // flagsChanged; a later move, drag or scroll shows it up.
+        let harness = makeHarness()
+        let pressControl = {
+            harness.view.flagsChanged(with: self.flagsEvent(keyCode: .leftControl, flags: .leftControlDown))
+            harness.recorder.events.removeAll()
+        }
+
+        pressControl()
+        harness.view.mouseMoved(with: mouseEvent(.mouseMoved, location: NSPoint(x: 10, y: 90)))
+        XCTAssertEqual(harness.recorder.events.count, 2)
+        XCTAssertEqual(harness.recorder.events.first, .keyboard(scancode: .leftControl, isReleased: true))
+        XCTAssertTrue(isPointerMove(harness.recorder.events.last))
+
+        pressControl()
+        harness.view.mouseDragged(with: mouseEvent(.leftMouseDragged, location: NSPoint(x: 10, y: 90)))
+        XCTAssertEqual(harness.recorder.events.first, .keyboard(scancode: .leftControl, isReleased: true))
+        XCTAssertTrue(isPointerMove(harness.recorder.events.last))
+
+        pressControl()
+        harness.view.scrollWheel(with: scrollEvent())
+        XCTAssertEqual(harness.recorder.events.first, .keyboard(scancode: .leftControl, isReleased: true))
+    }
+
+    func testKeyAndButtonReleasesReleaseModifiersTheViewMissedFirst() {
+        let harness = makeHarness()
+        let xKey = RDPKeyboardScancode(code: 0x2D)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: .leftControlDown))
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_X), characters: "\u{18}", flags: .leftControlDown))
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: NSPoint(x: 10, y: 90), flags: .leftControlDown))
+        harness.recorder.events.removeAll()
+
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: UInt16(kVK_ANSI_X), characters: "x"))
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: .leftControl, isReleased: true),
+            .keyboard(scancode: xKey, isReleased: true),
+        ])
+
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .leftControl, flags: .leftControlDown))
+        harness.recorder.events.removeAll()
+        harness.view.mouseUp(with: mouseEvent(.leftMouseUp, location: NSPoint(x: 10, y: 90)))
+        XCTAssertEqual(harness.recorder.events.count, 2)
+        XCTAssertEqual(harness.recorder.events.first, .keyboard(scancode: .leftControl, isReleased: true))
+        XCTAssertTrue(isPointerButton(harness.recorder.events.last, button: .left, isDown: false))
+    }
+
     // MARK: - Command as the Windows key
 
     func testCommandReleasedAloneTapsTheWindowsKey() {
@@ -479,6 +526,31 @@ final class RemoteInputCaptureViewTests: XCTestCase {
             preconditionFailure("Failed to synthesize mouse event")
         }
         return event
+    }
+
+    private func scrollEvent() -> NSEvent {
+        guard let cgEvent = CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .line,
+            wheelCount: 1,
+            wheel1: 1,
+            wheel2: 0,
+            wheel3: 0
+        ) else {
+            preconditionFailure("Failed to synthesize scroll event")
+        }
+        cgEvent.flags = []
+        guard let event = NSEvent(cgEvent: cgEvent) else {
+            preconditionFailure("Failed to convert scroll event")
+        }
+        return event
+    }
+
+    private func isPointerMove(_ event: RDPSlowPathInputEvent?) -> Bool {
+        guard case .pointerMove = event else {
+            return false
+        }
+        return true
     }
 
     private func isPointerButton(

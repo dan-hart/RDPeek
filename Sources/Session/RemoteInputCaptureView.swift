@@ -139,6 +139,7 @@ final class RemoteInputCaptureNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        releaseModifiers(missingFrom: event.modifierFlags)
         sendPointerButton(.left, isDown: false, event: event)
     }
 
@@ -149,6 +150,7 @@ final class RemoteInputCaptureNSView: NSView {
     }
 
     override func rightMouseUp(with event: NSEvent) {
+        releaseModifiers(missingFrom: event.modifierFlags)
         sendPointerButton(.right, isDown: false, event: event)
     }
 
@@ -162,6 +164,7 @@ final class RemoteInputCaptureNSView: NSView {
     }
 
     override func otherMouseUp(with event: NSEvent) {
+        releaseModifiers(missingFrom: event.modifierFlags)
         guard let button = pointerButton(for: event) else {
             return
         }
@@ -169,6 +172,7 @@ final class RemoteInputCaptureNSView: NSView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        releaseModifiers(missingFrom: event.modifierFlags)
         guard let point = remotePoint(from: event) else {
             return
         }
@@ -234,10 +238,10 @@ final class RemoteInputCaptureNSView: NSView {
     }
 
     override func keyUp(with event: NSEvent) {
-        guard let scancode = MacRDPKeyboardMapping.scancode(forKeyCode: event.keyCode) else {
-            return
-        }
-        guard inputState.isScancodePressed(scancode) else {
+        releaseModifiers(missingFrom: event.modifierFlags)
+        guard let scancode = MacRDPKeyboardMapping.scancode(forKeyCode: event.keyCode),
+              inputState.isScancodePressed(scancode)
+        else {
             return
         }
         sendKeyboardScancode(scancode, isReleased: true)
@@ -276,14 +280,37 @@ final class RemoteInputCaptureNSView: NSView {
     /// a key is pressed only when its own side bit shows it down, since a
     /// keyboard that reports no side bits does not say which side is held.
     private func modifierSyncEvents(for modifierFlags: NSEvent.ModifierFlags) -> [RDPSlowPathInputEvent] {
+        modifierReleaseEvents(missingFrom: modifierFlags) + modifierPressEvents(for: modifierFlags)
+    }
+
+    /// AppKit does not deliver every modifier release to the view, for
+    /// example one made while a menu is open or while another app such as
+    /// Spotlight has the keyboard, so every event releases the modifiers its
+    /// flags show up. Only key-down, button-down and modifier events press
+    /// the ones they show held: those are input the user aims at the remote.
+    private func releaseModifiers(missingFrom modifierFlags: NSEvent.ModifierFlags) {
+        let events = modifierReleaseEvents(missingFrom: modifierFlags)
+        if events.isEmpty == false {
+            inputSession?.send(events)
+        }
+    }
+
+    private func modifierReleaseEvents(missingFrom modifierFlags: NSEvent.ModifierFlags) -> [RDPSlowPathInputEvent] {
+        MacRDPModifierKey.all.compactMap { modifier in
+            let scancode = modifier.scancode
+            guard modifier.isDown(in: modifierFlags) == false else {
+                return nil
+            }
+            // A deferred Windows key whose release the view missed never
+            // reached the server, so it is dropped without a tap.
+            deferredWindowsKey.discard(scancode)
+            return inputState.isScancodePressed(scancode) ? inputState.keyboard(scancode: scancode, isReleased: true) : nil
+        }
+    }
+
+    private func modifierPressEvents(for modifierFlags: NSEvent.ModifierFlags) -> [RDPSlowPathInputEvent] {
         MacRDPModifierKey.all.flatMap { modifier -> [RDPSlowPathInputEvent] in
             let scancode = modifier.scancode
-            if modifier.isDown(in: modifierFlags) == false {
-                // A deferred Windows key whose release the view missed never
-                // reached the server, so it is dropped without a tap.
-                deferredWindowsKey.discard(scancode)
-                return inputState.isScancodePressed(scancode) ? [inputState.keyboard(scancode: scancode, isReleased: true)] : []
-            }
             guard isModifierPressed(scancode) == false, modifier.isSideDown(in: modifierFlags) else {
                 return []
             }
@@ -333,6 +360,7 @@ final class RemoteInputCaptureNSView: NSView {
     }
 
     private func sendPointerMove(_ event: NSEvent) {
+        releaseModifiers(missingFrom: event.modifierFlags)
         guard let point = remotePoint(from: event) else {
             return
         }
