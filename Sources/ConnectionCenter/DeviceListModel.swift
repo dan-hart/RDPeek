@@ -135,7 +135,8 @@ final class DeviceListModel: ObservableObject {
         copy.createdAt = Date()
         copy.updatedAt = Date()
         copy.lastConnectedAt = nil
-        copy.rememberPassword = false
+        // rememberPassword carries over: the copy has the same identity, so
+        // it signs in with the same keychain entry.
         do {
             devices = try store.save(copy)
         } catch {
@@ -172,10 +173,10 @@ final class DeviceListModel: ObservableObject {
 
         // The keychain entry is keyed by identity, so drop the old entry when
         // host, port, username, or domain changed — unless another profile
-        // still connects with that identity and would lose its password.
+        // still remembers its password under that identity.
         if editor.hadRememberedPassword,
            editor.device.identity.hasSameConnectionIdentity(as: device.identity) == false,
-           identityIsShared(editor.device.identity, excluding: device.id) == false,
+           rememberedPasswordIsShared(editor.device.identity, excluding: device.id) == false,
            let oldKey = KeychainCredentialKey(identity: editor.device.identity)
         {
             try credentialStore.deletePassword(for: oldKey)
@@ -185,19 +186,22 @@ final class DeviceListModel: ObservableObject {
             if device.rememberPassword {
                 try credentialStore.savePassword(password, for: key)
             } else if editor.hadRememberedPassword,
-                      identityIsShared(device.identity, excluding: device.id) == false
+                      rememberedPasswordIsShared(device.identity, excluding: device.id) == false
             {
                 try credentialStore.deletePassword(for: key)
             }
         }
 
-        // Keep a typed-but-not-remembered password for this app run, so
-        // connecting works without asking again.
-        if device.rememberPassword == false,
-           password.isEmpty == false,
-           let account = device.identity.credentialAccountName
-        {
-            credentialCache.setPassword(password, for: account)
+        if let account = device.identity.credentialAccountName {
+            if device.rememberPassword {
+                // The keychain holds the password now; drop a cached copy
+                // that could go stale.
+                credentialCache.removePassword(for: account)
+            } else if password.isEmpty == false {
+                // Keep a typed-but-not-remembered password for this app
+                // run, so connecting works without asking again.
+                credentialCache.setPassword(password, for: account)
+            }
         }
 
         devices = try store.save(device)
@@ -213,17 +217,18 @@ final class DeviceListModel: ObservableObject {
             // Delete the profile first: if the store write throws, nothing
             // irreversible has happened to the keychain yet.
             devices = try store.delete(id: device.id)
-            // Profiles for the same machine share one keychain entry; only
-            // delete it when no other profile still uses that identity.
-            if identityIsShared(device.identity, excluding: device.id) == false {
-                // The confirmation dialog promises the saved password is
-                // removed too, so a failure must surface, not be swallowed.
-                if let key = KeychainCredentialKey(identity: device.identity) {
-                    try credentialStore.deletePassword(for: key)
-                }
-                if let account = device.identity.credentialAccountName {
-                    credentialCache.removePassword(for: account)
-                }
+            // Profiles for the same machine share one cached password and
+            // one keychain entry; keep each while another profile uses it.
+            let twins = devices.filter { $0.identity.hasSameConnectionIdentity(as: device.identity) }
+            if twins.isEmpty, let account = device.identity.credentialAccountName {
+                credentialCache.removePassword(for: account)
+            }
+            // The confirmation dialog promises the saved password is removed
+            // too, so a failure must surface, not be swallowed.
+            if twins.contains(where: \.rememberPassword) == false,
+               let key = KeychainCredentialKey(identity: device.identity)
+            {
+                try credentialStore.deletePassword(for: key)
             }
         } catch {
             errorMessage = String(describing: error)
@@ -231,25 +236,25 @@ final class DeviceListModel: ObservableObject {
         devicePendingDeletion = nil
     }
 
-    private func identityIsShared(_ identity: RDPConnectionIdentity, excluding deviceID: UUID) -> Bool {
+    /// Whether another profile remembers its password under `identity`, and
+    /// so still needs the keychain entry. Profiles that don't remember their
+    /// password never read it.
+    private func rememberedPasswordIsShared(_ identity: RDPConnectionIdentity, excluding deviceID: UUID) -> Bool {
         devices.contains { other in
-            other.id != deviceID && other.identity.hasSameConnectionIdentity(as: identity)
+            other.id != deviceID
+                && other.rememberPassword
+                && other.identity.hasSameConnectionIdentity(as: identity)
         }
     }
 
     // MARK: - Connecting
 
     func connect(_ device: DeviceProfile, using launchStore: any RemoteSessionOpening) {
-        // No Keychain read here: it can block on the access-approval dialog.
-        // The session window resolves stored credentials asynchronously.
-        var password = ""
-        if let account = device.identity.credentialAccountName,
-           let cachedPassword = credentialCache.password(for: account)
-        {
-            password = cachedPassword
-        }
-        let draft = RDPConnectionDraft(device: device, password: password)
-        launchStore.openRemoteSession(draft)
+        // No password here: the session window resolves it — the keychain
+        // when the profile remembers one, then this run's cache, then the
+        // sign-in prompt — off the main thread, since the keychain read can
+        // block on the access-approval dialog.
+        launchStore.openRemoteSession(RDPConnectionDraft(device: device, password: ""))
     }
 
     func touchLastConnected(deviceID: UUID) {

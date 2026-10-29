@@ -29,10 +29,9 @@ final class DeviceListModelTests: XCTestCase {
 
     // MARK: - confirmDeletion
 
-    func testConfirmDeletionKeepsCredentialSharedWithAnotherProfile() throws {
-        let device = makeDevice(name: "Work PC")
-        var twin = makeDevice(name: "Work PC via VPN")
-        twin.id = UUID()
+    func testConfirmDeletionKeepsCredentialSharedWithRememberingProfile() throws {
+        let device = makeDevice(name: "Work PC", rememberPassword: true)
+        let twin = makeDevice(name: "Work PC via VPN", rememberPassword: true)
         let harness = try makeHarness(devices: [device, twin])
         let account = try account(for: device)
         harness.cache.setPassword("cached", for: account)
@@ -46,10 +45,23 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertNil(harness.model.devicePendingDeletion)
     }
 
+    func testConfirmDeletionRemovesCredentialButKeepsCacheForTwinThatDoesNotRemember() throws {
+        let device = makeDevice(name: "Work PC", rememberPassword: true)
+        let twin = makeDevice(name: "Work PC via VPN")
+        let harness = try makeHarness(devices: [device, twin])
+        let account = try account(for: device)
+        harness.cache.setPassword("cached", for: account)
+
+        harness.model.confirmDeletion(of: device)
+
+        XCTAssertEqual(harness.credentials.deletedAccounts, [account])
+        XCTAssertEqual(harness.cache.password(for: account), "cached")
+        XCTAssertNil(harness.model.errorMessage)
+    }
+
     func testConfirmDeletionRemovesCredentialAndCacheEntryWhenUnshared() throws {
         let device = makeDevice(name: "Work PC")
-        var other = makeDevice(name: "Other PC", host: "other.example")
-        other.id = UUID()
+        let other = makeDevice(name: "Other PC", host: "other.example")
         let harness = try makeHarness(devices: [device, other])
         let account = try account(for: device)
         harness.credentials.passwords[account] = "secret"
@@ -107,10 +119,9 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertEqual(harness.credentials.savedAccounts, [try account(for: edited)])
     }
 
-    func testSaveKeepsStaleCredentialSharedWithAnotherDevice() throws {
+    func testSaveKeepsStaleCredentialSharedWithRememberingDevice() throws {
         let device = makeDevice(host: "shared.example", rememberPassword: true)
-        var twin = makeDevice(name: "Twin", host: "shared.example")
-        twin.id = UUID()
+        let twin = makeDevice(name: "Twin", host: "shared.example", rememberPassword: true)
         let harness = try makeHarness(devices: [device, twin])
         let editor = makeEditor(for: device, hadRememberedPassword: true)
         var edited = device
@@ -120,6 +131,19 @@ final class DeviceListModelTests: XCTestCase {
 
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
         XCTAssertEqual(harness.credentials.savedAccounts, [try account(for: edited)])
+    }
+
+    func testSaveDeletesStaleCredentialWhenTwinDoesNotRemember() throws {
+        let device = makeDevice(host: "shared.example", rememberPassword: true)
+        let twin = makeDevice(name: "Twin", host: "shared.example")
+        let harness = try makeHarness(devices: [device, twin])
+        let editor = makeEditor(for: device, hadRememberedPassword: true)
+        var edited = device
+        edited.host = "new.example"
+
+        _ = try harness.model.save(editor: editor, editedDevice: edited, password: "pw")
+
+        XCTAssertEqual(harness.credentials.deletedAccounts, [try account(for: device)])
     }
 
     func testSaveWithUnchangedIdentityDeletesNothing() throws {
@@ -148,10 +172,9 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertEqual(harness.credentials.savedAccounts, [])
     }
 
-    func testSaveKeepsCredentialWhenRememberTurnedOffButIdentityShared() throws {
+    func testSaveKeepsCredentialWhenRememberTurnedOffButTwinRemembers() throws {
         let device = makeDevice(rememberPassword: true)
-        var twin = makeDevice(name: "Twin")
-        twin.id = UUID()
+        let twin = makeDevice(name: "Twin", rememberPassword: true)
         let harness = try makeHarness(devices: [device, twin])
         let editor = makeEditor(for: device, hadRememberedPassword: true)
         var edited = device
@@ -172,6 +195,21 @@ final class DeviceListModelTests: XCTestCase {
         XCTAssertEqual(harness.cache.password(for: try account(for: device)), "typed")
         XCTAssertEqual(harness.credentials.savedAccounts, [])
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
+    }
+
+    func testSaveWithRememberDropsCachedPassword() throws {
+        let device = makeDevice()
+        let harness = try makeHarness(devices: [device])
+        let account = try account(for: device)
+        harness.cache.setPassword("stale", for: account)
+        let editor = makeEditor(for: device, hadRememberedPassword: false)
+        var edited = device
+        edited.rememberPassword = true
+
+        _ = try harness.model.save(editor: editor, editedDevice: edited, password: "new")
+
+        XCTAssertEqual(harness.credentials.passwords[account], "new")
+        XCTAssertNil(harness.cache.password(for: account))
     }
 
     func testSaveKeepsStoreLastConnectedAtOverEditorSnapshot() throws {
@@ -304,27 +342,35 @@ final class DeviceListModelTests: XCTestCase {
 
     // MARK: - connect
 
-    func testConnectUsesCachedPasswordWithoutTouchingKeychain() throws {
-        let device = makeDevice()
+    func testConnectLeavesPasswordResolutionToTheSession() throws {
+        let device = makeDevice(rememberPassword: true)
         let harness = try makeHarness(devices: [device])
         let opener = RemoteSessionOpenerRecorder()
+        // A cached password must not override the keychain one the session
+        // reads for a profile that remembers its password.
         harness.cache.setPassword("cached", for: try account(for: device))
 
         harness.model.connect(device, using: opener)
 
-        XCTAssertEqual(opener.drafts.map(\.password), ["cached"])
+        XCTAssertEqual(opener.drafts.map(\.password), [""])
+        XCTAssertEqual(opener.drafts.map(\.rememberPassword), [true])
         XCTAssertEqual(harness.credentials.readAccounts, [])
     }
 
-    func testConnectSendsEmptyPasswordWhenNothingIsCached() throws {
-        let device = makeDevice()
+    // MARK: - duplicate
+
+    func testDuplicateKeepsRememberPassword() throws {
+        var device = makeDevice(rememberPassword: true)
+        device.lastConnectedAt = Date(timeIntervalSinceReferenceDate: 1_000_000)
         let harness = try makeHarness(devices: [device])
-        let opener = RemoteSessionOpenerRecorder()
 
-        harness.model.connect(device, using: opener)
+        harness.model.duplicate(device)
 
-        XCTAssertEqual(opener.drafts.map(\.password), [""])
-        XCTAssertEqual(harness.credentials.readAccounts, [])
+        let copy = try XCTUnwrap(harness.model.devices.first { $0.id != device.id })
+        XCTAssertEqual(copy.name, "Test PC Copy")
+        XCTAssertTrue(copy.rememberPassword)
+        XCTAssertTrue(copy.identity.hasSameConnectionIdentity(as: device.identity))
+        XCTAssertNil(copy.lastConnectedAt)
     }
 
     // MARK: - Helpers
