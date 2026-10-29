@@ -307,7 +307,7 @@ final class SessionViewController: NSViewController {
     /// its window is key, so the Session menu enables and titles its items
     /// from live state.
     func publishSessionCommandStateIfKey() {
-        guard view.window?.isKeyWindow == true else {
+        guard didClose == false, view.window?.isKeyWindow == true else {
             return
         }
         launchStore?.updateKeySessionCommands(sessionCommandState)
@@ -436,7 +436,7 @@ final class SessionViewController: NSViewController {
         }
     }
 
-    private func openDiagnosticsWindow() {
+    func openDiagnosticsWindow() {
         syncDiagnosticsSnapshot()
         launchStore?.openDiagnostics(for: sessionID)
     }
@@ -1484,65 +1484,6 @@ final class SessionViewController: NSViewController {
 
     private var canStartConnection: Bool {
         !isConnecting && draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-    }
-}
-
-// MARK: - Menu command surface
-
-@MainActor
-protocol RDPSessionCommandHandling: AnyObject {
-    var rdpStartSessionTitle: String { get }
-    var rdpCanStartSession: Bool { get }
-    var rdpCanCancelSession: Bool { get }
-    var rdpCanSyncClipboard: Bool { get }
-    var rdpCanStartTemporaryClipboardSharing: Bool { get }
-
-    func rdpStartSession()
-    func rdpCancelSession()
-    func rdpOpenDiagnostics()
-    func rdpSyncClipboard()
-    func rdpStartTemporaryClipboardSharing()
-}
-
-extension SessionViewController: RDPSessionCommandHandling {
-    var rdpStartSessionTitle: String {
-        sessionCommandState.startTitle
-    }
-
-    var rdpCanStartSession: Bool {
-        sessionCommandState.canStart
-    }
-
-    var rdpCanCancelSession: Bool {
-        sessionCommandState.canCancel
-    }
-
-    var rdpCanSyncClipboard: Bool {
-        sessionCommandState.canSyncClipboard
-    }
-
-    var rdpCanStartTemporaryClipboardSharing: Bool {
-        sessionCommandState.canShareClipboardTemporarily
-    }
-
-    func rdpStartSession() {
-        startConnection()
-    }
-
-    func rdpCancelSession() {
-        cancelConnection()
-    }
-
-    func rdpOpenDiagnostics() {
-        openDiagnosticsWindow()
-    }
-
-    func rdpSyncClipboard() {
-        syncClipboardNow()
-    }
-
-    func rdpStartTemporaryClipboardSharing() {
-        startTemporaryClipboardSharing()
     }
 }
 

@@ -538,9 +538,7 @@ private final class CredentialStoreRecorder: CredentialStoring, @unchecked Senda
 private final class RemoteSessionOpenerRecorder: RemoteSessionOpening {
     private(set) var drafts: [RDPConnectionDraft] = []
 
-    @discardableResult
-    func openRemoteSession(_ draft: RDPConnectionDraft) -> UUID {
+    func openRemoteSession(_ draft: RDPConnectionDraft) {
         drafts.append(draft)
-        return UUID()
     }
 }

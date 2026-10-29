@@ -69,24 +69,21 @@ final class SessionWindowPlacementTests: XCTestCase {
         XCTAssertFalse(SessionWindowKeyFlagPolicy.shouldClearOnClose(of: window))
     }
 
-    func testKeyFlagIsClearedForKeyWindow() throws {
-        let window = makeWindow()
-        defer {
-            window.orderOut(nil)
-        }
-        window.makeKeyAndOrderFront(nil)
-        try XCTSkipUnless(
-            window.isKeyWindow,
-            "The test environment does not grant key-window status"
+    func testKeyFlagIsClearedForKeyWindow() {
+        let window = KeyWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
         )
-
+        window.isReleasedWhenClosed = false
         XCTAssertTrue(SessionWindowKeyFlagPolicy.shouldClearOnClose(of: window))
     }
 
     // MARK: - Helpers
 
     private func makeWindow() -> NSWindow {
-        let window = KeyableWindow(
+        let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
             styleMask: [.borderless],
             backing: .buffered,
@@ -97,10 +94,10 @@ final class SessionWindowPlacementTests: XCTestCase {
     }
 }
 
-/// Borderless windows refuse key status by default; the key-flag tests need
-/// a window that can take it.
-private final class KeyableWindow: NSWindow {
-    override var canBecomeKey: Bool {
+/// The unhosted test bundle has no running app to make a window key, so
+/// this window reports key status itself.
+private final class KeyWindow: NSWindow {
+    override var isKeyWindow: Bool {
         true
     }
 }

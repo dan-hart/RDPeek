@@ -6,14 +6,14 @@ import SwiftUI
 /// Opens and tracks remote session windows and their diagnostics windows.
 @MainActor
 final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
-    @Published private(set) var openSessionCount = 0
-
-    /// True while a remote session window is the key window; drives the
-    /// contextual Session menu in the menu bar.
-    @Published private(set) var isSessionWindowKey = false
-
-    /// Command state of the key session window; nil while none is key.
+    /// Command state of the key session window, published while it is key
+    /// and nil while no session window is; drives the contextual Session
+    /// menu in the menu bar.
     @Published private(set) var keySessionCommands: SessionCommandState?
+
+    var isSessionWindowKey: Bool {
+        keySessionCommands != nil
+    }
 
     func updateKeySessionCommands(_ state: SessionCommandState?) {
         if keySessionCommands != state {
@@ -21,18 +21,7 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
         }
     }
 
-    private var sessionWindowControllers: [UUID: SessionWindowController] = [:] {
-        didSet {
-            openSessionCount = sessionWindowControllers.count
-        }
-    }
-
-    func noteSessionWindowKey(_ isKey: Bool) {
-        if isSessionWindowKey != isKey {
-            isSessionWindowKey = isKey
-        }
-    }
-
+    private var sessionWindowControllers: [UUID: SessionWindowController] = [:]
     private var diagnosticsWindowControllers: [UUID: DiagnosticsWindowController] = [:]
     private var diagnosticsModels: [UUID: RemoteSessionDiagnosticsModel] = [:]
 
@@ -49,11 +38,10 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
 
     /// Opens a session window for the draft, or focuses the existing window if
     /// this device already has one.
-    @discardableResult
-    func openRemoteSession(_ draft: RDPConnectionDraft) -> UUID {
+    func openRemoteSession(_ draft: RDPConnectionDraft) {
         if let existing = sessionWindowControllers.values.first(where: { $0.deviceID == draft.deviceID }) {
             existing.showWindow(nil)
-            return existing.sessionID
+            return
         }
 
         let id = UUID()
@@ -69,7 +57,6 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
         }
         sessionWindowControllers[id] = controller
         controller.showWindow(nil)
-        return id
     }
 
     func recordConnectionStart(for deviceID: UUID?) {
@@ -84,10 +71,6 @@ final class SessionLaunchStore: ObservableObject, RemoteSessionOpening {
             return
         }
         onCredentialPersistence?(deviceID, identity, remembered)
-    }
-
-    var hasOpenSessions: Bool {
-        openSessionCount > 0
     }
 
     func registerDiagnostics(_ model: RemoteSessionDiagnosticsModel, for id: UUID) {

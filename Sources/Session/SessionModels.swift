@@ -5,8 +5,7 @@ import RDPKit
 /// can substitute a recorder instead of the full session window stack.
 @MainActor
 protocol RemoteSessionOpening: AnyObject {
-    @discardableResult
-    func openRemoteSession(_ draft: RDPConnectionDraft) -> UUID
+    func openRemoteSession(_ draft: RDPConnectionDraft)
 }
 
 /// Everything a session window needs to open and drive a connection.

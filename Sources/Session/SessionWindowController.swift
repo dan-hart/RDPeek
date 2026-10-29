@@ -75,19 +75,18 @@ final class SessionWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowDidBecomeKey(_: Notification) {
-        launchStore?.noteSessionWindowKey(true)
         (contentViewController as? SessionViewController)?.publishSessionCommandStateIfKey()
     }
 
     func windowDidResignKey(_: Notification) {
-        launchStore?.noteSessionWindowKey(false)
+        launchStore?.updateKeySessionCommands(nil)
     }
 
     func windowWillClose(_: Notification) {
-        if SessionWindowKeyFlagPolicy.shouldClearOnClose(of: window) {
-            launchStore?.noteSessionWindowKey(false)
-        }
         (contentViewController as? SessionViewController)?.closeSession()
+        if SessionWindowKeyFlagPolicy.shouldClearOnClose(of: window) {
+            launchStore?.updateKeySessionCommands(nil)
+        }
         onClose?(sessionID)
     }
 }
