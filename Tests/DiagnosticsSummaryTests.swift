@@ -6,59 +6,39 @@ final class ViewerMetricsSummaryTests: XCTestCase {
     private let displayLink = RDPFramePacingState(displayLinkDuration: 1.0 / 120)
 
     func testBusyStreamShowsItsRates() throws {
-        let metrics = busyMetrics()
-
         let summary = try XCTUnwrap(compactViewerMetricsSummary(
-            metrics: metrics,
+            metrics: busyMetrics(),
             framePacing: displayLink,
-            lastWireReceiveAt: start.addingTimeInterval(1),
-            now: start.addingTimeInterval(1.5)
+            at: start.addingTimeInterval(1.5)
         ))
 
         XCTAssertEqual(summary, "6.7 fps  ·  decode 2.0 ms  ·  rx 0.73 Mbps  ·  120 Hz")
     }
 
-    func testStillDesktopIsIdleRatherThanItsLastRates() throws {
-        let summary = try XCTUnwrap(compactViewerMetricsSummary(
-            metrics: busyMetrics(),
-            framePacing: displayLink,
-            lastWireReceiveAt: start.addingTimeInterval(1),
-            now: start.addingTimeInterval(1 + viewerMetricsIdleInterval)
-        ))
-
-        XCTAssertEqual(summary, "idle  ·  decode 2.0 ms  ·  rx idle  ·  120 Hz")
-    }
-
-    func testBytesStillArrivingKeepTheirRateWhileFramesAreIdle() throws {
+    func testRatesFallOnceTheDesktopGoesStill() throws {
         let metrics = busyMetrics()
-        let now = start.addingTimeInterval(1 + viewerMetricsIdleInterval)
 
-        let summary = try XCTUnwrap(compactViewerMetricsSummary(
+        let falling = try XCTUnwrap(compactViewerMetricsSummary(
             metrics: metrics,
             framePacing: displayLink,
-            lastWireReceiveAt: now.addingTimeInterval(-0.5),
-            now: now
+            at: start.addingTimeInterval(3)
+        ))
+        let still = try XCTUnwrap(compactViewerMetricsSummary(
+            metrics: metrics,
+            framePacing: displayLink,
+            at: start.addingTimeInterval(7)
         ))
 
-        XCTAssertEqual(summary, "idle  ·  decode 2.0 ms  ·  rx 0.28 Mbps  ·  120 Hz")
+        XCTAssertEqual(falling, "3.3 fps  ·  decode 2.0 ms  ·  rx 0.37 Mbps  ·  120 Hz")
+        XCTAssertEqual(still, "0.0 fps  ·  decode 2.0 ms  ·  rx 0.00 Mbps  ·  120 Hz")
     }
 
     func testNothingReceivedShowsOnlyTheDisplay() {
         XCTAssertEqual(
-            compactViewerMetricsSummary(
-                metrics: RDPRenderMetrics(),
-                framePacing: displayLink,
-                lastWireReceiveAt: nil,
-                now: start
-            ),
+            compactViewerMetricsSummary(metrics: RDPRenderMetrics(), framePacing: displayLink, at: start),
             "120 Hz"
         )
-        XCTAssertNil(compactViewerMetricsSummary(
-            metrics: RDPRenderMetrics(),
-            framePacing: RDPFramePacingState(),
-            lastWireReceiveAt: nil,
-            now: start
-        ))
+        XCTAssertNil(compactViewerMetricsSummary(metrics: RDPRenderMetrics(), framePacing: RDPFramePacingState(), at: start))
     }
 
     // MARK: - Helpers

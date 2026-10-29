@@ -77,33 +77,23 @@ private func metricBytes(_ value: Int) -> String {
     ByteCountFormatter.string(fromByteCount: Int64(value), countStyle: .file)
 }
 
-/// How long the performance overlay waits for a frame, or for received
-/// bytes, before it calls the stream idle. RDPKit's rolling rates keep their
-/// last value once traffic stops, and a still remote desktop sends nothing.
-let viewerMetricsIdleInterval: TimeInterval = 3
-
-/// The one-line summary the session's performance overlay shows.
+/// The one-line summary the session's performance overlay shows. The rates
+/// are those of the 5 s up to `date`, so they fall once traffic stops.
 func compactViewerMetricsSummary(
     metrics: RDPRenderMetrics,
     framePacing: RDPFramePacingState,
-    lastWireReceiveAt: Date?,
-    now: Date
+    at date: Date
 ) -> String? {
-    func isIdle(since date: Date?) -> Bool {
-        date.map { now.timeIntervalSince($0) >= viewerMetricsIdleInterval } ?? false
-    }
-
     var parts: [String] = []
-    if isIdle(since: metrics.lastFrameDecodedAt) {
-        parts.append("idle")
-    } else if let framesPerSecond = metrics.rollingFramesPerSecond(at: now) ?? metrics.averageFramesPerSecond {
+    let framesPerSecond = metrics.rollingFramesPerSecond(at: date) ?? metrics.averageFramesPerSecond
+    if let framesPerSecond {
         parts.append(metricFramesPerSecond(framesPerSecond))
     }
     if let lastDecodeMilliseconds = metrics.lastDecodeMilliseconds {
         parts.append("decode \(metricMilliseconds(lastDecodeMilliseconds))")
     }
-    if let wireMegabitsPerSecond = metrics.rollingWireMegabitsPerSecond(at: now) {
-        parts.append(isIdle(since: lastWireReceiveAt) ? "rx idle" : "rx \(metricMegabitsPerSecond(wireMegabitsPerSecond))")
+    if let wireMegabitsPerSecond = metrics.rollingWireMegabitsPerSecond(at: date) {
+        parts.append("rx \(metricMegabitsPerSecond(wireMegabitsPerSecond))")
     }
     if let displayLinkFramesPerSecond = framePacing.displayLinkFramesPerSecond {
         parts.append(metricHertz(displayLinkFramesPerSecond))
@@ -132,6 +122,8 @@ func frameAcknowledgeSummary(_ acknowledgements: [String]?) -> String {
 
 private struct PerformanceMetricsView: View {
     var metrics: RDPRenderMetrics
+    var rollingFramesPerSecond: Double?
+    var rollingWireMegabitsPerSecond: Double?
     var framePacing: RDPFramePacingState
 
     var body: some View {
@@ -145,11 +137,11 @@ private struct PerformanceMetricsView: View {
                 DiagnosticRow("Display Max", metricHertz(framePacing.maximumRefreshRate))
                 DiagnosticRow("Display Link", metricFramesPerSecond(framePacing.displayLinkFramesPerSecond))
                 DiagnosticRow("Refresh Range", refreshRange(framePacing))
-                DiagnosticRow("Wire RX", metricMegabitsPerSecond(metrics.rollingWireMegabitsPerSecond(at: Date())))
+                DiagnosticRow("Wire RX", metricMegabitsPerSecond(rollingWireMegabitsPerSecond))
                 DiagnosticRow("Wire RX Average", metricMegabitsPerSecond(metrics.averageWireMegabitsPerSecond))
                 DiagnosticRow("Wire RX Total", metricBytes(metrics.wireByteCount))
                 DiagnosticRow("First Frame Latency", metricMilliseconds(metrics.firstFrameLatencyMilliseconds))
-                DiagnosticRow("Rolling FPS", metricFramesPerSecond(metrics.rollingFramesPerSecond(at: Date())))
+                DiagnosticRow("Rolling FPS", metricFramesPerSecond(rollingFramesPerSecond))
                 DiagnosticRow("Average FPS", metricFramesPerSecond(metrics.averageFramesPerSecond))
                 DiagnosticRow("Decode Last", metricMilliseconds(metrics.lastDecodeMilliseconds))
                 DiagnosticRow("Decode Average", metricMilliseconds(metrics.averageDecodeMilliseconds))
@@ -197,6 +189,10 @@ struct RemoteSessionDiagnosticsSnapshot: Equatable {
     var report: RDPConnectionReport?
     var latestFrame: RDPFrameMetadata?
     var renderMetrics = RDPRenderMetrics()
+    /// `renderMetrics`' rolling rates when the snapshot was taken: they fall
+    /// once traffic stops, which records nothing new in `renderMetrics`.
+    var rollingFramesPerSecond: Double?
+    var rollingWireMegabitsPerSecond: Double?
     var framePacing = RDPFramePacingState()
     var sessionEndReason: RDPSessionEndReason?
     var serverCertificateInfo: RDPServerCertificateInfo?
@@ -243,7 +239,12 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                 }
 
                 if snapshot.renderMetrics.hasActivity || snapshot.isConnecting {
-                    PerformanceMetricsView(metrics: snapshot.renderMetrics, framePacing: snapshot.framePacing)
+                    PerformanceMetricsView(
+                        metrics: snapshot.renderMetrics,
+                        rollingFramesPerSecond: snapshot.rollingFramesPerSecond,
+                        rollingWireMegabitsPerSecond: snapshot.rollingWireMegabitsPerSecond,
+                        framePacing: snapshot.framePacing
+                    )
                 }
 
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 24, verticalSpacing: 10) {
@@ -481,8 +482,8 @@ struct RemoteSessionDiagnosticsWindowContent: View {
         [
             statusText(snapshot),
             snapshot.report?.stage,
-            metricFramesPerSecond(snapshot.renderMetrics.rollingFramesPerSecond(at: Date())),
-            metricMegabitsPerSecond(snapshot.renderMetrics.rollingWireMegabitsPerSecond(at: Date())),
+            metricFramesPerSecond(snapshot.rollingFramesPerSecond),
+            metricMegabitsPerSecond(snapshot.rollingWireMegabitsPerSecond),
         ]
         .compactMap { $0 }
         .joined(separator: " - ")

@@ -78,9 +78,6 @@ final class SessionViewController: NSViewController {
     private var latestPresentedFrame: RDPGraphicsFrameSnapshot?
     private var viewerMetricsSummary: String?
     private var isMetricsOverlayVisible = false
-    /// When received bytes last reached the metrics, for the overlay's
-    /// idle rule: RDPKit's rolling rate keeps its last value.
-    private var lastWireReceiveAt: Date?
     private var hasPresentedFrame = false
     private var framePresentationBuffer = RDPFramePresentationBuffer()
     private var framePacing = RDPFramePacingState()
@@ -484,10 +481,10 @@ final class SessionViewController: NSViewController {
         isMetricsOverlayVisible && currentPhase.isActive
     }
 
-    /// RDPKit's rolling rates keep their last value once traffic stops,
-    /// and frames and bytes are what recompute the summary, so a still
-    /// desktop would show its last busy second forever. Recompute it every
-    /// second while the overlay shows.
+    /// The overlay's rolling rates fall once traffic stops, but frames and
+    /// bytes are what recompute the summary, so a still desktop would keep
+    /// showing its last busy second. Recompute it every second while the
+    /// overlay shows.
     private func startMetricsOverlayLoopIfNeeded() {
         guard metricsOverlayTask == nil, isMetricsOverlayShowing else {
             return
@@ -533,11 +530,15 @@ final class SessionViewController: NSViewController {
     }
 
     private func syncDiagnosticsSnapshot() {
+        let renderMetrics = renderMetricsStore.metrics
+        let now = Date()
         let nextSnapshot = RemoteSessionDiagnosticsSnapshot(
             title: draft.displayName,
             report: report,
             latestFrame: latestPresentedFrame.map(RDPFrameMetadata.init),
-            renderMetrics: renderMetricsStore.metrics,
+            renderMetrics: renderMetrics,
+            rollingFramesPerSecond: renderMetrics.rollingFramesPerSecond(at: now),
+            rollingWireMegabitsPerSecond: renderMetrics.rollingWireMegabitsPerSecond(at: now),
             framePacing: framePacing,
             sessionEndReason: sessionEndReason,
             serverCertificateInfo: liveCertificate,
@@ -904,7 +905,6 @@ final class SessionViewController: NSViewController {
                 onFlush: { sample in
                     sink.apply { controller in
                         controller.renderMetricsStore.recordWireReceive(sample)
-                        controller.lastWireReceiveAt = sample.receivedAt
                         if controller.publishRenderMetricsSnapshotIfNeeded(at: sample.receivedAt) {
                             controller.render()
                         }
@@ -1307,12 +1307,7 @@ final class SessionViewController: NSViewController {
     @discardableResult
     private func updateViewerMetricsSummary(_ metrics: RDPRenderMetrics) -> Bool {
         let nextSummary = isMetricsOverlayVisible
-            ? compactViewerMetricsSummary(
-                metrics: metrics,
-                framePacing: framePacing,
-                lastWireReceiveAt: lastWireReceiveAt,
-                now: Date()
-            )
+            ? compactViewerMetricsSummary(metrics: metrics, framePacing: framePacing, at: Date())
             : nil
         if viewerMetricsSummary != nextSummary {
             viewerMetricsSummary = nextSummary
