@@ -211,7 +211,11 @@ final class RemoteInputCaptureNSView: NSView {
     override func keyDown(with event: NSEvent) {
         syncModifierKeys(with: event)
         if let scancode = MacRDPKeyboardMapping.scancode(forKeyCode: event.keyCode),
-           MacRDPKeyboardMapping.shouldSendScancode(forKeyCode: event.keyCode, modifierFlags: event.modifierFlags)
+           MacRDPKeyboardMapping.shouldSendScancode(
+               forKeyCode: event.keyCode,
+               modifierFlags: event.modifierFlags,
+               isHeldAsScancode: inputState.isScancodePressed(scancode)
+           )
         {
             // A repeat for a scancode we no longer track (its release was
             // flushed when Command went up) re-presses the key remotely; the
@@ -487,8 +491,15 @@ enum MacRDPKeyboardMapping {
         scancodes[Int(keyCode)]
     }
 
-    static func shouldSendScancode(forKeyCode keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) -> Bool {
-        nonCharacterKeyCodes.contains(Int(keyCode))
+    /// A key the server holds keeps auto-repeating as its scancode after the modifier that sent it
+    /// there is released; repeating it as text would type on top of the held key.
+    static func shouldSendScancode(
+        forKeyCode keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        isHeldAsScancode: Bool
+    ) -> Bool {
+        isHeldAsScancode
+            || nonCharacterKeyCodes.contains(Int(keyCode))
             || modifierFlags.isDisjoint(with: [.command, .control, .option]) == false
     }
 

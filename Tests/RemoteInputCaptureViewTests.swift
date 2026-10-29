@@ -290,6 +290,31 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: leftArrow, isReleased: true)])
     }
 
+    func testKeyHeldAsScancodeKeepsRepeatingAsItsScancodeAfterTheModifierIsReleased() {
+        // Option-C goes as a scancode; once Option is released the held C
+        // auto-repeats with no modifiers, and typing "c" as text on top of
+        // the C the server holds would double it up.
+        let harness = makeHarness()
+        let leftOption = RDPKeyboardScancode(code: 0x38)
+        let cKey = RDPKeyboardScancode(code: 0x2E)
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Option), flags: .leftOptionDown))
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_C), characters: "ç", flags: .leftOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Option), flags: []))
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: leftOption, isReleased: false),
+            .keyboard(scancode: cKey, isReleased: false),
+            .keyboard(scancode: leftOption, isReleased: true),
+        ])
+
+        harness.recorder.events.removeAll()
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_C), characters: "c", isARepeat: true))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: UInt16(kVK_ANSI_C), characters: "c"))
+        XCTAssertEqual(harness.recorder.events, [
+            .keyboard(scancode: cKey, isReleased: false, wasDown: true),
+            .keyboard(scancode: cKey, isReleased: true),
+        ])
+    }
+
     // MARK: - Key equivalents while controlling the desktop
 
     func testPerformKeyEquivalentClaimsCommandChordForRemote() {
@@ -492,6 +517,11 @@ private extension NSEvent.ModifierFlags {
     /// `.control` plus the NX_DEVICELCTLKEYMASK device-dependent bit.
     static let leftControlDown = NSEvent.ModifierFlags(
         rawValue: NSEvent.ModifierFlags.control.rawValue | 0x0000_0001
+    )
+
+    /// `.option` plus the NX_DEVICELALTKEYMASK device-dependent bit.
+    static let leftOptionDown = NSEvent.ModifierFlags(
+        rawValue: NSEvent.ModifierFlags.option.rawValue | 0x0000_0020
     )
 
     /// `.shift` plus the NX_DEVICELSHIFTKEYMASK device-dependent bit.
