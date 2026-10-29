@@ -40,8 +40,9 @@ struct HelpView: View {
                     )
                     HelpBody(
                         "The ⋯ menu in the titlebar holds Disconnect, clipboard sharing " +
-                            "(always-on, one-shot sync, or 30-second time-boxed), remote " +
-                            "audio, window size matching, the performance overlay, and " +
+                            "(for the session or for 30 seconds, and Sync Now to send the " +
+                            "clipboard again), remote audio, window size matching, the " +
+                            "performance overlay, and " +
                             "Stats for Nerds. While the remote desktop has your keyboard, " +
                             "RDPeek's own ⌘ shortcuts go to it too, so use this menu or the " +
                             "Session menu in the menu bar instead."
@@ -57,7 +58,8 @@ struct HelpView: View {
                         "A certificate this Mac does not trust stops the connection " +
                             "before any credential is sent. Trust and Connect pins that " +
                             "certificate for that host and port; a different certificate " +
-                            "from that host is then refused until you trust it instead."
+                            "from that host that this Mac does not trust is then refused " +
+                            "until you trust it instead."
                     )
                     HelpBody(
                         "With “Accept untrusted certificates” on, a PC connects with a " +
