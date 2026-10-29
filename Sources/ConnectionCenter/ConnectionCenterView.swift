@@ -6,6 +6,7 @@ struct ConnectionCenterView: View {
     @EnvironmentObject private var deviceList: DeviceListModel
     let launchStore: SessionLaunchStore
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedDeviceID: UUID?
     @FocusState private var isGridFocused: Bool
 
@@ -113,7 +114,7 @@ struct ConnectionCenterView: View {
                         onDuplicate: { deviceList.duplicate(device) },
                         onDelete: { deviceList.requestDeletion(of: device) }
                     )
-                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.92).combined(with: .opacity))
                 }
             }
             .padding(20)
@@ -234,9 +235,11 @@ private struct UnreadableDevicesNotice: View {
 }
 
 /// First-run state with a gentle breathing beacon and a single clear action.
+/// The beacon holds still under Reduce Motion.
 struct ConnectionCenterEmptyState: View {
     var onAddDevice: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isBreathing = false
 
     var body: some View {
@@ -253,7 +256,7 @@ struct ConnectionCenterEmptyState: View {
                     .frame(width: 132, height: 132)
                     .scaleEffect(isBreathing ? 1.06 : 0.97)
                     .animation(
-                        .easeInOut(duration: 2.8).repeatForever(autoreverses: true),
+                        reduceMotion ? nil : .easeInOut(duration: 2.8).repeatForever(autoreverses: true),
                         value: isBreathing
                     )
 
@@ -281,7 +284,10 @@ struct ConnectionCenterEmptyState: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            isBreathing = true
+            isBreathing = reduceMotion == false
+        }
+        .onChange(of: reduceMotion) { _, reduceMotion in
+            isBreathing = reduceMotion == false
         }
     }
 }

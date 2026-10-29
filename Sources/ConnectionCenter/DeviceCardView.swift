@@ -10,6 +10,7 @@ struct DeviceCardView: View {
     var onDuplicate: () -> Void
     var onDelete: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
     var body: some View {
@@ -30,7 +31,8 @@ struct DeviceCardView: View {
             radius: isHovering ? 14 : 5,
             y: isHovering ? 8 : 2
         )
-        .scaleEffect(isHovering ? 1.02 : 1)
+        // Under Reduce Motion, hovering only deepens the shadow.
+        .scaleEffect(isHovering && reduceMotion == false ? 1.02 : 1)
         .animation(AppTheme.cardSpring, value: isHovering)
         .animation(AppTheme.cardSpring, value: isSelected)
         .onHover { hovering in
@@ -140,7 +142,7 @@ struct DeviceCardView: View {
                 .help("Connect")
                 .padding(10)
                 .opacity(isHovering ? 1 : 0)
-                .scaleEffect(isHovering ? 1 : 0.7)
+                .scaleEffect(isHovering || reduceMotion ? 1 : 0.7)
             }
         }
     }
