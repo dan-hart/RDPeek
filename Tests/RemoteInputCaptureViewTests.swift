@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class RemoteInputCaptureViewTests: XCTestCase {
     private struct Harness {
-        let window: NSWindow
+        let window: KeyWindow
         let view: RemoteInputCaptureNSView
         let recorder: InputEventRecorder
     }
@@ -232,6 +232,28 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: .leftCommandDown))
         harness.view.flagsChanged(with: flagsEvent(keyCode: .leftCommand, flags: []))
         XCTAssertEqual(harness.recorder.events, [])
+    }
+
+    func testClickOnABackgroundWindowPressesNoModifier() {
+        // A Command-click on a background window leaves it in the
+        // background, so Command's release goes to another app: Win pressed
+        // for the click would stay down on the server.
+        let harness = makeHarness()
+        let location = NSPoint(x: 100, y: 50)
+        harness.window.isKey = false
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: location, flags: .leftCommandDown))
+        harness.view.mouseUp(with: mouseEvent(.leftMouseUp, location: location, flags: .leftCommandDown))
+        XCTAssertEqual(harness.recorder.events.count, 2)
+        XCTAssertTrue(isPointerButton(harness.recorder.events.first, button: .left, isDown: true))
+        XCTAssertTrue(isPointerButton(harness.recorder.events.last, button: .left, isDown: false))
+
+        // In the key window, the Command found held goes down before the click.
+        harness.recorder.events.removeAll()
+        harness.window.isKey = true
+        harness.view.mouseDown(with: mouseEvent(.leftMouseDown, location: location, flags: .leftCommandDown))
+        XCTAssertEqual(harness.recorder.events.count, 2)
+        XCTAssertEqual(harness.recorder.events.first, .keyboard(scancode: .leftWindows, isReleased: false))
+        XCTAssertTrue(isPointerButton(harness.recorder.events.last, button: .left, isDown: true))
     }
 
     func testMissedCommandReleaseDropsTheDeferredWindowsKey() {
@@ -569,7 +591,7 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         let recorder = InputEventRecorder()
         let view = RemoteInputCaptureNSView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
         view.rdpFrame = makeFrameMetadata(width: 200, height: 100)
-        let window = NSWindow(
+        let window = KeyWindow(
             contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
             styleMask: [.borderless],
             backing: .buffered,
@@ -695,6 +717,15 @@ final class RemoteInputCaptureViewTests: XCTestCase {
             regionRects: [],
             encodedVideoData: Data()
         ))
+    }
+}
+
+/// Unhosted tests have no key window; a session window is key while the user controls it.
+private final class KeyWindow: NSWindow {
+    var isKey = true
+
+    override var isKeyWindow: Bool {
+        isKey
     }
 }
 

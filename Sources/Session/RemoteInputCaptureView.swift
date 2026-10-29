@@ -108,7 +108,7 @@ final class RemoteInputCaptureNSView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        syncModifierKeys(with: event)
+        syncModifierKeys(forButtonDown: event)
         sendPointerButton(.left, isDown: true, event: event)
     }
 
@@ -119,7 +119,7 @@ final class RemoteInputCaptureNSView: NSView {
 
     override func rightMouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        syncModifierKeys(with: event)
+        syncModifierKeys(forButtonDown: event)
         sendPointerButton(.right, isDown: true, event: event)
     }
 
@@ -130,7 +130,7 @@ final class RemoteInputCaptureNSView: NSView {
 
     override func otherMouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        syncModifierKeys(with: event)
+        syncModifierKeys(forButtonDown: event)
         guard let button = pointerButton(for: event) else {
             return
         }
@@ -374,6 +374,17 @@ final class RemoteInputCaptureNSView: NSView {
 
     private func syncModifierKeys(with event: NSEvent) {
         inputSession?.send(modifierSyncEvents(for: event.modifierFlags))
+    }
+
+    /// A Command-click on a window in the background reaches the view without making the window
+    /// key, so the release of a modifier held for it goes to another app. Such a click only
+    /// releases the modifiers its flags show up; it presses none.
+    private func syncModifierKeys(forButtonDown event: NSEvent) {
+        if window?.isKeyWindow == true {
+            syncModifierKeys(with: event)
+        } else {
+            releaseModifiers(missingFrom: event.modifierFlags)
+        }
     }
 
     /// MS-RDPBCGR 2.2.8.1.1.3.1.1.5: on focus gain, send the toggle-key state followed by the
