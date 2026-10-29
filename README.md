@@ -53,7 +53,7 @@ Press **⌘?** in the app for the full shortcut list and usage details.
 
 Requirements: Xcode 16+ (Swift 6) and
 [XcodeGen](https://github.com/yonaskolb/XcodeGen) to generate the project
-(the `.xcodeproj` is not committed).
+(the `.xcodeproj` is not committed, except its `Package.resolved`).
 
 ```sh
 xcodegen generate

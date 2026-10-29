@@ -44,7 +44,7 @@ implementation.
 ## Build and Validation
 
 - Generate the project: `xcodegen generate` (the `.xcodeproj` is not
-  committed).
+  committed, except its `Package.resolved`).
 - Build: `xcodebuild -project RDPeek.xcodeproj -scheme RDPeek
   -destination 'platform=macOS' -derivedDataPath DerivedData build`
 - Test: `xcodebuild -project RDPeek.xcodeproj -scheme RDPeek

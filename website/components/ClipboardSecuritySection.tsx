@@ -12,7 +12,7 @@ const clipboardModes = [
   },
   {
     name: "Share for 30 Seconds",
-    detail: "Time-boxed sharing that turns itself off. Paste the thing, and the channel closes.",
+    detail: "Time-boxed sharing that turns itself off. Paste the thing, and sharing stops.",
   },
   {
     name: "Or keep it off",
@@ -24,7 +24,7 @@ const securityPoints = [
   {
     title: "Passwords live in the macOS Keychain",
     detail:
-      "One item per username@host:port, deleted when you remove the PC or turn off remembering. A password typed without remembering stays in memory only until you quit.",
+      "One item per username@host:port, deleted when you remove the last PC that remembers it or turn off remembering. A password typed without remembering stays in memory only until you quit.",
   },
   {
     title: "Profiles never contain passwords",
