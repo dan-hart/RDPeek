@@ -4,19 +4,10 @@ import XCTest
 final class DeviceProfileStoreTests: XCTestCase {
     private let storageKey = "device-profiles.v1"
     private var defaults: UserDefaults!
-    private var suiteName: String!
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        suiteName = "device-profile-store-tests.\(UUID().uuidString)"
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-    }
-
-    override func tearDown() {
-        defaults.removePersistentDomain(forName: suiteName)
-        defaults = nil
-        suiteName = nil
-        super.tearDown()
+        defaults = try makeIsolatedDefaults()
     }
 
     func testSaveAndDeleteRoundTrip() throws {

@@ -3,19 +3,10 @@ import XCTest
 
 final class TrustedCertificateStoreTests: XCTestCase {
     private var defaults: UserDefaults!
-    private var suiteName: String!
 
     override func setUpWithError() throws {
         try super.setUpWithError()
-        suiteName = "trusted-certificate-store-tests.\(UUID().uuidString)"
-        defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-    }
-
-    override func tearDown() {
-        defaults.removePersistentDomain(forName: suiteName)
-        defaults = nil
-        suiteName = nil
-        super.tearDown()
+        defaults = try makeIsolatedDefaults()
     }
 
     func testDifferentCertificateFromTrustedHostIsChanged() throws {

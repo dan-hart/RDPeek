@@ -7,6 +7,7 @@ final class DeviceListModelTests: XCTestCase {
     private struct Harness {
         let model: DeviceListModel
         let credentials: CredentialStoreRecorder
+        let cache: InMemoryCredentialCache
         let defaults: UserDefaults
     }
 
@@ -18,13 +19,13 @@ final class DeviceListModelTests: XCTestCase {
         twin.id = UUID()
         let harness = try makeHarness(devices: [device, twin])
         let account = try account(for: device)
-        InMemoryCredentialCache.shared.setPassword("cached", for: account)
+        harness.cache.setPassword("cached", for: account)
 
         harness.model.confirmDeletion(of: device)
 
         XCTAssertEqual(harness.model.devices.map(\.id), [twin.id])
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
-        XCTAssertEqual(InMemoryCredentialCache.shared.password(for: account), "cached")
+        XCTAssertEqual(harness.cache.password(for: account), "cached")
         XCTAssertNil(harness.model.errorMessage)
         XCTAssertNil(harness.model.devicePendingDeletion)
     }
@@ -36,13 +37,13 @@ final class DeviceListModelTests: XCTestCase {
         let harness = try makeHarness(devices: [device, other])
         let account = try account(for: device)
         harness.credentials.passwords[account] = "secret"
-        InMemoryCredentialCache.shared.setPassword("cached", for: account)
+        harness.cache.setPassword("cached", for: account)
 
         harness.model.confirmDeletion(of: device)
 
         XCTAssertEqual(harness.model.devices.map(\.id), [other.id])
         XCTAssertEqual(harness.credentials.deletedAccounts, [account])
-        XCTAssertNil(InMemoryCredentialCache.shared.password(for: account))
+        XCTAssertNil(harness.cache.password(for: account))
         XCTAssertNil(harness.model.errorMessage)
     }
 
@@ -50,7 +51,7 @@ final class DeviceListModelTests: XCTestCase {
         let device = makeDevice()
         let harness = try makeHarness(devices: [device])
         let account = try account(for: device)
-        InMemoryCredentialCache.shared.setPassword("cached", for: account)
+        harness.cache.setPassword("cached", for: account)
         // Corrupt the profile blob after the model loaded, so the store's
         // read-modify-write throws before anything irreversible happens.
         harness.defaults.set(Data("not json".utf8), forKey: "device-profiles.v1")
@@ -59,7 +60,7 @@ final class DeviceListModelTests: XCTestCase {
 
         XCTAssertNotNil(harness.model.errorMessage)
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
-        XCTAssertEqual(InMemoryCredentialCache.shared.password(for: account), "cached")
+        XCTAssertEqual(harness.cache.password(for: account), "cached")
         XCTAssertNil(harness.model.devicePendingDeletion)
     }
 
@@ -152,7 +153,7 @@ final class DeviceListModelTests: XCTestCase {
 
         _ = try harness.model.save(editor: editor, editedDevice: device, password: "typed")
 
-        XCTAssertEqual(InMemoryCredentialCache.shared.password(for: try account(for: device)), "typed")
+        XCTAssertEqual(harness.cache.password(for: try account(for: device)), "typed")
         XCTAssertEqual(harness.credentials.savedAccounts, [])
         XCTAssertEqual(harness.credentials.deletedAccounts, [])
     }
@@ -291,7 +292,7 @@ final class DeviceListModelTests: XCTestCase {
         let device = makeDevice()
         let harness = try makeHarness(devices: [device])
         let opener = RemoteSessionOpenerRecorder()
-        InMemoryCredentialCache.shared.setPassword("cached", for: try account(for: device))
+        harness.cache.setPassword("cached", for: try account(for: device))
 
         harness.model.connect(device, using: opener)
 
@@ -313,19 +314,15 @@ final class DeviceListModelTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeHarness(devices: [DeviceProfile] = []) throws -> Harness {
-        InMemoryCredentialCache.shared.removeAll()
-        let suiteName = "device-list-model-tests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        addTeardownBlock {
-            UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = try makeIsolatedDefaults()
         let profileStore = DeviceProfileStore(defaults: defaults)
         for device in devices {
             try profileStore.save(device)
         }
         let credentials = CredentialStoreRecorder()
-        let model = DeviceListModel(credentialStore: credentials, defaults: defaults)
-        return Harness(model: model, credentials: credentials, defaults: defaults)
+        let cache = InMemoryCredentialCache()
+        let model = DeviceListModel(credentialStore: credentials, credentialCache: cache, defaults: defaults)
+        return Harness(model: model, credentials: credentials, cache: cache, defaults: defaults)
     }
 
     private func makeDevice(

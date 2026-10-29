@@ -19,10 +19,4 @@ final class InMemoryCredentialCache {
     func removePassword(for account: String) {
         passwords.removeValue(forKey: account)
     }
-
-    /// Test hook: the cache is a process-wide singleton, so tests reset it
-    /// between cases.
-    func removeAll() {
-        passwords.removeAll()
-    }
 }

@@ -37,6 +37,7 @@ struct DeviceEditorState: Identifiable {
 final class DeviceListModel: ObservableObject {
     private let store: DeviceProfileStore
     private let credentialStore: any CredentialStoring
+    private let credentialCache: InMemoryCredentialCache
     private let defaults: UserDefaults
 
     @Published private(set) var devices: [DeviceProfile] = []
@@ -52,10 +53,12 @@ final class DeviceListModel: ObservableObject {
 
     init(
         credentialStore: any CredentialStoring = KeychainCredentialStore(),
+        credentialCache: InMemoryCredentialCache = .shared,
         defaults: UserDefaults = .standard
     ) {
         store = DeviceProfileStore(defaults: defaults)
         self.credentialStore = credentialStore
+        self.credentialCache = credentialCache
         self.defaults = defaults
         let storedSortOrder = defaults.string(forKey: "device-sort-order")
         sortOrder = storedSortOrder.flatMap(DeviceSortOrder.init(rawValue:)) ?? .byName
@@ -182,7 +185,7 @@ final class DeviceListModel: ObservableObject {
            password.isEmpty == false,
            let account = device.identity.credentialAccountName
         {
-            InMemoryCredentialCache.shared.setPassword(password, for: account)
+            credentialCache.setPassword(password, for: account)
         }
 
         // The editor works on a snapshot from sheet-open time; a session may
@@ -214,7 +217,7 @@ final class DeviceListModel: ObservableObject {
                     try credentialStore.deletePassword(for: key)
                 }
                 if let account = device.identity.credentialAccountName {
-                    InMemoryCredentialCache.shared.removePassword(for: account)
+                    credentialCache.removePassword(for: account)
                 }
             }
         } catch {
@@ -236,7 +239,7 @@ final class DeviceListModel: ObservableObject {
         // The session window resolves stored credentials asynchronously.
         var password = ""
         if let account = device.identity.credentialAccountName,
-           let cachedPassword = InMemoryCredentialCache.shared.password(for: account)
+           let cachedPassword = credentialCache.password(for: account)
         {
             password = cachedPassword
         }
