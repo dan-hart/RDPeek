@@ -622,6 +622,14 @@ final class SessionViewController: NSViewController {
         // in between would only fail the connection.
         do {
             _ = try RDPCredentials.validated(username: username, domain: domain, password: password)
+        } catch let RDPCredentialValidationError.fieldTooLong(field) {
+            let name = switch field {
+            case .username: "user name"
+            case .domain: "domain"
+            case .password: "password"
+            }
+            promptForCredentials(errorMessage: "The \(name) is too long to send.")
+            return
         } catch {
             promptForCredentials(errorMessage: "Enter both a user name and a password.")
             return
