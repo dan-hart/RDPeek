@@ -558,6 +558,21 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         ])
     }
 
+    func testScrollingWithRightOptionHeldSendsAltFirst() {
+        // Alt-scroll zooms or scrolls sideways in many Windows apps.
+        let harness = makeHarness()
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
+        harness.view.scrollWheel(with: scrollEvent(flags: .rightOptionDown))
+        harness.view.scrollWheel(with: scrollEvent(flags: .rightOptionDown))
+        harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: []))
+
+        let events = harness.recorder.events
+        XCTAssertEqual(events.count, 4)
+        XCTAssertEqual(events.first, .keyboard(scancode: .rightAlt, isReleased: false))
+        XCTAssertTrue(events.dropFirst().prefix(2).allSatisfy { isVerticalWheel($0) }, "Got \(events)")
+        XCTAssertEqual(events.last, .keyboard(scancode: .rightAlt, isReleased: true))
+    }
+
     func testRightOptionTappedAloneTapsAlt() {
         let harness = makeHarness()
         harness.view.flagsChanged(with: flagsEvent(keyCode: .rightOption, flags: .rightOptionDown))
@@ -843,6 +858,13 @@ final class RemoteInputCaptureViewTests: XCTestCase {
 
     private func isPointerMove(_ event: RDPSlowPathInputEvent?) -> Bool {
         guard case .pointerMove = event else {
+            return false
+        }
+        return true
+    }
+
+    private func isVerticalWheel(_ event: RDPSlowPathInputEvent?) -> Bool {
+        guard case .verticalWheel = event else {
             return false
         }
         return true

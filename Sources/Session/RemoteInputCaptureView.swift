@@ -166,9 +166,11 @@ final class RemoteInputCaptureNSView: NSView {
         guard events.isEmpty == false else {
             return
         }
-        // Command or right Option held to scroll was used, so releasing it is no tap.
-        noteDeferredKeysChordedElsewhere()
-        inputSession?.send(events)
+        // A held-back right Alt goes down first, as it does ahead of a click, so Alt-scroll
+        // reaches the server. Command held to scroll was used, so releasing it is no tap.
+        deferredWindowsKey.noteChordedElsewhere()
+        let deferredKeyEvents = deferredRightAlt.flush(&inputState)
+        inputSession?.send(deferredKeyEvents + events)
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -554,7 +556,7 @@ struct MacRDPDeferredWindowsKey {
         }
     }
 
-    /// Sends the held Windows keys down, ahead of another key or button.
+    /// Sends the held keys down, ahead of another key, a button or, for right Alt, a scroll.
     mutating func flush(_ inputState: inout RDPInputStateTracker) -> [RDPSlowPathInputEvent] {
         defer {
             reset()
