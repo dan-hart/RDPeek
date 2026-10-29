@@ -73,7 +73,7 @@ struct ConnectionCenterView: View {
                 deviceList.devicePendingDeletion = nil
             }
         } message: {
-            Text("The saved password for this PC is removed from your Keychain too. This cannot be undone.")
+            Text("Its saved password is removed from your Keychain too, unless another PC remembers the same sign-in. This cannot be undone.")
         }
         .alert(
             "Something Went Wrong",
