@@ -76,6 +76,10 @@ final class SessionClipboard {
     /// count once it was there: a later count means its files are gone from
     /// the pasteboard.
     private var copiedDownload: (directory: URL, changeCount: Int)?
+    /// The pasteboard's change count once a remote copy was put on it:
+    /// while it is unchanged, the pasteboard holds what came from the
+    /// server.
+    private var remoteCopyChangeCount: Int?
     private var nextStreamID: UInt32 = 1
 
     /// Download roots this process has cleared of earlier runs' downloads.
@@ -148,6 +152,8 @@ final class SessionClipboard {
     /// download stays only while its files are still on the pasteboard.
     func detach() {
         session = nil
+        // A later session's server has a clipboard of its own.
+        remoteCopyChangeCount = nil
         discardFileTransfer()
         cancelLocalFileRead()
         removeCopiedDownloadIfReplaced()
@@ -247,9 +253,38 @@ final class SessionClipboard {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
         pasteboardChangeCount = pasteboard.changeCount
+        remoteCopyChangeCount = pasteboardChangeCount
         localCopyIsUnsent = false
         removeCopiedDownloadIfReplaced()
         onToast("Remote text copied", "doc.on.clipboard")
+    }
+
+    /// A remote copy none of which comes: the server's clipboard was
+    /// emptied (`isEmpty`), or holds nothing this bridge takes, such as an
+    /// image, or failed to arrive. Like any remote copy, it is newer than a
+    /// download still running and a local copy not yet sent. An emptied
+    /// server clipboard also clears the pasteboard while it still holds
+    /// what came from the server, as [MS-RDPECLIP] 3.1.5.2.2 has a Format
+    /// List replace the receiver's clipboard: a password a password manager
+    /// cleared there does not stay on the Mac. A local copy made since is
+    /// kept.
+    func receiveRemoteCopyUnavailable(isEmpty: Bool) {
+        serverHoldsLocalCopy = false
+        guard isSharingEnabled else {
+            return
+        }
+        cancelLocalFileRead()
+        discardFileTransfer()
+        if isEmpty, pasteboard.changeCount == remoteCopyChangeCount {
+            pasteboard.clearContents()
+            remoteCopyChangeCount = nil
+            onToast("Remote clipboard emptied; cleared on this Mac too", "doc.on.clipboard")
+        } else if isEmpty == false {
+            onToast("Remote copy could not be shared", "exclamationmark.triangle")
+        }
+        pasteboardChangeCount = pasteboard.changeCount
+        localCopyIsUnsent = false
+        removeCopiedDownloadIfReplaced()
     }
 
     func receiveFileList(_ descriptorList: RDPClipboardFileGroupDescriptorW) {
@@ -666,6 +701,7 @@ final class SessionClipboard {
         }
 
         pasteboardChangeCount = pasteboard.changeCount
+        remoteCopyChangeCount = pasteboardChangeCount
         copiedDownload = (transfer.downloadDirectory, pasteboardChangeCount)
         let fileCount = transfer.downloadedFileURLs.count
         if fileCount == 1, let fileName = transfer.files.first?.fileName {

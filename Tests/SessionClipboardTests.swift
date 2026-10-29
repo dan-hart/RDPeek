@@ -160,6 +160,104 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(session.publishedTexts, [nil, "local", "remote paragraph"])
     }
 
+    /// A server copy the bridge takes nothing of, such as an image, or the
+    /// server's clipboard emptied, is the server's own too.
+    func testSharingEndingKeepsARemoteCopyWithNoTextOrFiles() {
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard(isSharingEnabled: false)
+        clipboard.attach(session)
+        for isEmpty in [false, true] {
+            clipboard.startTemporarySharing()
+            clipboard.receiveRemoteCopyUnavailable(isEmpty: isEmpty)
+            clipboard.poll(now: Date().addingTimeInterval(31))
+            XCTAssertFalse(clipboard.isSharingEnabled)
+        }
+        XCTAssertEqual(session.publishedTexts, [nil, "local", "local"])
+    }
+
+    /// A server whose clipboard is emptied, as a password manager clears a
+    /// copied password, takes the copy it sent off the pasteboard too; a
+    /// local copy made since stays.
+    func testAnEmptiedRemoteClipboardClearsOnlyTheCopyItSent() throws {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+        session.publishedTexts.removeAll()
+
+        clipboard.receiveText("password")
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
+        XCTAssertNil(pasteboard.string(forType: .string))
+        XCTAssertEqual(toasts.last, "Remote clipboard emptied; cleared on this Mac too")
+        // The emptied pasteboard is not sent back.
+        clipboard.poll()
+        clipboard.syncNow()
+        XCTAssertTrue(session.publishedTexts.isEmpty)
+
+        // Downloaded files go too.
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        let fileURL = try XCTUnwrap(copiedFileURL())
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
+        XCTAssertNil(copiedFileURL())
+        XCTAssertFalse(fileExists(fileURL))
+
+        // A local copy since stays, whether or not the poll has seen it.
+        toasts.removeAll()
+        clipboard.receiveText("remote")
+        pasteboard.clearContents()
+        pasteboard.setString("local", forType: .string)
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
+        clipboard.receiveText("remote")
+        pasteboard.clearContents()
+        pasteboard.setString("newer local", forType: .string)
+        clipboard.poll()
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
+        XCTAssertEqual(pasteboard.string(forType: .string), "newer local")
+        XCTAssertEqual(toasts, ["Remote text copied", "Remote text copied"])
+        // That from before the remote copy is older, so it is not sent.
+        XCTAssertEqual(session.publishedTexts, ["newer local"])
+
+        // Nor is a remote copy from an earlier session cleared.
+        clipboard.receiveText("remote")
+        clipboard.detach()
+        clipboard.attach(session)
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
+        XCTAssertEqual(pasteboard.string(forType: .string), "remote")
+    }
+
+    /// A remote copy the bridge takes nothing of, such as an image, or
+    /// that failed to arrive, is newer than remote files still downloading and a local file read in
+    /// flight, which are dropped; the pasteboard keeps what it has.
+    func testARemoteCopyWithNoTextOrFilesEndsWhatCameBefore() async throws {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+
+        clipboard.receiveText("remote text")
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: false)
+        XCTAssertEqual(toasts.last, "Remote copy could not be shared")
+        try finishRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        XCTAssertNil(copiedFileURL())
+        XCTAssertEqual(pasteboard.string(forType: .string), "remote text")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: downloadRoot.path), [])
+
+        let fileURL = try makeLocalFile(named: "notes.txt", contents: Data("hello".utf8))
+        pasteboard.clearContents()
+        pasteboard.writeObjects([fileURL as NSURL])
+        clipboard.syncNow()
+        let staleRead = try XCTUnwrap(clipboard.localFileRead)
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: false)
+        await staleRead.value
+        XCTAssertTrue(session.publishedFiles.isEmpty)
+    }
+
     /// The session always joins the clipboard channel, so this alone keeps
     /// a device that does not share from sharing.
     func testSharingOffSharesNothingEitherWay() {
@@ -178,10 +276,12 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertEqual(session.publishedTexts, [nil])
         XCTAssertTrue(session.publishedFiles.isEmpty)
 
+        // Copies the session handed over before sharing ended are dropped.
         clipboard.receiveText("remote")
         clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
             RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 1, fileName: "remote.txt"),
         ]))
+        clipboard.receiveRemoteCopyUnavailable(isEmpty: true)
         XCTAssertEqual(pasteboard.string(forType: .string), "newer local")
         XCTAssertTrue(session.sizeRequests.isEmpty)
 

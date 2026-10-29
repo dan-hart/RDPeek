@@ -987,6 +987,12 @@ final class SessionViewController: NSViewController {
                             controller.render()
                         }
                     },
+                    onClipboardRemoteCopyUnavailable: { isEmpty in
+                        sink.apply { controller in
+                            controller.clipboard.receiveRemoteCopyUnavailable(isEmpty: isEmpty)
+                            controller.render()
+                        }
+                    },
                     onAudioSample: { sample in
                         sink.apply { controller in
                             controller.playAudioSample(sample)
