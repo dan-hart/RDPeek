@@ -1,6 +1,5 @@
 import Foundation
 import RDPKit
-import SwiftUI
 
 enum DeviceSortOrder: String, CaseIterable, Identifiable {
     case byName

@@ -1,5 +1,3 @@
-import Foundation
-
 /// Command state of a session: the Session menu and the HUD's Reconnect and
 /// Cancel controls both enable and title their items from it.
 struct SessionCommandState: Equatable {

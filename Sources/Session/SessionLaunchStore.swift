@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import RDPKit
-import SwiftUI
 
 /// Opens and tracks remote session windows and their diagnostics windows.
 @MainActor
