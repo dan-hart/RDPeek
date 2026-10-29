@@ -15,7 +15,11 @@ struct SettingsView: View {
             Section {
                 Toggle("Share clipboard", isOn: $clipboardSharingEnabled)
                 Toggle("Play remote audio", isOn: $audioPlaybackEnabled)
-                Toggle("Hide certificate warnings", isOn: $hideCertificateWarnings)
+                Toggle("Accept untrusted certificates", isOn: $hideCertificateWarnings)
+                    .help(
+                        "Connect even when neither this Mac nor RDPeek trusts the server's certificate. " +
+                            "A certificate that replaced one you trusted is still refused."
+                    )
                 Stepper(
                     "Connection timeout: \(timeoutSeconds)s",
                     value: $timeoutSeconds,
