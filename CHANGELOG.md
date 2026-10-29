@@ -48,7 +48,8 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   English, and a key that types the same character there is sent as
   its scancode, so remote input methods see it.
 - Right ⌥ types the character it gives on the Mac, such as @ with ⌥L on
-  a German layout; left ⌥ stays Alt.
+  a German layout, and its dead keys compose accents without sending
+  Alt; left ⌥ stays Alt.
 - ⌘ reaches the remote as the Windows key only together with another
   key or click, or when tapped alone, so ⌘-Tab and Spotlight no longer
   open the remote Start menu; neither do ⌘-clicking a background
@@ -97,7 +98,10 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
 - An idle desktop no longer keeps the display link running, and the
   window does far less work per frame.
 - Reconnect is unavailable while the password is read or the sign-in
-  sheet is up, and the connecting status says why a session reconnects.
+  sheet is up, the Session menu and the window agree on Connect and
+  Reconnect, and the connecting status says why a session reconnects.
+- On a 1x display the remote desktop is no longer resized by a pixel
+  right after connecting.
 - Stats for Nerds shows the server's warnings and whether the RSA key
   exchange was used. The overlays respect Reduce Motion.
 
@@ -112,6 +116,10 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   Delete.
 - Saved PCs stay readable when one is damaged or was written by another
   version, and an unreadable list is reported instead of shown empty.
+  PCs this version cannot read are kept and counted in a notice, and
+  settings a newer version added survive a save.
+- Saving the PC editor no longer undoes a Remember Password change a
+  session made while it was open.
 - Duplicating a PC keeps Remember Password, and deleting one keeps a
   password that another PC still remembers.
 
@@ -122,7 +130,8 @@ client and from a full review of RDPeek, on RDPKit 0.4.0.
   gnome-remote-desktop video and bitmap codecs are faster and more
   correct.
 - Package versions are pinned in Package.resolved, CI builds with a
-  pinned Xcode, and SwiftLint checks the tests too.
+  pinned Xcode, SwiftLint checks the tests too, and its analyzer guards
+  against unused code.
 
 ## 1.1.1
 
