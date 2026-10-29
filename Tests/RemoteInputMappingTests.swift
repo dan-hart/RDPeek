@@ -70,6 +70,32 @@ final class RemoteInputMappingTests: XCTestCase {
         XCTAssertTrue(MacRDPKeyboardMapping.shouldSendScancode(forKeyCode: UInt16(kVK_ANSI_A), modifierFlags: .option))
     }
 
+    // MARK: - Scroll wheel
+
+    func testScrollDeltasConvertToRDPRotationUnits() {
+        let lines = MacRDPScrollWheel.rotationUnits(deltaX: 1, deltaY: 1, hasPreciseScrollingDeltas: false)
+        let points = MacRDPScrollWheel.rotationUnits(deltaX: -0.5, deltaY: 2, hasPreciseScrollingDeltas: true)
+
+        // AppKit's positive deltaX scrolls left; RDP's positive horizontal rotation scrolls right.
+        XCTAssertEqual(lines.vertical, 120)
+        XCTAssertEqual(lines.horizontal, -120)
+        XCTAssertEqual(points.vertical, 20)
+        XCTAssertEqual(points.horizontal, 5)
+    }
+
+    func testSmallTrackpadDeltasAddUpInsteadOfRoundingAway() {
+        // Each 0.05-point delta is half a rotation unit, which rounding each
+        // event on its own sent as a whole unit every time.
+        var accumulator = RDPScrollWheelAccumulator()
+        let point = RDPRemotePoint(x: 0, y: 0)
+        var events: [RDPSlowPathInputEvent] = []
+        for _ in 0 ..< 3 {
+            let units = MacRDPScrollWheel.rotationUnits(deltaX: 0, deltaY: 0.05, hasPreciseScrollingDeltas: true)
+            events += accumulator.events(vertical: units.vertical, horizontal: units.horizontal, at: point)
+        }
+        XCTAssertEqual(events, [.verticalWheel(rotation: 1, x: 0, y: 0)])
+    }
+
     func testUnicodeEventsSkipAppKitFunctionKeyCharacters() {
         let functionKey = String(utf16CodeUnits: [0xF705], count: 1)
 

@@ -29,6 +29,7 @@ final class RemoteInputCaptureNSView: NSView {
     private var trackingArea: NSTrackingArea?
     private var inputState = RDPInputStateTracker()
     private var pressedKeyScancodes = Set<RDPKeyboardScancode>()
+    private var wheelAccumulator = RDPScrollWheelAccumulator()
 
     override var acceptsFirstResponder: Bool {
         true
@@ -141,16 +142,12 @@ final class RemoteInputCaptureNSView: NSView {
             return
         }
         inputState.updatePointerLocation(point)
-        let multiplier = event.hasPreciseScrollingDeltas ? 10.0 : 120.0
-        let verticalRotation = Int((event.scrollingDeltaY * multiplier).rounded())
-        let horizontalRotation = Int((event.scrollingDeltaX * multiplier).rounded())
-        var events: [RDPSlowPathInputEvent] = []
-        if verticalRotation != 0 {
-            events.append(.verticalWheel(rotation: verticalRotation, x: point.x, y: point.y))
-        }
-        if horizontalRotation != 0 {
-            events.append(.horizontalWheel(rotation: horizontalRotation, x: point.x, y: point.y))
-        }
+        let units = MacRDPScrollWheel.rotationUnits(
+            deltaX: event.scrollingDeltaX,
+            deltaY: event.scrollingDeltaY,
+            hasPreciseScrollingDeltas: event.hasPreciseScrollingDeltas
+        )
+        let events = wheelAccumulator.events(vertical: units.vertical, horizontal: units.horizontal, at: point)
         guard events.isEmpty == false else {
             return
         }
@@ -313,6 +310,23 @@ final class RemoteInputCaptureNSView: NSView {
             bounds: bounds,
             coordinateOrigin: .bottomLeft
         ).remotePoint(from: localPoint)
+    }
+}
+
+/// Converts AppKit scroll deltas into RDP wheel rotation units: a line (one wheel notch) is
+/// 120 units and a precise (trackpad) point 10.
+enum MacRDPScrollWheel {
+    private static let unitsPerPoint = 10.0
+
+    /// AppKit reports positive `deltaX` for scrolling left, while RDP horizontal rotation is
+    /// positive to the right, so the horizontal axis is negated.
+    static func rotationUnits(
+        deltaX: CGFloat,
+        deltaY: CGFloat,
+        hasPreciseScrollingDeltas: Bool
+    ) -> (vertical: Double, horizontal: Double) {
+        let scale = hasPreciseScrollingDeltas ? unitsPerPoint : RDPScrollWheelAccumulator.unitsPerNotch
+        return (Double(deltaY) * scale, -Double(deltaX) * scale)
     }
 }
 
