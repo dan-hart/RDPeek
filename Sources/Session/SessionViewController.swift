@@ -469,7 +469,7 @@ final class SessionViewController: NSViewController {
             displayControlReady: displayControlSession != nil,
             clipboardReady: clipboard.session != nil,
             clipboardSharingEnabled: clipboard.isSharingEnabled,
-            audioPlaybackEnabled: audioPlaybackEnabled,
+            connectionRequestsAudio: connectionRequestsAudio,
             certificateTrustedByApp: certificateTrustedByApp,
             usesLegacyRSAKeyExchange: usesLegacyRSAKeyExchange,
             isConnecting: isConnecting

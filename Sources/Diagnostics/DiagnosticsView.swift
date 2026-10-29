@@ -178,7 +178,9 @@ struct RemoteSessionDiagnosticsSnapshot: Equatable {
     var displayControlReady = false
     var clipboardReady = false
     var clipboardSharingEnabled = false
-    var audioPlaybackEnabled = false
+    /// Whether this connection asked the server for audio; the toggle may
+    /// have changed since.
+    var connectionRequestsAudio = false
     var certificateTrustedByApp = false
     var usesLegacyRSAKeyExchange = false
     var isConnecting = false
@@ -269,7 +271,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                     DiagnosticRow("Display Control", snapshot.displayControlReady ? "ready" : "not ready")
                     DiagnosticRow("Display Channel ID", optionalValue(snapshot.report?.rdpDisplayControlChannelID))
                     DiagnosticRow("Display Caps", displayControlCapability(snapshot.report))
-                    DiagnosticRow("Audio", snapshot.audioPlaybackEnabled ? "requested" : "off")
+                    DiagnosticRow("Audio Requested", metricBool(snapshot.connectionRequestsAudio))
                     DiagnosticRow("Audio Channel ID", optionalValue(snapshot.report?.rdpAudioChannelID))
                     DiagnosticRow("Audio Messages", messageTypes(snapshot.report?.rdpAudioMessages, \.typeName))
                     DiagnosticRow("Clipboard", clipboardState(snapshot))
