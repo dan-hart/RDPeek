@@ -93,6 +93,23 @@ final class RemoteInputMappingTests: XCTestCase {
         }
     }
 
+    /// The key ANSI keyboards have left of "1" sits between left Shift and Z on ISO keyboards.
+    func testGraveKeyCodeFollowsTheKeyboardType() {
+        let graveKey = UInt16(kVK_ANSI_Grave)
+        XCTAssertEqual(
+            MacRDPKeyboardMapping.scancode(forKeyCode: graveKey, isISOKeyboard: false),
+            RDPKeyboardScancode(code: 0x29)
+        )
+        XCTAssertEqual(
+            MacRDPKeyboardMapping.scancode(forKeyCode: graveKey, isISOKeyboard: true),
+            RDPKeyboardScancode(code: 0x56)
+        )
+        XCTAssertEqual(
+            MacRDPKeyboardMapping.scancode(forKeyCode: UInt16(kVK_ISO_Section), isISOKeyboard: true),
+            RDPKeyboardScancode(code: 0x29)
+        )
+    }
+
     func testKeypadClearDoesNotSendNumLock() {
         XCTAssertNil(MacRDPKeyboardMapping.scancode(forKeyCode: UInt16(kVK_ANSI_KeypadClear)))
     }
