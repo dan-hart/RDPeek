@@ -13,6 +13,7 @@ private final class RecordedClipboard: SessionClipboardSending {
     var publishedTexts: [String?] = []
     var publishedFiles: [[RDPClipboardLocalFile]] = []
     var sizeRequests: [UInt32] = []
+    var sizeRequestFileIndexes: [Int32] = []
     var rangeRequests: [RangeRequest] = []
 
     func publishLocalUnicodeText(_ text: String?) {
@@ -23,8 +24,9 @@ private final class RecordedClipboard: SessionClipboardSending {
         publishedFiles.append(files)
     }
 
-    func requestRemoteFileSize(streamID: UInt32, fileIndex _: Int32) throws {
+    func requestRemoteFileSize(streamID: UInt32, fileIndex: Int32) throws {
         sizeRequests.append(streamID)
+        sizeRequestFileIndexes.append(fileIndex)
     }
 
     func requestRemoteFileRange(
@@ -673,6 +675,44 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertTrue(session.publishedTexts.isEmpty)
     }
 
+    /// RDPKit leaves out the folders of a remote copy, so their files
+    /// arrive side by side, which the toast says.
+    func testRemoteFilesInFoldersAreCopiedWithoutThem() throws {
+        let session = RecordedClipboard()
+        let clipboard = makeClipboard()
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+        let folder = RDPClipboardFileAttributes.directory
+
+        clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: folder, fileSize: 0, fileName: "Docs"),
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "Docs\\a.txt"),
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: folder, fileSize: 0, fileName: "Docs\\sub"),
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "Docs\\sub\\a.txt"),
+        ]))
+        for _ in 0 ..< 2 {
+            try answerSizeRequest(1, to: clipboard, from: session)
+            try finishRemoteFileDownload(Data(count: 1), to: clipboard, from: session)
+        }
+        XCTAssertEqual(session.sizeRequestFileIndexes, [1, 3])
+        XCTAssertEqual(copiedFileURLs().map(\.lastPathComponent), ["a.txt", "a-2.txt"])
+        XCTAssertEqual(toasts.last, "2 remote files copied without their folders")
+
+        clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: folder, fileSize: 0, fileName: "Docs"),
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: 0, fileSize: 0, fileName: "Docs\\a.txt"),
+        ]))
+        try answerSizeRequest(1, to: clipboard, from: session)
+        try finishRemoteFileDownload(Data(count: 1), to: clipboard, from: session)
+        XCTAssertEqual(toasts.last, "Remote file copied without its folder: a.txt")
+
+        clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
+            RDPClipboardFileDescriptorW(flags: 0, fileAttributes: folder, fileSize: 0, fileName: "Empty"),
+        ]))
+        XCTAssertEqual(toasts.last, "Remote folders have no files")
+    }
+
     // MARK: - Download cleanup
 
     func testFinishedDownloadIsRemovedOnceItLeavesThePasteboard() throws {
@@ -754,7 +794,11 @@ final class SessionClipboardTests: XCTestCase {
     }
 
     private func copiedFileURL() -> URL? {
-        (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first
+        copiedFileURLs().first
+    }
+
+    private func copiedFileURLs() -> [URL] {
+        (pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL]) ?? []
     }
 
     private func fileExists(_ url: URL) -> Bool {
@@ -775,8 +819,17 @@ final class SessionClipboardTests: XCTestCase {
                 fileName: "big.bin"
             ),
         ]))
+        try answerSizeRequest(UInt64(contents.count), to: clipboard, from: session)
+    }
+
+    /// Answers the outstanding size request with `byteCount`.
+    private func answerSizeRequest(
+        _ byteCount: UInt64,
+        to clipboard: SessionClipboard,
+        from session: RecordedClipboard
+    ) throws {
         let streamID = try XCTUnwrap(session.sizeRequests.last)
-        let size = UInt64(contents.count).littleEndian
+        let size = byteCount.littleEndian
         clipboard.receiveFileContents(RDPClipboardFileContentsResponse(
             streamID: streamID,
             ok: true,

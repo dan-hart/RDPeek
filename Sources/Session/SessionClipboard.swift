@@ -246,6 +246,9 @@ final class SessionClipboard {
             let downloadDirectory = try makeDownloadDirectory()
             requestFileSize(SessionRemoteClipboardFileTransfer(
                 files: files,
+                leavesOutFolders: descriptorList.descriptors.contains { descriptor in
+                    descriptor.isDirectory || descriptor.fileName.contains { $0 == "\\" || $0 == "/" }
+                },
                 streamID: makeStreamID(),
                 downloadDirectory: downloadDirectory
             ))
@@ -637,12 +640,13 @@ final class SessionClipboard {
 
         pasteboardChangeCount = pasteboard.changeCount
         copiedDownload = (transfer.downloadDirectory, pasteboardChangeCount)
-        if transfer.downloadedFileURLs.count == 1,
-           let fileName = transfer.files.first?.fileName
-        {
-            onToast("Remote file copied: \(fileName)", "doc.on.clipboard")
+        let fileCount = transfer.downloadedFileURLs.count
+        if fileCount == 1, let fileName = transfer.files.first?.fileName {
+            let copied = transfer.leavesOutFolders ? "Remote file copied without its folder" : "Remote file copied"
+            onToast("\(copied): \(fileName)", "doc.on.clipboard")
         } else {
-            onToast("\(transfer.downloadedFileURLs.count) remote files copied", "doc.on.clipboard")
+            let folders = transfer.leavesOutFolders ? " without their folders" : ""
+            onToast("\(fileCount) remote files copied\(folders)", "doc.on.clipboard")
         }
     }
 
@@ -657,7 +661,7 @@ final class SessionClipboard {
         case .emptyFileList:
             "Remote file clipboard is empty"
         case .containsOnlyDirectories:
-            "Copying folders from the remote is not supported"
+            "Remote folders have no files"
         case .invalidFileIndex:
             "Remote file index is not valid"
         case .totalByteLimitExceeded:
@@ -740,7 +744,11 @@ private enum SessionLocalClipboardPayload: Sendable {
 }
 
 private struct SessionRemoteClipboardFileTransfer {
+    /// RDPKit plans the files of a remote copy without its folders, each
+    /// under its own name, numbered where two clash.
     var files: [RDPClipboardRemoteFileTransferFile]
+    /// Whether the copy had folders, whose files arrive side by side.
+    var leavesOutFolders: Bool
     var currentFileOffset = 0
     var streamID: UInt32
     /// Nil until the server answers the size request.
