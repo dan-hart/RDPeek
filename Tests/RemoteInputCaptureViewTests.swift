@@ -275,7 +275,7 @@ final class RemoteInputCaptureViewTests: XCTestCase {
             pixelFormat: 0,
             destinationRect: RDPFrameRect(left: 0, top: 0, right: width, bottom: height),
             regionRects: [],
-            h264AnnexBData: Data()
+            encodedVideoData: Data()
         ))
     }
 }

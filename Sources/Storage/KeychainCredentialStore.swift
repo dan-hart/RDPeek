@@ -16,18 +16,20 @@ struct KeychainCredentialKey: Equatable, Sendable {
     /// hosts case-insensitively, so the keychain must address them the same
     /// way — otherwise a case-only host edit strands the stored password.
     var account: String {
-        guard let qualifiedUsername = identity.qualifiedUsername else {
+        guard let account = identity.credentialAccountName else {
             preconditionFailure("KeychainCredentialKey requires a credential account identity.")
         }
-        return "\(qualifiedUsername)@\(identity.host.lowercased()):\(identity.port)"
+        return account
     }
 
-    /// The pre-normalization account name older installs stored items under.
+    /// The pre-normalization account name older installs stored items under,
+    /// with the host as typed.
     var legacyAccount: String? {
-        guard let legacy = identity.credentialAccountName, legacy != account else {
+        guard let qualifiedUsername = identity.qualifiedUsername else {
             return nil
         }
-        return legacy
+        let legacy = "\(qualifiedUsername)@\(identity.host):\(identity.port)"
+        return legacy == account ? nil : legacy
     }
 }
 

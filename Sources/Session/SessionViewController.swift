@@ -54,7 +54,7 @@ final class SessionViewController: NSViewController {
     private var nextRemoteClipboardStreamID: UInt32 = 1
     private var audioPlaybackEnabled: Bool
     private var remoteAudioPlayer = RDPAudioPlayer()
-    private var report: RDPPreflightReport?
+    private var report: RDPConnectionReport?
     private var liveCertificate: RDPServerCertificateInfo?
     private var previewFrame: RDPFrameMetadata?
     private var previewFrameCount = 0
@@ -680,7 +680,7 @@ final class SessionViewController: NSViewController {
         connectionTask = Task.detached(priority: .userInitiated) {
             var configuration = baseConfiguration
             configuration.storedClientLicense = try? clientLicenseStore.license(for: clientLicenseKey)
-            let decodeQueue = RDPLatestFrameDecodeQueue(
+            let decodeQueue = RDPFrameDecodeQueue(
                 shouldCancel: {
                     cancellation.isCancelled
                 },
@@ -714,17 +714,6 @@ final class SessionViewController: NSViewController {
                         controller.publishRenderMetricsSnapshotIfNeeded(at: receivedAt)
                         controller.render()
                     }
-                },
-                onSkippedFrames: { count, receivedAt in
-                    sink.apply { controller in
-                        controller.renderMetricsStore.recordSkippedDecodeFrames(
-                            count,
-                            receivedAt: receivedAt
-                        )
-                        if controller.publishRenderMetricsSnapshotIfNeeded(at: receivedAt) {
-                            controller.render()
-                        }
-                    }
                 }
             )
             let wireReceiveCoalescer = RDPWireReceiveMetricsCoalescer(
@@ -745,7 +734,7 @@ final class SessionViewController: NSViewController {
                 wireReceiveCoalescer.cancel()
                 decodeQueue.cancel()
             }
-            let nextReport = RDPPreflightClient().run(
+            let nextReport = RDPSessionClient().run(
                 configuration: configuration,
                 onGraphicsFrame: { frame in
                     try decodeQueue.submitAndWait(

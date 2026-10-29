@@ -51,8 +51,8 @@ final class SessionModelsTests: XCTestCase {
         nextStage: String? = nil,
         terminationName: String? = nil,
         error: String? = nil
-    ) -> RDPPreflightReport {
-        RDPPreflightReport(
+    ) -> RDPConnectionReport {
+        RDPConnectionReport(
             status: status,
             stage: "RDP session",
             target: "winbox:3389",

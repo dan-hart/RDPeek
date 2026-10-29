@@ -115,13 +115,8 @@ private struct PerformanceMetricsView: View {
                     "Image Convert",
                     metricTiming(last: metrics.lastImageConversionMilliseconds, average: metrics.averageImageConversionMilliseconds)
                 )
-                DiagnosticRow(
-                    "Crop",
-                    metricTiming(last: metrics.lastCropMilliseconds, average: metrics.averageCropMilliseconds)
-                )
                 DiagnosticRow("Decoded Frames", "\(metrics.decodedFrameCount)")
                 DiagnosticRow("Decoded Bytes", metricBytes(metrics.decodedByteCount))
-                DiagnosticRow("Skipped Decode Frames", "\(metrics.skippedDecodeFrameCount)")
                 DiagnosticRow("Skipped Presentation Frames", "\(metrics.skippedPresentationFrameCount)")
                 DiagnosticRow("Decode Failures", "\(metrics.failedDecodeCount)")
                 if let lastDecodeError = metrics.lastDecodeError {
@@ -146,7 +141,7 @@ private struct PerformanceMetricsView: View {
 
 struct RemoteSessionDiagnosticsSnapshot: Equatable {
     var title = "Remote Desktop"
-    var report: RDPPreflightReport?
+    var report: RDPConnectionReport?
     var previewFrame: RDPFrameMetadata?
     var previewFrameCount = 0
     var previewDecodeError: String?
@@ -394,14 +389,6 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                         if let rdpDisplayControlCapsHex = report.rdpDisplayControlCapsHex {
                             MonospaceBlock(title: "Display Control Caps", value: rdpDisplayControlCapsHex)
                         }
-                        if let rdpClipboardMessageHexes = report.rdpClipboardMessageHexes {
-                            ForEach(rdpClipboardMessageHexes.indices, id: \.self) { index in
-                                let title = report.rdpClipboardMessages?[safe: index].map {
-                                    "Clipboard \(index + 1) \($0.typeName)"
-                                } ?? "Clipboard \(index + 1)"
-                                MonospaceBlock(title: title, value: rdpClipboardMessageHexes[index])
-                            }
-                        }
                         if let rdpGraphicsResponseHex = report.rdpGraphicsResponseHex {
                             MonospaceBlock(title: "RDPGFX Response", value: rdpGraphicsResponseHex)
                         }
@@ -431,10 +418,10 @@ struct RemoteSessionDiagnosticsWindowContent: View {
                             MonospaceBlock(title: "RDPGFX Failure Response", value: failureResponseHex)
                         }
                         if let rdpDynamicChannelRequestHexes = report.rdpDynamicChannelRequestHexes {
+                            // The hex list holds the first drdynvc packets; the type list is not index-aligned with it.
                             ForEach(rdpDynamicChannelRequestHexes.indices, id: \.self) { index in
-                                let type = report.rdpDynamicChannelRequestTypes?[safe: index] ?? "request"
                                 MonospaceBlock(
-                                    title: "DRDYNVC \(index + 1) \(type)",
+                                    title: "DRDYNVC \(index + 1)",
                                     value: rdpDynamicChannelRequestHexes[index]
                                 )
                             }
@@ -507,7 +494,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
         return trusted ? "trusted" : "unrecognized"
     }
 
-    private func graphicsCapability(_ report: RDPPreflightReport?) -> String {
+    private func graphicsCapability(_ report: RDPConnectionReport?) -> String {
         guard let version = report?.rdpGraphicsSelectedCapabilityVersion else {
             return "none"
         }
@@ -549,7 +536,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
             .joined(separator: ", ")
     }
 
-    private func clientInfoState(_ report: RDPPreflightReport?) -> String {
+    private func clientInfoState(_ report: RDPConnectionReport?) -> String {
         guard let sent = report?.rdpClientInfoSent else {
             return "not attempted"
         }
@@ -614,7 +601,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
         return types.joined(separator: ", ")
     }
 
-    private func displayControlCapability(_ report: RDPPreflightReport?) -> String {
+    private func displayControlCapability(_ report: RDPConnectionReport?) -> String {
         guard let caps = report?.rdpDisplayControlCaps else {
             return "none"
         }
@@ -691,7 +678,7 @@ struct RemoteSessionDiagnosticsWindowContent: View {
             .joined(separator: ", ")
     }
 
-    private func graphicsFailureSummary(_ report: RDPPreflightReport?) -> String {
+    private func graphicsFailureSummary(_ report: RDPConnectionReport?) -> String {
         guard let report,
               report.rdpGraphicsFailureUpdatePayloadHex != nil
                 || report.rdpGraphicsFailureUpdateResponseHex != nil

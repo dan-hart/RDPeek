@@ -169,12 +169,7 @@ final class RemoteInputCaptureNSView: NSView {
             return false
         }
         syncModifierKeys(with: event)
-        sendKeyboardScancode(
-            scancode,
-            isReleased: false,
-            trackRelease: true,
-            isRepeat: event.isARepeat && inputState.isScancodePressed(scancode)
-        )
+        sendKeyboardScancode(scancode, isReleased: false)
         return true
     }
 
@@ -184,14 +179,9 @@ final class RemoteInputCaptureNSView: NSView {
            MacRDPKeyboardMapping.shouldSendScancode(for: event)
         {
             // A repeat for a scancode we no longer track (its release was
-            // flushed when Command went up) re-presses the key remotely, so
-            // it must be re-tracked as an initial press or its keyUp is lost.
-            sendKeyboardScancode(
-                scancode,
-                isReleased: false,
-                trackRelease: true,
-                isRepeat: event.isARepeat && inputState.isScancodePressed(scancode)
-            )
+            // flushed when Command went up) re-presses the key remotely; the
+            // tracker sends it as an initial press so its keyUp is not lost.
+            sendKeyboardScancode(scancode, isReleased: false)
             return
         }
         guard event.modifierFlags.intersection([.command, .control]).isEmpty else {
@@ -216,7 +206,7 @@ final class RemoteInputCaptureNSView: NSView {
         guard inputState.isScancodePressed(scancode) else {
             return
         }
-        sendKeyboardScancode(scancode, isReleased: true, trackRelease: true)
+        sendKeyboardScancode(scancode, isReleased: true)
     }
 
     override func flagsChanged(with event: NSEvent) {
@@ -247,7 +237,7 @@ final class RemoteInputCaptureNSView: NSView {
             guard isPressed != inputState.isScancodePressed(scancode) else {
                 return nil
             }
-            return inputState.keyboard(scancode: scancode, isReleased: isPressed == false, trackRelease: true)
+            return inputState.keyboard(scancode: scancode, isReleased: isPressed == false)
         }
     }
 
@@ -285,31 +275,19 @@ final class RemoteInputCaptureNSView: NSView {
         }
     }
 
-    private func sendKeyboardScancode(
-        _ scancode: RDPKeyboardScancode,
-        isReleased: Bool,
-        trackRelease: Bool,
-        isRepeat: Bool = false
-    ) {
-        if trackRelease {
-            if isReleased {
-                pressedKeyScancodes.remove(scancode)
-            } else if isRepeat == false {
-                pressedKeyScancodes.insert(scancode)
-            }
+    private func sendKeyboardScancode(_ scancode: RDPKeyboardScancode, isReleased: Bool) {
+        if isReleased {
+            pressedKeyScancodes.remove(scancode)
+        } else {
+            pressedKeyScancodes.insert(scancode)
         }
-        let keyboardEvent = inputState.keyboard(
-            scancode: scancode,
-            isReleased: isReleased,
-            trackRelease: trackRelease,
-            isRepeat: isRepeat
-        )
+        let keyboardEvent = inputState.keyboard(scancode: scancode, isReleased: isReleased)
         inputSession?.send(keyboardEvent)
     }
 
     private func releaseEventsForPressedKeys() -> [RDPSlowPathInputEvent] {
         let events = pressedKeyScancodes.map { scancode in
-            inputState.keyboard(scancode: scancode, isReleased: true, trackRelease: true)
+            inputState.keyboard(scancode: scancode, isReleased: true)
         }
         pressedKeyScancodes.removeAll()
         return events
