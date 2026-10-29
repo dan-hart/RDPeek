@@ -20,8 +20,8 @@ final class SessionViewController: NSViewController {
     private(set) var draft: RDPConnectionDraft
 
     private var requestedDesktopSizeLabel = "auto"
-    /// The Keychain holds a password for the draft's identity.
-    private var hasRememberedPassword = false
+    /// The password the Keychain holds for the draft's identity, when known.
+    private var rememberedPassword: String?
     private var isAwaitingCredentials = false
     private var isResolvingStoredCredentials = false
     private var credentialResolutionTask: Task<Void, Never>?
@@ -503,6 +503,17 @@ final class SessionViewController: NSViewController {
         render()
     }
 
+    /// A password the server rejected is offered neither by Reconnect nor,
+    /// on the next connect, from this app run's cache.
+    private func forgetRejectedPassword() {
+        if let account = draft.identity.credentialAccountName,
+           InMemoryCredentialCache.shared.password(for: account) == draft.password
+        {
+            InMemoryCredentialCache.shared.removePassword(for: account)
+        }
+        draft.password = ""
+    }
+
     private func applyCredentials(username: String, domain: String, password: String, remember: Bool) {
         let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
         let domain = domain.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -522,7 +533,7 @@ final class SessionViewController: NSViewController {
         // A password the Keychain held for the previous user is not this
         // one's to delete.
         if draft.identity.hasSameConnectionIdentity(as: previousIdentity) == false {
-            hasRememberedPassword = false
+            rememberedPassword = nil
         }
         isAwaitingCredentials = false
         hudModel.credentialsErrorMessage = nil
@@ -969,6 +980,7 @@ final class SessionViewController: NSViewController {
             autoRetryCount += 1
             scheduleAutoRetry()
         case let .promptForCredentials(message):
+            forgetRejectedPassword()
             promptForCredentials(errorMessage: message)
         case let .end(reason):
             sessionEndReason = reason
@@ -1371,11 +1383,11 @@ final class SessionViewController: NSViewController {
             isResolvingStoredCredentials = false
 
             if let savedPassword, savedPassword.isEmpty == false {
-                hasRememberedPassword = true
+                rememberedPassword = savedPassword
                 draft.password = savedPassword
                 startConnectionAttempt()
             } else {
-                hasRememberedPassword = false
+                rememberedPassword = nil
                 connectWithCachedPasswordOrPrompt()
             }
         }
@@ -1402,11 +1414,14 @@ final class SessionViewController: NSViewController {
             return
         }
         if draft.rememberPassword {
-            persistAcceptedCredentials(.save(key: key, password: draft.password))
+            // A password read from the Keychain is there already.
+            if draft.password != rememberedPassword {
+                persistAcceptedCredentials(.save(key: key, password: draft.password))
+            }
             return
         }
         InMemoryCredentialCache.shared.setPassword(draft.password, for: key.account)
-        if hasRememberedPassword {
+        if rememberedPassword != nil {
             persistAcceptedCredentials(.delete(key: key))
         }
     }
@@ -1451,12 +1466,12 @@ final class SessionViewController: NSViewController {
         let matchesCurrentDraft = draft.identity.hasSameConnectionIdentity(as: request.key.identity)
         switch result {
         case .success(.saved):
-            if matchesCurrentDraft {
-                hasRememberedPassword = true
+            if matchesCurrentDraft, case let .save(_, password) = request {
+                rememberedPassword = password
             }
         case .success(.deleted):
             if matchesCurrentDraft {
-                hasRememberedPassword = false
+                rememberedPassword = nil
             }
         case let .failure(error):
             let action = switch request {
