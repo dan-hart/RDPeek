@@ -292,38 +292,45 @@ final class SessionViewController: NSViewController {
         hudModel.isClipboardSharingEnabled = clipboard.isSharingEnabled
         hudModel.isAudioPlaybackEnabled = audioPlaybackEnabled
         hudModel.isFollowWindowSizeEnabled = autoApplyViewerSize
-        hudModel.canSyncClipboard = clipboard.canSync
-        hudModel.canShareClipboardTemporarily = clipboard.canStartTemporarySharing
         hudModel.temporaryClipboardSecondsRemaining = clipboard.temporarySharingSecondsRemaining
-        hudModel.canReconnect = canStartConnection
-        hudModel.canCancel = isConnecting || isResolvingStoredCredentials || isAutoRetryPending
+        // One command state feeds the HUD and the Session menu, so they
+        // agree on what can be done.
+        let commands = sessionCommandState
+        hudModel.canReconnect = commands.canStart
+        hudModel.canCancel = commands.canCancel
+        hudModel.canSyncClipboard = commands.canSyncClipboard
+        hudModel.canShareClipboardTemporarily = commands.canShareClipboardTemporarily
 
         updateFrameClock()
         syncDiagnosticsSnapshot()
-        publishSessionCommandStateIfKey()
+        publishSessionCommandStateIfKey(commands)
     }
 
     /// Pushes this session's menu-relevant state to the launch store while
     /// its window is key, so the Session menu enables and titles its items
     /// from live state.
     func publishSessionCommandStateIfKey() {
+        publishSessionCommandStateIfKey(sessionCommandState)
+    }
+
+    private func publishSessionCommandStateIfKey(_ commands: SessionCommandState) {
         guard didClose == false, view.window?.isKeyWindow == true else {
             return
         }
-        launchStore?.updateKeySessionCommands(sessionCommandState)
+        launchStore?.updateKeySessionCommands(commands)
     }
 
-    var sessionCommandState: SessionCommandState {
+    private var sessionCommandState: SessionCommandState {
         SessionCommandState.make(
             isConnecting: isConnecting,
             isResolvingStoredCredentials: isResolvingStoredCredentials,
             isAutoRetryPending: isAutoRetryPending,
+            isAwaitingCredentials: isAwaitingCredentials,
             hasFrame: previewFrame != nil,
             hasReport: report != nil,
-            hasClipboardSession: clipboard.session != nil,
-            clipboardSharingEnabled: clipboard.isSharingEnabled,
-            isTemporaryClipboardSharingActive: clipboard.isTemporarySharingActive,
-            hostIsEmpty: draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            hostIsEmpty: draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            canSyncClipboard: clipboard.canSync,
+            canShareClipboardTemporarily: clipboard.canStartTemporarySharing
         )
     }
 
@@ -1480,10 +1487,6 @@ final class SessionViewController: NSViewController {
             }
             toast("\(action): \(error)", systemImage: "exclamationmark.triangle")
         }
-    }
-
-    private var canStartConnection: Bool {
-        !isConnecting && draft.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 }
 
