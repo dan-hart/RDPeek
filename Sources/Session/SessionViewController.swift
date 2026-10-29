@@ -1012,13 +1012,20 @@ final class SessionViewController: NSViewController {
         publishRenderMetricsSnapshotIfNeeded(force: true)
         let finishedReport: RDPConnectionReport
         let outcome: SessionAttemptOutcome
+        // RDPKit follows a Server Redirection within one attempt and reports
+        // a certificate only after a completed TLS handshake, so a failure
+        // to connect or to set up TLS after one is the failure of a server
+        // the session was passed on to.
+        let reachedServer = liveCertificate != nil
         switch result {
         case let .success(sessionReport):
             finishedReport = sessionReport
             outcome = .afterSession(
                 sessionReport,
+                host: configuration.host,
                 presentedFrames: hasPresentedFrame,
-                usedLegacyRSAKeyExchange: configuration.legacyRSAKeyExchange
+                usedLegacyRSAKeyExchange: configuration.legacyRSAKeyExchange,
+                reachedServer: reachedServer
             )
         case let .failure(error):
             finishedReport = RDPConnectionReport(connectionError: error, configuration: configuration)
@@ -1026,7 +1033,7 @@ final class SessionViewController: NSViewController {
                 error,
                 host: configuration.host,
                 retriesSpent: autoRetryCount,
-                reachedServer: liveCertificate != nil
+                reachedServer: reachedServer
             )
         }
         report = finishedReport

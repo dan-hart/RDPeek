@@ -275,13 +275,27 @@ enum SessionAttemptOutcome: Equatable {
     }
 
     /// After a session RDPKit set up ended. Credentials may have been sent,
-    /// so nothing is retried with them: a rejected sign-in asks again.
+    /// so no attempt that sent them is repeated: a rejected sign-in asks
+    /// again. The one retry, with RSA key exchange, follows a TLS failure
+    /// before any credential was sent, and only on the server typed in:
+    /// `reachedServer` (a certificate arrived, which RDPKit reports only
+    /// after a completed handshake) means the server typed in took the
+    /// sign-in and passed the session on to the server that failed.
     static func afterSession(
         _ report: RDPConnectionReport,
+        host: String,
         presentedFrames: Bool,
-        usedLegacyRSAKeyExchange: Bool
+        usedLegacyRSAKeyExchange: Bool,
+        reachedServer: Bool = false
     ) -> Self {
         if presentedFrames == false, let error = report.error {
+            if report.stage == "tls-handshake", reachedServer {
+                return .end(RDPSessionEndReason(
+                    kind: .failed,
+                    message: "“\(host)” passed the session on to a server this Mac could not set up "
+                        + "a secure connection with."
+                ))
+            }
             // RDPKit names the certificate's missing key usage in the TLS
             // failure, which ends the attempt before any credential is sent.
             if report.stage == "tls-handshake",

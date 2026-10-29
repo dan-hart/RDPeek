@@ -175,20 +175,29 @@ final class SessionModelsTests: XCTestCase {
     }
 
     func testKeyUsageFailureFallsBackToLegacyRSAOnce() {
-        let report = makeReport(
-            stage: "tls-handshake",
-            error: "TLS failed: the server's certificate does not allow ECDHE key exchange (KEY_USAGE_BIT_INCORRECT)"
-        )
+        let report = makeReport(stage: "tls-handshake", error: keyUsageError)
 
+        XCTAssertEqual(outcome(after: report), .retryWithLegacyRSAKeyExchange)
         XCTAssertEqual(
-            SessionAttemptOutcome.afterSession(report, presentedFrames: false, usedLegacyRSAKeyExchange: false),
-            .retryWithLegacyRSAKeyExchange
-        )
-        XCTAssertEqual(
-            SessionAttemptOutcome.afterSession(report, presentedFrames: false, usedLegacyRSAKeyExchange: true),
+            outcome(after: report, usedLegacyRSAKeyExchange: true),
             .end(RDPSessionEndReason(
                 kind: .failed,
                 message: "A secure connection to the remote computer could not be set up."
+            ))
+        )
+    }
+
+    func testKeyUsageFailureAfterARedirectIsNotRetriedWithLegacyRSA() {
+        // The certificate came from the server typed in, which took the
+        // sign-in and passed the session on: retrying it with RSA key
+        // exchange would send it the credentials without forward secrecy.
+        let report = makeReport(stage: "tls-handshake", error: keyUsageError)
+
+        XCTAssertEqual(
+            outcome(after: report, reachedServer: true),
+            .end(RDPSessionEndReason(
+                kind: .failed,
+                message: "“winbox” passed the session on to a server this Mac could not set up a secure connection with."
             ))
         )
     }
@@ -205,7 +214,7 @@ final class SessionModelsTests: XCTestCase {
             )
 
             XCTAssertEqual(
-                SessionAttemptOutcome.afterSession(report, presentedFrames: false, usedLegacyRSAKeyExchange: false),
+                outcome(after: report),
                 .promptForCredentials(message: "The user name or password is incorrect.")
             )
         }
@@ -217,11 +226,7 @@ final class SessionModelsTests: XCTestCase {
             error: "receive failed: connection closed before receiving CredSSP response"
         )
 
-        guard case .promptForCredentials = SessionAttemptOutcome.afterSession(
-            report,
-            presentedFrames: false,
-            usedLegacyRSAKeyExchange: false
-        ) else {
+        guard case .promptForCredentials = outcome(after: report) else {
             return XCTFail("Expected the sign-in prompt")
         }
     }
@@ -233,10 +238,7 @@ final class SessionModelsTests: XCTestCase {
         ] {
             let report = makeReport(stage: "credssp", error: error)
 
-            XCTAssertEqual(
-                SessionAttemptOutcome.afterSession(report, presentedFrames: false, usedLegacyRSAKeyExchange: false),
-                .end(RDPSessionEndReason(kind: .failed, message: error))
-            )
+            XCTAssertEqual(outcome(after: report), .end(RDPSessionEndReason(kind: .failed, message: error)))
         }
     }
 
@@ -244,7 +246,7 @@ final class SessionModelsTests: XCTestCase {
         let report = makeReport(stage: "credssp", error: "CredSSP server public-key binding did not match")
 
         XCTAssertEqual(
-            SessionAttemptOutcome.afterSession(report, presentedFrames: false, usedLegacyRSAKeyExchange: false),
+            outcome(after: report),
             .end(RDPSessionEndReason(kind: .failed, message: "CredSSP server public-key binding did not match"))
         )
     }
@@ -345,6 +347,23 @@ final class SessionModelsTests: XCTestCase {
         XCTAssertEqual(
             RDPDesktopSize.initial(canvasPointSize: CGSize(width: 9001, height: 9001)),
             try RDPDesktopSize(width: 8192, height: 8192)
+        )
+    }
+
+    private let keyUsageError =
+        "TLS failed: the server's certificate does not allow ECDHE key exchange (KEY_USAGE_BIT_INCORRECT)"
+
+    private func outcome(
+        after report: RDPConnectionReport,
+        usedLegacyRSAKeyExchange: Bool = false,
+        reachedServer: Bool = false
+    ) -> SessionAttemptOutcome {
+        SessionAttemptOutcome.afterSession(
+            report,
+            host: "winbox",
+            presentedFrames: false,
+            usedLegacyRSAKeyExchange: usedLegacyRSAKeyExchange,
+            reachedServer: reachedServer
         )
     }
 
