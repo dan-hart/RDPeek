@@ -31,12 +31,10 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: .shift))
         XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: leftShift, isReleased: false)])
 
+        // Shift stays down for the key typed with it.
         harness.recorder.events.removeAll()
         harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_A), characters: "A", flags: .shift))
-        XCTAssertEqual(harness.recorder.events, [
-            .unicode(codeUnit: 0x41, isReleased: false),
-            .unicode(codeUnit: 0x41, isReleased: true),
-        ])
+        XCTAssertEqual(harness.recorder.events, [.keyboard(scancode: RDPKeyboardScancode(code: 0x1E), isReleased: false)])
 
         harness.recorder.events.removeAll()
         harness.view.flagsChanged(with: flagsEvent(keyCode: UInt16(kVK_Shift), flags: []))
@@ -101,8 +99,7 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         harness.view.keyDown(with: keyEvent(.keyDown, keyCode: 0, characters: "a"))
         XCTAssertEqual(harness.recorder.events, [
             .keyboard(scancode: .leftControl, isReleased: true),
-            .unicode(codeUnit: 0x61, isReleased: false),
-            .unicode(codeUnit: 0x61, isReleased: true),
+            .keyboard(scancode: RDPKeyboardScancode(code: 0x1E), isReleased: false),
         ])
     }
 
@@ -430,18 +427,62 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         XCTAssertEqual(harness.recorder.events, [])
     }
 
-    // MARK: - Normal typing is unaffected
+    // MARK: - Typing
 
-    func testPlainTypingSendsUnicodePressReleasePairs() {
+    func testTypingSendsScancodesWhenTheAnnouncedLayoutTypesTheSameCharacter() {
+        // Scancodes reach a remote IME; Unicode arrives as VK_PACKET.
         let harness = makeHarness()
-        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: 0, characters: "a"))
+        let qKey = RDPKeyboardScancode(code: 0x10)
+        let space = RDPKeyboardScancode(code: 0x39)
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_Q), characters: "q"))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: UInt16(kVK_ANSI_Q), characters: "q"))
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_Space), characters: " "))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: UInt16(kVK_Space), characters: " "))
+        // German: the Mac's Y key types "z", which German Windows types with
+        // the scancode of US "y".
+        harness.view.keyboardLayout = RDPKeyboardLayout(rawValue: 0x0000_0407)
+        harness.view.keyDown(with: keyEvent(.keyDown, keyCode: UInt16(kVK_ANSI_Y), characters: "z"))
+
         XCTAssertEqual(harness.recorder.events, [
-            .unicode(codeUnit: 0x61, isReleased: false),
-            .unicode(codeUnit: 0x61, isReleased: true),
+            .keyboard(scancode: qKey, isReleased: false),
+            .keyboard(scancode: qKey, isReleased: true),
+            .keyboard(scancode: space, isReleased: false),
+            .keyboard(scancode: space, isReleased: true),
+            .keyboard(scancode: RDPKeyboardScancode(code: 0x15), isReleased: false),
+        ])
+    }
+
+    func testTextTheLayoutTypesDifferentlyGoesAsUnicodePressReleasePairs() {
+        let harness = makeHarness()
+        // A character a dead key composed.
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_ANSI_E),
+            characters: "é",
+            charactersIgnoringModifiers: "e"
+        ))
+        // A dead key types nothing, and Space after it the accent.
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_ANSI_6),
+            characters: "",
+            charactersIgnoringModifiers: "^"
+        ))
+        harness.view.keyDown(with: keyEvent(
+            .keyDown,
+            keyCode: UInt16(kVK_Space),
+            characters: "^",
+            charactersIgnoringModifiers: " "
+        ))
+        XCTAssertEqual(harness.recorder.events, [
+            .unicode(codeUnit: 0xE9, isReleased: false),
+            .unicode(codeUnit: 0xE9, isReleased: true),
+            .unicode(codeUnit: 0x5E, isReleased: false),
+            .unicode(codeUnit: 0x5E, isReleased: true),
         ])
 
         harness.recorder.events.removeAll()
-        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: 0, characters: "a"))
+        harness.view.keyUp(with: keyEvent(.keyUp, keyCode: UInt16(kVK_ANSI_E), characters: "é"))
         XCTAssertEqual(harness.recorder.events, [])
     }
 
@@ -499,6 +540,7 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         _ type: NSEvent.EventType,
         keyCode: UInt16,
         characters: String = "",
+        charactersIgnoringModifiers: String? = nil,
         flags: NSEvent.ModifierFlags = [],
         isARepeat: Bool = false
     ) -> NSEvent {
@@ -510,7 +552,7 @@ final class RemoteInputCaptureViewTests: XCTestCase {
             windowNumber: 0,
             context: nil,
             characters: characters,
-            charactersIgnoringModifiers: characters,
+            charactersIgnoringModifiers: charactersIgnoringModifiers ?? characters,
             isARepeat: isARepeat,
             keyCode: keyCode
         ) else {

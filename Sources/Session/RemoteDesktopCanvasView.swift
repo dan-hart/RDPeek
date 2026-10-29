@@ -9,6 +9,13 @@ final class RemoteDesktopCanvasNSView: NSView {
 
     var onSurfaceSizeChange: ((CGSize) -> Void)?
 
+    /// The keyboard layout the session announced; it decides which keys
+    /// the input layer can send as scancodes.
+    var keyboardLayout: RDPKeyboardLayout {
+        get { inputView.keyboardLayout }
+        set { inputView.keyboardLayout = newValue }
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         configure()

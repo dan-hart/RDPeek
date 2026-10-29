@@ -128,6 +128,105 @@ final class RemoteInputMappingTests: XCTestCase {
         XCTAssertTrue(sendsScancode(kVK_ANSI_A, .option))
     }
 
+    // MARK: - Characters the announced layout types
+
+    /// A remote IME commits its candidate with Space, so it goes as its scancode on every layout,
+    /// and as Unicode only when a dead key composed with it.
+    func testSpaceSendsItsScancodeUnlessADeadKeyComposedWithIt() {
+        XCTAssertEqual(MacRDPKeyboardMapping.scancode(forKeyCode: UInt16(kVK_Space)), RDPKeyboardScancode(code: 0x39))
+        for layout: UInt32 in [0x0000_0409, 0x0000_0407, 0x0000_0419, 0x1234_5678] {
+            XCTAssertTrue(windowsTypes(" ", scancode: 0x39, layout: layout))
+            XCTAssertTrue(windowsTypes(" ", scancode: 0x39, .shift, layout: layout))
+        }
+        XCTAssertFalse(windowsTypes("^", ignoringModifiers: " ", scancode: 0x39, layout: 0x0000_0407))
+    }
+
+    func testCharactersUSWindowsTypesForTheScancodeGoAsScancodes() {
+        XCTAssertTrue(windowsTypes("a", scancode: 0x1E))
+        XCTAssertTrue(windowsTypes("A", scancode: 0x1E, .shift))
+        XCTAssertTrue(windowsTypes(";", scancode: 0x27))
+        XCTAssertTrue(windowsTypes(":", scancode: 0x27, .shift))
+        XCTAssertTrue(windowsTypes("`", scancode: 0x29))
+        // Caps Lock shifts letters only, as on Windows.
+        XCTAssertTrue(windowsTypes("A", scancode: 0x1E, .capsLock))
+        XCTAssertTrue(windowsTypes("1", scancode: 0x02, .capsLock))
+        XCTAssertTrue(windowsTypes("a", scancode: 0x1E, [.capsLock, .shift]))
+    }
+
+    func testCharactersWindowsTypesDifferentlyGoAsUnicode() {
+        // The ISO key between left Shift and Z goes as 0x56, which US Windows types as "\".
+        XCTAssertFalse(windowsTypes("`", scancode: 0x56))
+        XCTAssertFalse(windowsTypes("§", scancode: 0x29))
+        XCTAssertFalse(windowsTypes("a", scancode: 0x1E, .shift))
+        XCTAssertFalse(windowsTypes("ab", scancode: 0x1E))
+        // A character a dead key composed.
+        XCTAssertFalse(windowsTypes("é", ignoringModifiers: "e", scancode: 0x12))
+        XCTAssertFalse(windowsTypes("e", ignoringModifiers: "é", scancode: 0x12))
+        // JIS keys type nothing with the US layout, and a layout with no table sends Unicode.
+        XCTAssertFalse(windowsTypes("¥", scancode: 0x7D))
+        XCTAssertFalse(windowsTypes("a", scancode: 0x1E, layout: 0x1234_5678))
+    }
+
+    func testTheScancodeCheckFollowsTheAnnouncedLayout() {
+        // German: QWERTZ, and "^" is a dead key on Windows.
+        XCTAssertTrue(windowsTypes("z", scancode: 0x15, layout: 0x0000_0407))
+        XCTAssertFalse(windowsTypes("z", scancode: 0x15))
+        XCTAssertTrue(windowsTypes("ß", scancode: 0x0C, layout: 0x0000_0407))
+        XCTAssertTrue(windowsTypes("<", scancode: 0x56, layout: 0x0000_0407))
+        XCTAssertFalse(windowsTypes("^", scancode: 0x29, layout: 0x0000_0407))
+        // French (Belgian, what Apple's French maps to) has digits on Shift.
+        XCTAssertTrue(windowsTypes("a", scancode: 0x10, layout: 0x0000_080C))
+        XCTAssertTrue(windowsTypes("1", scancode: 0x02, .shift, layout: 0x0000_080C))
+        XCTAssertTrue(windowsTypes("&", scancode: 0x02, layout: 0x0000_080C))
+        // Russian.
+        XCTAssertTrue(windowsTypes("ф", scancode: 0x1E, layout: 0x0000_0419))
+    }
+
+    func testMacInputSourcesMapToWindowsLayoutsWithCapturedTables() {
+        func layout(_ name: String) -> UInt32 {
+            MacRDPKeyboardLayout.windowsLayout(forInputSourceID: "com.apple.keylayout." + name).rawValue
+        }
+        XCTAssertEqual(layout("US"), 0x0000_0409)
+        XCTAssertEqual(layout("German"), 0x0000_0407)
+        XCTAssertEqual(layout("British"), 0x0000_0809)
+        XCTAssertEqual(layout("French"), 0x0000_080C)
+        XCTAssertEqual(layout("Dvorak"), 0x0001_0409)
+        XCTAssertEqual(layout("Australian"), 0x0000_0409)
+        XCTAssertEqual(layout("ABC"), 0x0000_0409)
+        XCTAssertEqual(
+            MacRDPKeyboardLayout.windowsLayout(forInputSourceID: "com.apple.inputmethod.Kotoeri.Japanese"),
+            .unitedStates
+        )
+        // Every layout that can be announced has a table, so the scancode check covers it.
+        for klid in Set(MacRDPKeyboardLayout.windowsLayouts.values) {
+            XCTAssertNotNil(MacRDPWindowsKeyboardLayout.layout(RDPKeyboardLayout(rawValue: klid)), "KLID \(klid)")
+        }
+        let keyCount = MacRDPWindowsKeyboardLayout.scancodes.count
+        for table in MacRDPWindowsKeyboardLayout.layouts.values {
+            XCTAssertEqual(table.unshifted.unicodeScalars.count, keyCount)
+            XCTAssertEqual(table.shifted.unicodeScalars.count, keyCount)
+            XCTAssertEqual(table.capsLock.unicodeScalars.count, keyCount)
+        }
+    }
+
+    private func windowsTypes(
+        _ characters: String,
+        ignoringModifiers: String? = nil,
+        scancode: UInt16,
+        _ modifierFlags: NSEvent.ModifierFlags = [],
+        layout: UInt32 = 0x0000_0409
+    ) -> Bool {
+        MacRDPKeyboardMapping.windowsTypes(
+            characters,
+            charactersIgnoringModifiers: ignoringModifiers ?? characters,
+            for: RDPKeyboardScancode(code: scancode),
+            modifierFlags: modifierFlags,
+            layout: RDPKeyboardLayout(rawValue: layout)
+        )
+    }
+
+    // MARK: - Held keys
+
     func testAKeyHeldAsAScancodeRepeatsAsThatScancodeAfterItsModifierIsReleased() {
         XCTAssertTrue(MacRDPKeyboardMapping.shouldSendScancode(
             forKeyCode: UInt16(kVK_ANSI_C),

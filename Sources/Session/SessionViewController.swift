@@ -650,6 +650,11 @@ final class SessionViewController: NSViewController {
             hasCredentials: credentials != nil
         )
 
+        // Announce the Mac's keyboard layout so the server maps scancodes to
+        // the characters the keys are labelled with; the input layer sends
+        // keys by the layout this session announced.
+        let keyboardLayout = MacRDPKeyboardLayout.current()
+        canvasView.keyboardLayout = keyboardLayout
         let baseConfiguration = RDPConnectionConfiguration(
             target: target,
             credentials: credentials,
@@ -661,7 +666,8 @@ final class SessionViewController: NSViewController {
             audioPlaybackEnabled: audioPlaybackEnabled,
             // RDPeek never exposes a graphics-profile picker: automatic lets
             // RDPKit negotiate the best path per host (Windows included).
-            graphicsCapabilityProfile: .automatic
+            graphicsCapabilityProfile: .automatic,
+            keyboardLayout: keyboardLayout
         )
 
         let connectionID = UUID()

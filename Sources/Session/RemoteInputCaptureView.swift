@@ -18,6 +18,8 @@ extension RDPInputSession: RemoteInputEventSink {}
 
 final class RemoteInputCaptureNSView: NSView {
     var rdpFrame: RDPFrameMetadata?
+    /// The layout the session announced; it decides which keys can go as scancodes.
+    var keyboardLayout = RDPKeyboardLayout.unitedStates
     var inputSession: (any RemoteInputEventSink)? {
         willSet {
             if inputSession != nil, inputSession !== newValue {
@@ -219,6 +221,12 @@ final class RemoteInputCaptureNSView: NSView {
                forKeyCode: event.keyCode,
                modifierFlags: event.modifierFlags,
                isHeldAsScancode: inputState.isScancodePressed(scancode)
+           ) || MacRDPKeyboardMapping.windowsTypes(
+               event.characters,
+               charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+               for: scancode,
+               modifierFlags: event.modifierFlags,
+               layout: keyboardLayout
            )
         {
             // A repeat for a scancode we no longer track (its release was
@@ -540,9 +548,43 @@ enum MacRDPKeyboardMapping {
         isHeldAsScancode: Bool
     ) -> Bool {
         isHeldAsScancode
-            || nonCharacterKeyCodes.contains(Int(keyCode))
+            || scancodeOnlyKeyCodes.contains(Int(keyCode))
             || modifierFlags.isDisjoint(with: [.command, .control, .option]) == false
     }
+
+    /// Whether Windows, with `layout`, types what the Mac typed for a character key: then the key
+    /// goes as its scancode, which a remote IME sees, rather than as Unicode, which reaches
+    /// applications as VK_PACKET. The table is keyed by the scancode sent, so a key the
+    /// layouts place differently, such as the ISO key sent as 0x56, still goes as Unicode, as
+    /// does a character a dead key composed (`characters` differs from
+    /// `charactersIgnoringModifiers`). Space types a space on every layout, and a remote IME
+    /// commits its candidate with it, so it goes as its scancode unless a dead key composed
+    /// with it, as "^" then Space types "^".
+    static func windowsTypes(
+        _ characters: String?,
+        charactersIgnoringModifiers: String?,
+        for scancode: RDPKeyboardScancode,
+        modifierFlags: NSEvent.ModifierFlags,
+        layout: RDPKeyboardLayout
+    ) -> Bool {
+        guard let characters, characters == charactersIgnoringModifiers else {
+            return false
+        }
+        if scancode == spaceScancode {
+            return true
+        }
+        guard let typed = MacRDPWindowsKeyboardLayout.layout(layout)?.character(
+                  for: scancode,
+                  isShifted: modifierFlags.contains(.shift),
+                  isCapsLocked: modifierFlags.contains(.capsLock)
+              )
+        else {
+            return false
+        }
+        return characters.unicodeScalars.elementsEqual(CollectionOfOne(typed))
+    }
+
+    private static let spaceScancode = RDPKeyboardScancode(code: 0x39)
 
     static func isCommandKeyCode(_ keyCode: UInt16) -> Bool {
         Int(keyCode) == kVK_Command || Int(keyCode) == kVK_RightCommand
@@ -580,7 +622,8 @@ enum MacRDPKeyboardMapping {
         kVK_JIS_Yen: 0x7D, kVK_JIS_Underscore: 0x73,
     ]
 
-    private static let nonCharacterScancodes: [Int: RDPKeyboardScancode] = [
+    /// Keys that always go as their scancodes.
+    private static let scancodeOnlyKeys: [Int: RDPKeyboardScancode] = [
         kVK_Escape: RDPKeyboardScancode(code: 0x01),
         kVK_Delete: RDPKeyboardScancode(code: 0x0E),
         kVK_Tab: RDPKeyboardScancode(code: 0x0F),
@@ -623,11 +666,11 @@ enum MacRDPKeyboardMapping {
         kVK_ContextualMenu: RDPKeyboardScancode(code: 0x5D, isExtended: true),
     ]
 
-    private static let nonCharacterKeyCodes = Set(nonCharacterScancodes.keys)
+    private static let scancodeOnlyKeyCodes = Set(scancodeOnlyKeys.keys)
 
-    private static let scancodes = nonCharacterScancodes.merging(
+    private static let scancodes = scancodeOnlyKeys.merging(
         characterScancodes.mapValues { RDPKeyboardScancode(code: $0) }
-    ) { nonCharacter, _ in nonCharacter }
+    ) { scancodeOnly, _ in scancodeOnly }
 }
 
 /// A modifier key: the scancode it is sent as, and how to read its state
