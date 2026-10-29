@@ -6,7 +6,7 @@ import XCTest
 @MainActor
 final class RemoteInputCaptureViewTests: XCTestCase {
     private struct Harness {
-        let window: KeyWindow
+        let window: TestWindow
         let view: RemoteInputCaptureNSView
         let recorder: InputEventRecorder
     }
@@ -1166,13 +1166,7 @@ final class RemoteInputCaptureViewTests: XCTestCase {
         view.isDeadKey = { keyCode, modifierFlags in
             keyCode == UInt16(kVK_ANSI_E) && modifierFlags.contains(.option)
         }
-        let window = KeyWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.isReleasedWhenClosed = false
+        let window = TestWindow(isKey: true)
         window.contentView = view
         view.inputSession = recorder
         if isFirstResponder {
@@ -1290,28 +1284,6 @@ final class RemoteInputCaptureViewTests: XCTestCase {
             return false
         }
         return eventButton == button && eventIsDown == isDown
-    }
-
-    private func makeFrameMetadata(width: UInt16, height: UInt16) -> RDPFrameMetadata {
-        RDPFrameMetadata(RDPGraphicsFrameSnapshot(
-            frameID: 1,
-            surfaceID: 0,
-            codecID: 0,
-            codecName: "test",
-            pixelFormat: 0,
-            destinationRect: RDPFrameRect(left: 0, top: 0, right: width, bottom: height),
-            regionRects: [],
-            encodedVideoData: Data()
-        ))
-    }
-}
-
-/// Unhosted tests have no key window; a session window is key while the user controls it.
-private final class KeyWindow: NSWindow {
-    var isKey = true
-
-    override var isKeyWindow: Bool {
-        isKey
     }
 }
 

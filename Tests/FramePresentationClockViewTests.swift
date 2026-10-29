@@ -91,13 +91,7 @@ final class FramePresentationClockViewTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeHarness() -> Harness {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.isReleasedWhenClosed = false
+        let window = TestWindow()
         let clock = FramePresentationClockNSView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
         window.contentView?.addSubview(clock)
         // Leaving the window invalidates the display link, which holds the

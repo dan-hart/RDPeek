@@ -7,7 +7,7 @@ final class RemoteDesktopCanvasViewTests: XCTestCase {
     func testLetterboxedDesktopStartsOnAWholePixelAt1x() {
         // A 1x canvas an odd number of points wider or taller than the
         // desktop letterboxes it by half a point, which would blur it.
-        let desktop = makeFrame(width: 1280, height: 800)
+        let desktop = makeFrameMetadata(width: 1280, height: 800)
         for canvasSize in [
             CGSize(width: 1281, height: 800),
             CGSize(width: 1280, height: 801),
@@ -28,7 +28,7 @@ final class RemoteDesktopCanvasViewTests: XCTestCase {
     }
 
     func testDesktopThatFillsTheCanvasIsNotShifted() {
-        let canvas = makeCanvas(size: CGSize(width: 1280, height: 800), showing: makeFrame(width: 1280, height: 800))
+        let canvas = makeCanvas(size: CGSize(width: 1280, height: 800), showing: makeFrameMetadata(width: 1280, height: 800))
 
         XCTAssertEqual(canvas.displayView.frame, canvas.bounds)
         XCTAssertEqual(inputView(of: canvas)?.frame, canvas.bounds)
@@ -37,13 +37,9 @@ final class RemoteDesktopCanvasViewTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeCanvas(size: CGSize, showing frame: RDPFrameMetadata) -> RemoteDesktopCanvasNSView {
-        let window = OneXWindow(
-            contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.isReleasedWhenClosed = false
+        // A 1x display, whatever display the tests run on.
+        let window = TestWindow(size: size)
+        window.scale = 1
         let canvas = RemoteDesktopCanvasNSView(frame: NSRect(origin: .zero, size: size))
         window.contentView = canvas
         canvas.update(frame: frame, hasPresentedFrame: true, inputSession: nil)
@@ -67,25 +63,5 @@ final class RemoteDesktopCanvasViewTests: XCTestCase {
             coordinateOrigin: .bottomLeft
         ).contentRect
         return CGPoint(x: viewFrame.minX + content.minX, y: viewFrame.minY + content.minY)
-    }
-
-    private func makeFrame(width: UInt16, height: UInt16) -> RDPFrameMetadata {
-        RDPFrameMetadata(RDPGraphicsFrameSnapshot(
-            frameID: 1,
-            surfaceID: 0,
-            codecID: 0,
-            codecName: "test",
-            pixelFormat: 0,
-            destinationRect: RDPFrameRect(left: 0, top: 0, right: width, bottom: height),
-            regionRects: [],
-            encodedVideoData: Data()
-        ))
-    }
-}
-
-/// A window on a 1x display, whatever display the tests run on.
-private final class OneXWindow: NSWindow {
-    override var backingScaleFactor: CGFloat {
-        1
     }
 }
