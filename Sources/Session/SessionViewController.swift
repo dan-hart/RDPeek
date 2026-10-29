@@ -40,7 +40,8 @@ final class SessionViewController: NSViewController {
     /// certificate turned down ECDHE. Not saved: every connection tries
     /// ECDHE first.
     private var usesLegacyRSAKeyExchange = false
-    private var audioMessage: String?
+    private var connectionRequestsAudio = false
+    private var didReportAudioFailure = false
     private var activeConnectionID: UUID?
     private var activeCancellation: RDPConnectionCancellation?
     private var sessionEndReason: RDPSessionEndReason?
@@ -677,6 +678,7 @@ final class SessionViewController: NSViewController {
         // keys by the layout this session announced.
         let keyboardLayout = MacRDPKeyboardLayout.current()
         canvasView.keyboardLayout = keyboardLayout
+        connectionRequestsAudio = audioPlaybackEnabled
         return RDPConnectionConfiguration(
             target: target,
             credentials: credentials,
@@ -684,7 +686,10 @@ final class SessionViewController: NSViewController {
             hideCertificateWarnings: draft.hideCertificateWarnings,
             graphicsFrameCaptureLimit: nil,
             desktopSize: desktopSize,
-            clipboardEnabled: clipboard.isSharingEnabled,
+            // Always join the clipboard channel: SessionClipboard keeps both
+            // directions shut while sharing is off, so turning it on (or a
+            // temporary share) works without reconnecting.
+            clipboardEnabled: true,
             audioPlaybackEnabled: audioPlaybackEnabled,
             // RDPeek never exposes a graphics-profile picker: automatic lets
             // RDPKit negotiate the best path per host (Windows included).
@@ -1026,7 +1031,7 @@ final class SessionViewController: NSViewController {
         displayControlSession = nil
         clipboard.detach()
         remoteAudioPlayer.reset()
-        audioMessage = nil
+        didReportAudioFailure = false
     }
 
     // MARK: - Frame presentation
@@ -1283,23 +1288,16 @@ final class SessionViewController: NSViewController {
         guard audioPlaybackEnabled else {
             return
         }
+        // A full queue drops delayed audio by design; only a failure to play
+        // at all is worth telling, once per connection.
         do {
-            let queued = try remoteAudioPlayer.enqueue(sample)
-            updateAudioMessage(queued ? nil : "Dropping delayed audio")
+            try remoteAudioPlayer.enqueue(sample)
         } catch {
-            updateAudioMessage(String(describing: error))
-        }
-    }
-
-    /// Surfaces remote audio problems once per change, so a silent session
-    /// explains itself instead of just not playing sound.
-    private func updateAudioMessage(_ message: String?) {
-        guard audioMessage != message else {
-            return
-        }
-        audioMessage = message
-        if let message {
-            toast("Audio: \(message)", systemImage: "speaker.slash")
+            guard didReportAudioFailure == false else {
+                return
+            }
+            didReportAudioFailure = true
+            toast("Remote audio cannot play on this Mac", systemImage: "speaker.slash")
         }
     }
 
@@ -1307,7 +1305,7 @@ final class SessionViewController: NSViewController {
         audioPlaybackEnabled = enabled
         if !enabled {
             remoteAudioPlayer.reset()
-        } else if isConnecting, report == nil, draft.audioPlaybackEnabled == false {
+        } else if isConnecting, connectionRequestsAudio == false {
             toast("Audio starts on the next connection", systemImage: "speaker.wave.2")
         }
         render()
