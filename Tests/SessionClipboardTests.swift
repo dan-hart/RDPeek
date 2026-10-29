@@ -4,8 +4,16 @@ import XCTest
 
 /// Records what the bridge sends in place of a live CLIPRDR channel.
 private final class RecordedClipboard: SessionClipboardSending {
+    struct RangeRequest: Equatable {
+        var streamID: UInt32
+        var position: UInt64
+        var requestedByteCount: UInt32
+    }
+
     var publishedTexts: [String?] = []
     var publishedFiles: [[RDPClipboardLocalFile]] = []
+    var sizeRequests: [UInt32] = []
+    var rangeRequests: [RangeRequest] = []
 
     func publishLocalUnicodeText(_ text: String?) {
         publishedTexts.append(text)
@@ -15,14 +23,22 @@ private final class RecordedClipboard: SessionClipboardSending {
         publishedFiles.append(files)
     }
 
-    func requestRemoteFileSize(streamID _: UInt32, fileIndex _: Int32) throws {}
+    func requestRemoteFileSize(streamID: UInt32, fileIndex _: Int32) throws {
+        sizeRequests.append(streamID)
+    }
 
     func requestRemoteFileRange(
-        streamID _: UInt32,
+        streamID: UInt32,
         fileIndex _: Int32,
-        position _: UInt64,
-        requestedByteCount _: UInt32
-    ) throws {}
+        position: UInt64,
+        requestedByteCount: UInt32
+    ) throws {
+        rangeRequests.append(RangeRequest(
+            streamID: streamID,
+            position: position,
+            requestedByteCount: requestedByteCount
+        ))
+    }
 }
 
 @MainActor
@@ -136,7 +152,128 @@ final class SessionClipboardTests: XCTestCase {
         XCTAssertTrue(session.publishedFiles.isEmpty)
     }
 
+    // MARK: - Remote files
+
+    func testRemoteFileArrivesOverRangesTheServerAnswersShort() throws {
+        let session = RecordedClipboard()
+        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        clipboard.attach(session)
+        let contents = Data((0 ..< 1_500_000).map { UInt8(truncatingIfNeeded: $0 &* 31) })
+
+        try startRemoteFileDownload(contents, to: clipboard, from: session)
+        var received = 0
+        while received < contents.count {
+            let request = try XCTUnwrap(session.rangeRequests.last)
+            session.rangeRequests.removeAll()
+            XCTAssertEqual(request.position, UInt64(received))
+            XCTAssertLessThanOrEqual(request.requestedByteCount, 1024 * 1024)
+            // Windows caps how much one answer carries.
+            let end = received + min(Int(request.requestedByteCount), 700_000)
+            clipboard.receiveFileContents(RDPClipboardFileContentsResponse(
+                streamID: request.streamID,
+                ok: true,
+                data: contents.subdata(in: received ..< end)
+            ))
+            received = end
+        }
+
+        XCTAssertTrue(session.rangeRequests.isEmpty)
+        let fileURL = try XCTUnwrap((pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent())
+        }
+        XCTAssertEqual(try Data(contentsOf: fileURL), contents)
+    }
+
+    func testEmptyRangeAnswerBeforeTheEndFailsTheDownload() throws {
+        let session = RecordedClipboard()
+        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        let request = try XCTUnwrap(session.rangeRequests.last)
+        session.rangeRequests.removeAll()
+        clipboard.receiveFileContents(RDPClipboardFileContentsResponse(
+            streamID: request.streamID,
+            ok: true,
+            data: Data()
+        ))
+
+        XCTAssertTrue(session.rangeRequests.isEmpty)
+        XCTAssertEqual(toasts.last, "Remote file transfer was incomplete")
+    }
+
+    func testRangeAnswerLongerThanAskedOrFailedFailsTheDownload() throws {
+        let session = RecordedClipboard()
+        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        var toasts: [String] = []
+        clipboard.onToast = { text, _ in toasts.append(text) }
+        clipboard.attach(session)
+
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        var request = try XCTUnwrap(session.rangeRequests.last)
+        session.rangeRequests.removeAll()
+        clipboard.receiveFileContents(RDPClipboardFileContentsResponse(
+            streamID: request.streamID,
+            ok: true,
+            data: Data(count: 11)
+        ))
+        XCTAssertTrue(session.rangeRequests.isEmpty)
+        XCTAssertEqual(toasts.last, "Remote file transfer was incomplete")
+
+        try startRemoteFileDownload(Data(count: 10), to: clipboard, from: session)
+        request = try XCTUnwrap(session.rangeRequests.last)
+        session.rangeRequests.removeAll()
+        clipboard.receiveFileContents(RDPClipboardFileContentsResponse(
+            streamID: request.streamID,
+            ok: false,
+            data: Data()
+        ))
+        XCTAssertTrue(session.rangeRequests.isEmpty)
+        XCTAssertEqual(toasts.last, "Remote file transfer failed")
+    }
+
+    func testEmptyRemoteFileIsCopiedWithoutARangeRequest() throws {
+        let session = RecordedClipboard()
+        let clipboard = SessionClipboard(isSharingEnabled: true, pasteboard: pasteboard)
+        clipboard.attach(session)
+
+        try startRemoteFileDownload(Data(), to: clipboard, from: session)
+
+        XCTAssertTrue(session.rangeRequests.isEmpty)
+        let fileURL = try XCTUnwrap((pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL])?.first)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent())
+        }
+        XCTAssertEqual(try Data(contentsOf: fileURL), Data())
+    }
+
     // MARK: - Helpers
+
+    /// Offers one remote file of `contents` and answers the size request.
+    private func startRemoteFileDownload(
+        _ contents: Data,
+        to clipboard: SessionClipboard,
+        from session: RecordedClipboard
+    ) throws {
+        clipboard.receiveFileList(RDPClipboardFileGroupDescriptorW(descriptors: [
+            RDPClipboardFileDescriptorW(
+                flags: 0,
+                fileAttributes: 0,
+                fileSize: UInt64(contents.count),
+                fileName: "big.bin"
+            ),
+        ]))
+        let streamID = try XCTUnwrap(session.sizeRequests.last)
+        let size = UInt64(contents.count).littleEndian
+        clipboard.receiveFileContents(RDPClipboardFileContentsResponse(
+            streamID: streamID,
+            ok: true,
+            data: withUnsafeBytes(of: size) { Data($0) }
+        ))
+    }
 
     private func makeLocalFile(named fileName: String, contents: Data) throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
